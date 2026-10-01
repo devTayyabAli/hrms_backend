@@ -138,6 +138,27 @@ describe('EmployeeInvitationService', () => {
       expect(invitationModel.create).not.toHaveBeenCalled();
     });
 
+    it('refuses to invite an email that already signs in to another organization', async () => {
+      authClient.send.mockImplementation((pattern: string) =>
+        of(pattern === MESSAGE_PATTERNS.AUTH.CHECK_EMAIL_AVAILABLE ? { available: false, reason: 'OTHER_ORGANIZATION' } : {}),
+      );
+
+      await expect(service.invite(TENANT, { employeeId: EMPLOYEE } as any, USER)).rejects.toMatchObject({
+        status: HttpStatus.CONFLICT,
+        message: expect.stringContaining('already registered with another organization'),
+      });
+      expect(invitationModel.create).not.toHaveBeenCalled();
+    });
+
+    it('still invites when the availability check itself is unreachable', async () => {
+      authClient.send.mockImplementation((pattern: string) =>
+        pattern === MESSAGE_PATTERNS.AUTH.CHECK_EMAIL_AVAILABLE ? throwError(() => new Error('auth down')) : of({}),
+      );
+
+      await service.invite(TENANT, { employeeId: EMPLOYEE } as any, USER);
+      expect(invitationModel.create).toHaveBeenCalled();
+    });
+
     it('refuses an employee from another organization', async () => {
       employeeModel.findOne.mockResolvedValue(null);
 
@@ -336,7 +357,23 @@ describe('EmployeeInvitationService', () => {
         service.accept({ token: 'token', password: 'Secret@Pass2026' } as any),
       ).rejects.toMatchObject({ status: HttpStatus.BAD_REQUEST });
       expect(row.update).not.toHaveBeenCalled();
-      expect(authClient.send).not.toHaveBeenCalled();
+      // Only the availability check reached auth-service — no login was created.
+      expect(authClient.send).not.toHaveBeenCalledWith(MESSAGE_PATTERNS.AUTH.CREATE_ADMIN_CREDENTIAL, expect.anything());
+    });
+
+    it('refuses an email another organization already uses, before creating anything', async () => {
+      const row = invitation();
+      invitationModel.findOne.mockResolvedValue(row);
+      authClient.send.mockImplementation((pattern: string) =>
+        of(pattern === MESSAGE_PATTERNS.AUTH.CHECK_EMAIL_AVAILABLE ? { available: false, reason: 'OTHER_ORGANIZATION' } : { credentialId: 'c1' }),
+      );
+
+      await expect(service.accept({ token: 'token', password: 'Secret@Pass2026' } as any)).rejects.toMatchObject({
+        status: HttpStatus.CONFLICT,
+        message: expect.stringContaining('another organization'),
+      });
+      expect(userClient.send).not.toHaveBeenCalled();
+      expect(row.update).not.toHaveBeenCalled();
     });
 
     it('does not mark it accepted when the password could not be set', async () => {

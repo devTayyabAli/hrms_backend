@@ -653,6 +653,9 @@ export class EmployeeService {
     if (emailTaken) {
       this.conflict(`An employee with email '${email}' already exists.`);
     }
+    // Their login will use this email — refuse now if another organization
+    // already owns it, rather than at the employee's password screen.
+    await this.employeeInvitationService.assertEmailAvailable(tenantId, email);
 
     const employeeCode =
       dto.employeeCode?.trim() || (await this.nextEmployeeCode(tenantId));
@@ -718,6 +721,7 @@ export class EmployeeService {
         if (taken) {
           this.conflict(`An employee with email '${email}' already exists.`);
         }
+        await this.employeeInvitationService.assertEmailAvailable(tenantId, email);
       }
       patch.email = email;
     }

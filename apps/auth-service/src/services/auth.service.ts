@@ -11,7 +11,7 @@ import {
 import { InjectModel } from '@nestjs/sequelize';
 import { ClientProxy } from '@nestjs/microservices';
 import { firstValueFrom } from 'rxjs';
-import { Op } from 'sequelize';
+import { Op, col, fn, where } from 'sequelize';
 import { PasswordPolicyService } from './password-policy.service';
 import { SecuritySettingsService } from './security-settings.service';
 import { AccountLockoutService } from './account-lockout.service';
@@ -260,6 +260,25 @@ export class AuthService implements OnModuleInit {
   /**
    * Create or update AuthCredential for Organization Admin activation
    */
+  /**
+   * Whether `email` can become a login in `tenantId`. A login (credential)
+   * is unique per email across the platform, so an address already used in
+   * another organization — or by the platform super-admin — can't be invited
+   * here. A login in this same tenant is fine (re-activation). Compared
+   * case-insensitively, so 'Ayesha@x.com' and 'ayesha@x.com' are one person.
+   */
+  async checkEmailAvailable(email: string, tenantId: string): Promise<{ available: boolean; reason: 'OTHER_ORGANIZATION' | 'PLATFORM_ADMIN' | null }> {
+    const normalized = String(email ?? '').trim().toLowerCase();
+    const sameEmail = (column = 'email') => where(fn('lower', col(column)), normalized);
+    const [credential, superAdmin] = await Promise.all([
+      this.credentialModel.findOne({ where: sameEmail(), attributes: ['id', 'tenantId'] }),
+      this.superAdminModel.findOne({ where: sameEmail(), attributes: ['id'] }),
+    ]);
+    if (superAdmin) return { available: false, reason: 'PLATFORM_ADMIN' };
+    if (credential?.tenantId && credential.tenantId !== tenantId) return { available: false, reason: 'OTHER_ORGANIZATION' };
+    return { available: true, reason: null };
+  }
+
   async createAdminCredential(data: {
     email: string;
     password: string;

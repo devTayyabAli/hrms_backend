@@ -122,6 +122,41 @@ export class EmployeeInvitationService {
    * revoked first, so an employee never has two live links — the newest
    * email is always the one that works.
    */
+  /**
+   * A login is unique per email across the whole platform, so an address
+   * already used by another organization (or the platform super-admin) can
+   * never be activated here. Checked when the employee is added, when an
+   * invitation is sent, and before activation creates anything — not left
+   * to fail at the last step of the employee's own password screen.
+   *
+   * If auth-service can't be reached the check is skipped (logged): adding
+   * an employee shouldn't depend on it, and activation re-checks anyway.
+   */
+  async assertEmailAvailable(tenantId: string, email: string | null | undefined): Promise<void> {
+    const address = String(email ?? '').trim().toLowerCase();
+    if (!address) return;
+    let result: { available: boolean; reason: string | null } | undefined;
+    try {
+      result = await firstValueFrom(
+        this.authClient
+          .send(MESSAGE_PATTERNS.AUTH.CHECK_EMAIL_AVAILABLE, { email: address, tenantId })
+          .pipe(timeout(RPC_TIMEOUT_MS)),
+      );
+    } catch (error: any) {
+      this.logger.warn(`Could not check whether ${address} is free for tenant ${tenantId}: ${error?.message ?? error}`);
+      return;
+    }
+    // Only an explicit "no" blocks; anything else (an older auth-service) lets it through.
+    if (result?.available === false) {
+      this.fail(
+        result.reason === 'PLATFORM_ADMIN'
+          ? `${address} is the platform administrator's email and can't be used for an employee login. Use a different email.`
+          : `${address} is already registered with another organization. Each email can sign in to one organization only — use a different email for this employee.`,
+        HttpStatus.CONFLICT,
+      );
+    }
+  }
+
   async invite(tenantId: string, dto: InviteEmployeeDto, actorUserId?: string) {
     const Employee = await this.modelProvider.getEmployeeModel(tenantId);
     const employee = await Employee.findOne({
@@ -139,6 +174,7 @@ export class EmployeeInvitationService {
     if (!email) {
       this.fail('This employee has no email address to invite.');
     }
+    await this.assertEmailAvailable(tenantId, email);
 
     const Invitation = await this.modelProvider.getEmployeeInvitationModel(tenantId);
     await Invitation.update(
@@ -377,6 +413,9 @@ export class EmployeeInvitationService {
 
     const tenantId = await this.resolveTenantId(dto.token);
     const { invitation, employee } = await this.loadPendingByToken(tenantId, dto.token);
+    // Before the user account below is created — a refusal from auth-service
+    // after that would leave an account with no login behind.
+    await this.assertEmailAvailable(tenantId, invitation.email);
 
     let userId: string | null = null;
     const roleIds = invitation.roleId ? [invitation.roleId] : [];

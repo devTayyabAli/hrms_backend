@@ -10,6 +10,7 @@ import {
   AuditLogQueryDto,
   SendEmailDto,
   SendTemplateEmailDto,
+  CheckEmailAvailableDto,
   CreateAdminCredentialDto,
   DeactivateTenantCredentialDto,
   LoginPayloadDto,
@@ -116,6 +117,11 @@ export class AuthMicroserviceController {
   @MessagePattern(MESSAGE_PATTERNS.AUTH.CREATE_ADMIN_CREDENTIAL)
   createAdminCredential(@Payload() data: CreateAdminCredentialDto) {
     return this.authService.createAdminCredential(data);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.AUTH.CHECK_EMAIL_AVAILABLE)
+  checkEmailAvailable(@Payload() data: CheckEmailAvailableDto) {
+    return this.authService.checkEmailAvailable(data.email, data.tenantId);
   }
 
   @MessagePattern(MESSAGE_PATTERNS.AUTH.DEACTIVATE_TENANT_CREDENTIAL)

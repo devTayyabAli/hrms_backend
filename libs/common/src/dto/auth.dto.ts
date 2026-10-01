@@ -311,6 +311,19 @@ export class CreateAdminCredentialDto {
  * "never hijack a credential that belongs to another tenant" guard, this
  * must never deactivate a credential outside the tenant that asked for it.
  */
+/** Can this email become a login in `tenantId`? Logins are unique per email platform-wide. */
+export class CheckEmailAvailableDto {
+  @ApiProperty({ example: 'ayesha@acme.com' })
+  @IsEmail()
+  @IsNotEmpty()
+  email: string;
+
+  @ApiProperty({ example: '11111111-1111-4111-8111-111111111111' })
+  @IsString()
+  @IsNotEmpty()
+  tenantId: string;
+}
+
 export class DeactivateTenantCredentialDto {
   @ApiProperty({ example: 'admin@acme.com' })
   @IsEmail()

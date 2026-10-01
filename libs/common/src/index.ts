@@ -78,6 +78,8 @@ export const MESSAGE_PATTERNS = {
     VERIFY_OTP: 'auth.verify_otp',
     RESET_PASSWORD: 'auth.reset_password',
     CREATE_ADMIN_CREDENTIAL: 'auth.create_admin_credential',
+    /** Whether an email can become a login in this tenant (no login elsewhere). */
+    CHECK_EMAIL_AVAILABLE: 'auth.check_email_available',
     DEACTIVATE_TENANT_CREDENTIAL: 'auth.deactivate_tenant_credential',
     VERIFY_2FA: 'auth.verify_2fa',
     REFRESH_TOKEN: 'auth.refresh_token',
