@@ -1,0 +1,5 @@
+Test Suites: 1 passed, 1 total
+Tests:       26 passed, 26 total
+Snapshots:   0 total
+Time:        6.153 s
+Ran all test suites matching apps/api-gateway/src/controllers/payroll-compensation.
