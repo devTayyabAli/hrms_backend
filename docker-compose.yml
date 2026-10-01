@@ -1,0 +1,112 @@
+# HRMS backend on one VPS.
+#
+#   cp .env.docker.example .env.docker   # fill in real values
+#   docker compose up -d --build
+#
+# Only the API gateway is published, and only on 127.0.0.1 — put Nginx (or
+# Caddy) in front of it for HTTPS. The three microservices talk to each other
+# over the private `backend` network and are never reachable from outside.
+#
+# Optional:
+#   docker compose --profile db up -d          # also run PostgreSQL here
+#   docker compose --profile tools run --rm tools db:sync-tenant-columns -- --dry-run
+
+x-service: &service
+  image: hrms-backend:latest
+  restart: unless-stopped
+  env_file: .env.docker
+  environment: &service-env
+    NODE_ENV: production
+    # Where each service listens (inside its container) and is found (by name).
+    AUTH_SERVICE_BIND_HOST: 0.0.0.0
+    TENANT_SERVICE_BIND_HOST: 0.0.0.0
+    USER_SERVICE_BIND_HOST: 0.0.0.0
+    AUTH_SERVICE_HOST: auth-service
+    TENANT_SERVICE_HOST: tenant-service
+    USER_SERVICE_HOST: user-service
+    AUTH_SERVICE_PORT: 3001
+    TENANT_SERVICE_PORT: 3002
+    USER_SERVICE_PORT: 3003
+  networks: [backend]
+  logging:
+    driver: json-file
+    options: { max-size: "20m", max-file: "5" }
+
+services:
+  user-service:
+    <<: *service
+    build: { context: ., target: runtime }
+    command: ["node", "dist/apps/user-service/apps/user-service/src/main.js"]
+
+  auth-service:
+    <<: *service
+    command: ["node", "dist/apps/auth-service/apps/auth-service/src/main.js"]
+    environment:
+      <<: *service-env
+      LOCAL_STORAGE_PATH: /app/uploads
+    volumes:
+      - uploads:/app/uploads
+    depends_on: [user-service]
+
+  tenant-service:
+    <<: *service
+    command: ["node", "dist/apps/tenant-service/apps/tenant-service/src/main.js"]
+    depends_on: [auth-service, user-service]
+
+  api-gateway:
+    <<: *service
+    command: ["node", "dist/apps/api-gateway/apps/api-gateway/src/main.js"]
+    environment:
+      <<: *service-env
+      PORT: 3000
+      # Requests arrive from host Nginx via the Docker bridge (a private
+      # address); trust only those hops to report the real client IP.
+      TRUST_PROXY: "loopback, uniquelocal"
+    ports:
+      # Loopback only: Nginx on the host proxies the public domain to this.
+      - "127.0.0.1:${GATEWAY_HOST_PORT:-3000}:3000"
+    depends_on: [auth-service, tenant-service, user-service]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+  # ── Optional: PostgreSQL on the same VPS (skip if you use Neon/RDS/etc.) ──
+  # Set PLATFORM_DB_HOST=postgres and TENANT_DB_HOST=postgres in .env.docker.
+  # The tenant service creates one database per organization, so this user
+  # needs CREATEDB (the default superuser has it).
+  postgres:
+    image: postgres:16-alpine
+    profiles: [db]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-hrms}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the shell or a .env file next to this compose file}
+      POSTGRES_DB: ${POSTGRES_DB:-hrms_platform}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Optional: run the repo's db:* scripts (migrations, column sync) ───────
+  tools:
+    image: hrms-backend-tools:latest
+    build: { context: ., target: tools }
+    profiles: [tools]
+    env_file: .env.docker
+    environment:
+      NODE_ENV: production
+    networks: [backend]
+
+volumes:
+  uploads:
+  pgdata:
+
+networks:
+  backend:

@@ -1,0 +1,23 @@
+# Never bake secrets or local state into the image.
+.env
+.env.*
+!.env.docker.example
+
+node_modules
+dist
+uploads
+ops-logs
+scratch
+coverage
+test
+docs
+*.md
+.git
+.gitignore
+.vscode
+.idea
+*.log
+.j.txt
+pnpm-lock.yaml
+Dockerfile
+docker-compose*.yml
