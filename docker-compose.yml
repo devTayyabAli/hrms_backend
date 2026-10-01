@@ -81,9 +81,16 @@ services:
     image: postgres:16-alpine
     profiles: [db]
     restart: unless-stopped
+<<<<<<< HEAD
     # POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB come from .env.docker,
     # like every other setting — nothing is read from a separate .env file.
     env_file: .env.docker
+=======
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-hrms}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the shell or a .env file next to this compose file}
+      POSTGRES_DB: ${POSTGRES_DB:-hrms_platform}
+>>>>>>> c1747be8d6ea4c579bf3f1e539bd0f834b537210
     volumes:
       - pgdata:/var/lib/postgresql/data
     networks: [backend]
