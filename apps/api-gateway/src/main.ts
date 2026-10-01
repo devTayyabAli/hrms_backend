@@ -56,6 +56,19 @@ function portalDocument(
 async function bootstrap() {
   const app = await NestFactory.create(ApiGatewayModule);
 
+  // Behind a reverse proxy (Nginx, a load balancer, Docker's bridge) every
+  // request's socket peer is the proxy, so rate limiting, the IP allowlist
+  // and login audit would all see one address. TRUST_PROXY tells Express
+  // which hops may set X-Forwarded-For: a hop count ("1"), "true", or a
+  // subnet list ("loopback, uniquelocal"). Unset, nothing is trusted.
+  const trustProxy = process.env.TRUST_PROXY?.trim();
+  if (trustProxy) {
+    app
+      .getHttpAdapter()
+      .getInstance()
+      .set('trust proxy', /^\d+$/.test(trustProxy) ? Number(trustProxy) : trustProxy === 'true' ? true : trustProxy);
+  }
+
   const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
     .split(',')
     .map((origin) => origin.trim())
