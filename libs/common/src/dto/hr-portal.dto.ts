@@ -14,6 +14,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import { IsStrongPassword } from '../validators/strong-password.validator';
 import { ApiProperty } from '@nestjs/swagger';
 
 // ==========================================
@@ -282,9 +283,11 @@ export class AcceptEmployeeInvitationDto {
   @MinLength(16)
   token: string;
 
-  @ApiProperty({ example: 'S0me-Strong-Pass' })
+  // The platform policy, checked here at the gateway: a password auth-service
+  // would refuse must never get as far as creating the user account first.
+  @ApiProperty({ example: 'Welcome@2026Pass' })
   @IsString()
-  @MinLength(8)
+  @IsStrongPassword()
   @MaxLength(128)
   password: string;
 

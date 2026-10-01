@@ -66,6 +66,24 @@ describe('AttendanceService HR views', () => {
 
   afterEach(() => jest.useRealTimers());
 
+  describe('getWorkingDays', () => {
+    it('reads a shift saved with short names ("Mon") as full weekday names', async () => {
+      workingHoursModel.findOne.mockResolvedValue({ workingDays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] });
+      const days = await service.getWorkingDays('t1');
+      expect([...days]).toEqual(['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY']);
+    });
+
+    it('accepts full and mixed-case names alike', async () => {
+      workingHoursModel.findOne.mockResolvedValue({ workingDays: ['MONDAY', 'tuesday', 'Wednesday'] });
+      expect([...(await service.getWorkingDays('t1'))]).toEqual(['MONDAY', 'TUESDAY', 'WEDNESDAY']);
+    });
+
+    it('falls back to Monday–Friday without a shift', async () => {
+      workingHoursModel.findOne.mockResolvedValue(null);
+      expect((await service.getWorkingDays('t1')).size).toBe(5);
+    });
+  });
+
   describe('period resolution', () => {
     it('defaults to the current calendar month', async () => {
       const result = await service.getRegister(TENANT, {});

@@ -492,6 +492,7 @@ export class EmployeePortalService {
           workedMinutes: row.workedMinutes ?? null,
           workHours: workHoursLabel(row.workedMinutes),
           notes: row.notes ?? null,
+          dayEndStatus: row.dayEndStatus ?? null,
           workLocation: row.workLocation ?? null,
           overtimeMinutes: row.overtimeMinutes ?? null,
         };
@@ -569,6 +570,7 @@ export class EmployeePortalService {
             workHours: workHoursLabel(row.workedMinutes),
             workLocation: row.workLocation ?? null,
             overtimeMinutes: row.overtimeMinutes ?? null,
+            dayEndStatus: row.dayEndStatus ?? null,
           }
         : null,
     };
@@ -649,7 +651,7 @@ export class EmployeePortalService {
   }
 
   /** Punch out. Worked minutes are recomputed by AttendanceService. */
-  async checkOut(tenantId: string, userId: string, email?: string, clientIp?: string) {
+  async checkOut(tenantId: string, userId: string, email?: string, clientIp?: string, dayEndStatus?: string) {
     const employee = await this.me(tenantId, userId, email);
     const today = new Date().toISOString().slice(0, 10);
     const Attendance = await this.modelProvider.getAttendanceRecordModel(tenantId);
@@ -675,7 +677,13 @@ export class EmployeePortalService {
       userId,
     );
 
-    return this.punchResult(today, record);
+    // The day-end report is the employee's own words, kept as written.
+    const status = dayEndStatus?.trim() || null;
+    if (status) {
+      await Attendance.update({ dayEndStatus: status }, { where: { id: existing.id, tenantId } });
+    }
+
+    return this.punchResult(today, { ...record, dayEndStatus: status ?? (existing as any).dayEndStatus ?? null });
   }
 
   /**
@@ -708,6 +716,7 @@ export class EmployeePortalService {
         workHours: workHoursLabel(record.workedMinutes),
         workLocation: record.workLocation ?? null,
         overtimeMinutes: record.overtimeMinutes ?? null,
+        dayEndStatus: record.dayEndStatus ?? null,
       },
     };
   }

@@ -24,6 +24,9 @@ import { EmployeeProfileFieldsDto } from './employee.dto';
 import { LeaveRequestStatusFilter } from './leave.dto';
 
 /** Tabs on My Documents. */
+/** Longest day-end status accepted at check-out (a pasted daily report fits easily). */
+export const DAY_END_STATUS_MAX = 5000;
+
 export enum EmployeeDocumentCategory {
   EMPLOYMENT = 'EMPLOYMENT',
   IDENTITY = 'IDENTITY',
@@ -576,6 +579,26 @@ export class EmployeePunchDto extends EmployeeActorDto {
   @IsString()
   @MaxLength(64)
   clientIp?: string;
+
+  /** Check-out only: the day-end status the employee reported. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(DAY_END_STATUS_MAX)
+  dayEndStatus?: string;
+}
+
+/** `POST organization/me/attendance/check-out` body. */
+export class CheckOutDto {
+  @ApiProperty({
+    required: false,
+    maxLength: DAY_END_STATUS_MAX,
+    example: '- Finished the payroll export\n- Reviewed 3 leave requests\n- Tomorrow: tax report',
+    description: 'What was done today — typed or pasted when checking out. Shown to HR with the day’s attendance.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(DAY_END_STATUS_MAX)
+  dayEndStatus?: string;
 }
 
 export class UpdateMyProfileMessageDto extends EmployeeActorDto {

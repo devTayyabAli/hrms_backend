@@ -2307,7 +2307,7 @@ export class TenantServiceController {
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.CHECK_OUT)
   handleEmployeeCheckOut(@Payload() payload: EmployeePunchDto) {
-    return this.employeePortalService.checkOut(payload.tenantId, payload.userId, payload.email, payload.clientIp);
+    return this.employeePortalService.checkOut(payload.tenantId, payload.userId, payload.email, payload.clientIp, payload.dayEndStatus);
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.GET_LEAVE_SUMMARY)

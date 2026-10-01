@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { ClientProxy } from '@nestjs/microservices';
 import { firstValueFrom, timeout } from 'rxjs';
 import * as crypto from 'crypto';
+import { STRONG_PASSWORD_MESSAGE, STRONG_PASSWORD_REGEX } from '@app/common';
 import {
   AcceptEmployeeInvitationDto,
   EmployeeInvitationStatus,
@@ -366,6 +367,12 @@ export class EmployeeInvitationService {
   async accept(dto: AcceptEmployeeInvitationDto) {
     if (dto.confirmPassword && dto.password !== dto.confirmPassword) {
       this.fail('Password and confirm password do not match.');
+    }
+    // Again here, not only on the gateway DTO: the user account below is
+    // created before auth-service sees the password, so a password it would
+    // refuse must stop the activation before anything is written.
+    if (!STRONG_PASSWORD_REGEX.test(dto.password ?? '')) {
+      this.fail(STRONG_PASSWORD_MESSAGE);
     }
 
     const tenantId = await this.resolveTenantId(dto.token);

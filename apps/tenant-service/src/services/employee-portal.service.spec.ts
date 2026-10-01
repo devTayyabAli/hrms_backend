@@ -438,6 +438,20 @@ describe('EmployeePortalService', () => {
       expect(result.record.workHours).toBe('8h 52m');
     });
 
+    it('saves the day-end status with the check-out, as written', async () => {
+      attendanceModel.findOne.mockResolvedValue({ id: 'att-1', checkInAt: new Date(), checkOutAt: null });
+      attendanceModel.update = jest.fn().mockResolvedValue([1]);
+      const report = '- Closed the payroll run\n- Reviewed 3 leave requests';
+
+      const result = await service.checkOut(TENANT, USER, undefined, undefined, `  ${report}  `);
+
+      expect(attendanceModel.update).toHaveBeenCalledWith(
+        { dayEndStatus: report },
+        { where: { id: 'att-1', tenantId: TENANT } },
+      );
+      expect(result.record.dayEndStatus).toBe(report);
+    });
+
     it('refuses a check-out with no check-in', async () => {
       attendanceModel.findOne.mockResolvedValue(null);
 

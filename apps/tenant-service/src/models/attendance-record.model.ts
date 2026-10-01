@@ -94,6 +94,10 @@ export class AttendanceRecord extends Model {
   @Column({ type: DataType.TEXT, allowNull: true })
   declare notes: string | null;
 
+  /** What the employee reported they did, entered when checking out. */
+  @Column({ type: DataType.TEXT, allowNull: true })
+  declare dayEndStatus: string | null;
+
   /** 'REMOTE' on an approved work-from-home day; null means the usual place of work. */
   @Column({ type: DataType.STRING(16), allowNull: true })
   declare workLocation: string | null;

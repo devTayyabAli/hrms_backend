@@ -266,7 +266,7 @@ describe('EmployeeInvitationService', () => {
       await expect(
         service.accept({
           token: 'token',
-          password: 'Secret123',
+          password: 'Secret@Pass2026',
           confirmPassword: 'Secret124',
         } as any),
       ).rejects.toMatchObject({ status: HttpStatus.BAD_REQUEST });
@@ -279,7 +279,7 @@ describe('EmployeeInvitationService', () => {
 
       const result = await service.accept({
         token: 'token',
-        password: 'Secret123',
+        password: 'Secret@Pass2026',
       } as any);
 
       expect(userClient.send).toHaveBeenCalledWith(
@@ -302,7 +302,7 @@ describe('EmployeeInvitationService', () => {
 
       await service.accept({
         token: 'token',
-        password: 'Secret123',
+        password: 'Secret@Pass2026',
       } as any);
 
       expect(userClient.send).toHaveBeenCalledWith(
@@ -320,7 +320,7 @@ describe('EmployeeInvitationService', () => {
       const row = invitation();
       invitationModel.findOne.mockResolvedValue(row);
 
-      await service.accept({ token: 'token', password: 'Secret123' } as any);
+      await service.accept({ token: 'token', password: 'Secret@Pass2026' } as any);
 
       expect(row.update).toHaveBeenCalledWith(
         expect.objectContaining({ status: EmployeeInvitationStatus.ACCEPTED }),
@@ -333,7 +333,7 @@ describe('EmployeeInvitationService', () => {
       userClient.send.mockReturnValue(throwError(() => new Error('user service down')));
 
       await expect(
-        service.accept({ token: 'token', password: 'Secret123' } as any),
+        service.accept({ token: 'token', password: 'Secret@Pass2026' } as any),
       ).rejects.toMatchObject({ status: HttpStatus.BAD_REQUEST });
       expect(row.update).not.toHaveBeenCalled();
       expect(authClient.send).not.toHaveBeenCalled();
@@ -342,11 +342,26 @@ describe('EmployeeInvitationService', () => {
     it('does not mark it accepted when the password could not be set', async () => {
       const row = invitation();
       invitationModel.findOne.mockResolvedValue(row);
-      authClient.send.mockReturnValue(throwError(() => new Error('weak password')));
+      authClient.send.mockReturnValue(throwError(() => new Error('password reused')));
 
       await expect(
-        service.accept({ token: 'token', password: 'short' } as any),
+        service.accept({ token: 'token', password: 'Secret@Pass2026' } as any),
       ).rejects.toMatchObject({ status: HttpStatus.BAD_REQUEST });
+      expect(row.update).not.toHaveBeenCalled();
+    });
+
+    it('refuses a password outside the policy before creating anything', async () => {
+      const row = invitation();
+      invitationModel.findOne.mockResolvedValue(row);
+
+      for (const password of ['short', 'Secret123', 'Welcome#2026Pass']) {
+        await expect(service.accept({ token: 'token', password } as any)).rejects.toMatchObject({
+          status: HttpStatus.BAD_REQUEST,
+        });
+      }
+      // No half-made account: user-service and auth-service were never called.
+      expect(userClient.send).not.toHaveBeenCalled();
+      expect(authClient.send).not.toHaveBeenCalled();
       expect(row.update).not.toHaveBeenCalled();
     });
   });

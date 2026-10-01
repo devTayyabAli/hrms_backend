@@ -49,6 +49,8 @@ export interface AttendanceRow {
   status: AttendanceStatus;
   source: AttendanceSource;
   notes: string | null;
+  /** What the employee reported when checking out. */
+  dayEndStatus: string | null;
   /** 'REMOTE' on an approved work-from-home day. */
   workLocation: string | null;
   /** Overtime approved for the day, in minutes. */
@@ -317,6 +319,7 @@ export class AttendanceService {
       status: record.status,
       source: record.source,
       notes: record.notes ?? null,
+      dayEndStatus: record.dayEndStatus ?? null,
       workLocation: record.workLocation ?? null,
       overtimeMinutes: record.overtimeMinutes ?? null,
       createdAt: record.createdAt,
@@ -1457,6 +1460,7 @@ export class AttendanceService {
               workHours: this.formatWorkHours(record.workedMinutes ?? null),
               source: record.source,
               notes: record.notes ?? null,
+              dayEndStatus: record.dayEndStatus ?? null,
             }
           : null,
       };
@@ -1590,7 +1594,14 @@ export class AttendanceService {
       Array.isArray(shift?.workingDays) && shift.workingDays.length
         ? shift.workingDays
         : DEFAULT_WORKING_DAYS;
-    return new Set(days.map((day) => String(day).toUpperCase()));
+    // Shifts are stored as 'Mon' (the shifts screen) or 'MONDAY' (organization
+    // setup). Every caller compares against WEEKDAY_NAMES, so normalise both
+    // forms to the full name — upper-casing alone turned 'Mon' into 'MON',
+    // which matched nothing and made every day a non-working day.
+    const full = days
+      .map((day) => WEEKDAY_NAMES.find((name) => name.startsWith(String(day).trim().slice(0, 3).toUpperCase())))
+      .filter((name): name is string => Boolean(name));
+    return new Set(full.length ? full : DEFAULT_WORKING_DAYS);
   }
 
   private async buildEmployeeInclude(tenantId: string) {

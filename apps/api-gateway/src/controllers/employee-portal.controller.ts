@@ -39,6 +39,7 @@ import {
   HRMSModuleKey,
   ModuleAction,
   ApplyMyLeaveDto,
+  CheckOutDto,
   CreateMyRequestDto,
   DataScope,
   DecideEmployeeRequestDto,
@@ -349,13 +350,14 @@ export class EmployeePortalController {
   }
 
   @Post('attendance/check-out')
-  @ApiOperation({ summary: 'Punch out for today and record the hours worked' })
+  @ApiOperation({ summary: 'Punch out for today and record the hours worked, with an optional day-end status' })
   checkOut(@Headers('x-tenant-id') tenantId: string, @CurrentUser('id') userId: string,
-    @CurrentUser('email') email: string, @Req() req: Request) {
+    @CurrentUser('email') email: string, @Req() req: Request, @Body() dto: CheckOutDto = {}) {
     return this.tenantClient.send(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.CHECK_OUT, {
       tenantId,
       userId, email,
       clientIp: clientIpOf(req),
+      dayEndStatus: dto?.dayEndStatus,
     });
   }
 
