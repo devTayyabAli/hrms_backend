@@ -3,6 +3,10 @@ import { resolveDbCredentials } from './db-credentials.util';
 
 export const getDatabaseConfig = (isPlatform: boolean): DatabaseConfig => {
   const isDev = process.env.NODE_ENV !== 'production';
+  // DB_SYNC=true creates missing platform tables in production too — for the
+  // first start against an empty database. Plain sync() (no `alter`) never
+  // changes or drops an existing table, so leaving it on is harmless.
+  const syncPlatform = isDev || process.env.DB_SYNC === 'true';
 
   if (isPlatform) {
     const creds = resolveDbCredentials('platform');
@@ -15,7 +19,7 @@ export const getDatabaseConfig = (isPlatform: boolean): DatabaseConfig => {
       dialect: 'postgres',
       dialectOptions: creds.dialectOptions,
       logging: isDev ? console.log : false,
-      synchronize: isDev,
+      synchronize: syncPlatform,
       autoLoadEntities: true,
       pool: {
         max: 10,
