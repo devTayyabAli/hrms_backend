@@ -365,7 +365,7 @@ export class TenantServiceController {
 
   @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION.CREATE_ORGANIZATION)
   async createOrganizationMessage(@Payload() dto: CreateOrganizationProvisionDto) {
-    return this.tenantProvisioningService.startOrganizationCreation(dto);
+    return this.tenantProvisioningService.createOrganizationAndProvision(dto);
   }
 
   @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION.GET_CREATION_STATUS)
@@ -400,7 +400,9 @@ export class TenantServiceController {
 
   @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION.CREATE_INITIAL)
   async createInitialMessage(@Payload() dto: any) {
-    return this.tenantProvisioningService.createOrganizationAndProvision(dto);
+    // Returns once the tenant row exists; provisioning continues in the
+    // background and is followed through GET_CREATION_STATUS.
+    return this.tenantProvisioningService.startOrganizationCreation(dto);
   }
 
   @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION.GET_MODULE_ACCESS)
