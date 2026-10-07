@@ -5,6 +5,8 @@ import { ClientProxy } from '@nestjs/microservices';
 import { Throttle } from '@nestjs/throttler';
 import { firstValueFrom } from 'rxjs';
 import type { Request, Response } from 'express';
+import { JwtAuthGuard } from '@app/tenant-context';
+import { requestLocation } from '../utils/request-location';
 import {
   SERVICES,
   MESSAGE_PATTERNS,
@@ -23,6 +25,21 @@ import {
   setRefreshCookie,
   withoutRefreshToken,
 } from '../auth/refresh-token-cookie';
+
+/**
+ * The `sid` claim of a JWT, read without verifying it — used only to drop a
+ * cache entry; auth-service verifies the token before revoking anything.
+ */
+const sessionIdOf = (token?: string | null): string | undefined => {
+  const body = token?.split('.')[1];
+  if (!body) return undefined;
+  try {
+    const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+    return typeof payload?.sid === 'string' ? payload.sid : undefined;
+  } catch {
+    return undefined;
+  }
+};
 
 @Controller('auth')
 @Public()
@@ -59,6 +76,7 @@ export class ApiGatewayAuthController {
         dto,
         ipAddress: req.ip,
         userAgent: req.headers['user-agent'],
+        location: requestLocation(req),
       }),
     );
     return this.issueSession(res, result);
@@ -78,6 +96,7 @@ export class ApiGatewayAuthController {
         dto,
         ipAddress: req.ip,
         userAgent: req.headers['user-agent'],
+        location: requestLocation(req),
       }),
     );
     return this.issueSession(res, result);
@@ -153,12 +172,16 @@ export class ApiGatewayAuthController {
     // leave the browser without a credential even if revocation fails.
     clearRefreshCookie(res);
 
-    return firstValueFrom(
+    const result = await firstValueFrom(
       this.authClient.send(MESSAGE_PATTERNS.AUTH.LOGOUT, {
         dto: { refreshToken },
         ipAddress: req.ip,
         userAgent: req.headers['user-agent'],
       }),
     );
+    // The session's access tokens stop working now, not after the guard's cache expires.
+    const sessionId = sessionIdOf(refreshToken);
+    if (sessionId) JwtAuthGuard.forgetSession(sessionId);
+    return result;
   }
 }

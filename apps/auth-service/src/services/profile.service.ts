@@ -5,6 +5,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
+import { Op } from 'sequelize';
 import * as bcrypt from 'bcrypt';
 import * as QRCode from 'qrcode';
 import { SuperAdmin, NotificationPreferences, UserSession } from '../models';
@@ -33,8 +34,17 @@ export class ProfileService {
   /**
    * Fetch Super Admin Profile
    */
-  async getProfile(superAdminId: string) {
-    const admin = await this.superAdminModel.findByPk(superAdminId);
+  async getProfile(superAdminId: string, currentSessionId?: string) {
+    const [admin, previous, current] = await Promise.all([
+      this.superAdminModel.findByPk(superAdminId),
+      this.previousLogin(superAdminId, currentSessionId),
+      currentSessionId
+        ? this.userSessionModel.findOne({
+            where: { id: currentSessionId, superAdminId },
+            attributes: ['createdAt', 'ipAddress'],
+          })
+        : null,
+    ]);
     if (!admin) {
       throw new NotFoundException('Super Admin profile not found.');
     }
@@ -50,8 +60,38 @@ export class ProfileService {
 
     return {
       success: true,
-      data: safeProfile,
+      data: {
+        ...safeProfile,
+        // The sign-in before this one — `lastLoginAt` is overwritten by the
+        // login that opened the current session, so it always read "now".
+        previousLoginAt: previous?.createdAt ?? null,
+        previousLoginIp: previous?.ipAddress ?? null,
+        previousLoginBrowser: previous?.browser ?? null,
+        previousLoginOs: previous?.operatingSystem ?? null,
+        // When this session began, so the card can tell the two apart.
+        currentSessionStartedAt: current?.createdAt ?? null,
+        currentSessionIp: current?.ipAddress ?? null,
+      },
     };
+  }
+
+  /**
+   * Every sign-in opens its own session (a token refresh keeps the same one),
+   * so the newest session other than the caller's is the previous sign-in.
+   * Without the caller's session id, the current sign-in is the newest one
+   * and the second newest is the previous.
+   */
+  private async previousLogin(superAdminId: string, currentSessionId?: string) {
+    const sessions = await this.userSessionModel.findAll({
+      where: {
+        superAdminId,
+        ...(currentSessionId ? { id: { [Op.ne]: currentSessionId } } : {}),
+      },
+      attributes: ['id', 'createdAt', 'ipAddress', 'browser', 'operatingSystem'],
+      order: [['createdAt', 'DESC']],
+      limit: currentSessionId ? 1 : 2,
+    });
+    return currentSessionId ? sessions[0] : sessions[1];
   }
 
   /**
@@ -466,7 +506,7 @@ export class ProfileService {
   /**
    * Get Recent Login Activity
    */
-  async getLoginActivity(superAdminId: string) {
+  async getLoginActivity(superAdminId: string, currentSessionId?: string) {
     const sessions = await this.userSessionModel.findAll({
       where: { superAdminId },
       order: [['lastActiveAt', 'DESC']],
@@ -475,12 +515,16 @@ export class ProfileService {
 
     const activity = sessions.map((s) => ({
       id: s.id,
-      location: s.location || 'Unknown Location',
+      // Missing values stay null — the screen says so — rather than being
+      // filled with placeholders that read like real data.
+      location: s.location || null,
       timestamp: s.lastActiveAt || s.createdAt,
-      ipAddress: s.ipAddress || '127.0.0.1',
-      device: s.device || 'Web Browser',
-      browser: s.browser || 'Browser',
+      ipAddress: s.ipAddress && s.ipAddress !== 'unknown' ? s.ipAddress : null,
+      device: s.device || null,
+      browser: s.browser || null,
+      operatingSystem: s.operatingSystem || null,
       status: s.status,
+      isCurrent: Boolean(currentSessionId) && s.id === currentSessionId,
     }));
 
     return {

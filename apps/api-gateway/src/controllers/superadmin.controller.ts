@@ -66,6 +66,7 @@ import {
   CurrentUser,
 } from '@app/tenant-context';
 import { IpAllowlistGuard } from '../guards/ip-allowlist.guard';
+import { requestLocation } from '../utils/request-location';
 
 @Controller('superadmin')
 @PlatformRoute()
@@ -93,6 +94,7 @@ export class SuperAdminController {
         dto,
         ipAddress: req.ip,
         userAgent: req.headers['user-agent'],
+        location: requestLocation(req),
       }),
     );
 
@@ -151,11 +153,18 @@ export class SuperAdminController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'SuperAdmin: 3-Step Organization Creation & Isolated DB Auto-Provisioning' })
   createInitialOrganization(@Body() dto: InitialOrganizationOnboardingDto) {
-    // A brand-new tenant's very first database write triggers a full schema
-    // sync (~20 tables, enums and indexes) — routinely 45s+ against this
-    // deployment's Postgres, well past the 60s default every other
-    // tenant-service call uses. Only this call gets the longer budget.
-    return this.tenantClient.send(MESSAGE_PATTERNS.ORGANIZATION.CREATE_INITIAL, dto, 180000);
+    // Returns once the tenant row exists; the database is provisioned in the
+    // background (a full schema sync outlives the proxy's 60s timeout).
+    // Follow it with GET organizations/:tenantId/creation-status.
+    return this.tenantClient.send(MESSAGE_PATTERNS.ORGANIZATION.CREATE_INITIAL, dto);
+  }
+
+  @ApiTags(TAGS.SA_ORGANIZATIONS)
+  @Get('organizations/:tenantId/creation-status')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'SuperAdmin: Progress of an organization being created (running, done or failed)' })
+  getOrganizationCreationStatus(@Param('tenantId') tenantId: string) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.ORGANIZATION.GET_CREATION_STATUS, { tenantId });
   }
 
   @ApiTags(TAGS.SA_ORGANIZATIONS)
@@ -222,6 +231,35 @@ export class SuperAdminController {
     return this.tenantClient.send(MESSAGE_PATTERNS.PLATFORM_ORGANIZATIONS.GET_STATS, {});
   }
 
+  @ApiTags(TAGS.SA_DASHBOARD)
+  @Get('organizations/overview')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'SuperAdmin Dashboard: organizations registered per month, split by current status',
+  })
+  @ApiQuery({ name: 'months', required: false, description: 'Window in months (1–24, default 6)' })
+  getOrganizationsOverview(@Query('months') months?: string) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.PLATFORM_ORGANIZATIONS.GET_OVERVIEW, {
+      months: Number(months) || 6,
+    });
+  }
+
+  @ApiTags(TAGS.SA_DASHBOARD)
+  @Get('organizations/by-plan')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'SuperAdmin Dashboard: organization count per plan' })
+  getOrganizationsByPlan() {
+    return this.tenantClient.send(MESSAGE_PATTERNS.PLATFORM_ORGANIZATIONS.GET_PLAN_BREAKDOWN, {});
+  }
+
+  @ApiTags(TAGS.SA_DASHBOARD)
+  @Get('organizations/alerts')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'SuperAdmin Dashboard: organization and billing alerts that need action' })
+  getOrganizationsAlerts() {
+    return this.tenantClient.send(MESSAGE_PATTERNS.PLATFORM_ORGANIZATIONS.GET_ALERTS, {});
+  }
+
   @ApiTags(TAGS.SA_ORGANIZATIONS)
   @Get('organizations')
   @ApiBearerAuth()
@@ -242,14 +280,19 @@ export class SuperAdminController {
   @Patch('organizations/:tenantId/status')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'SuperAdmin: Activate / Deactivate an Organization' })
-  updateOrganizationStatus(
+  async updateOrganizationStatus(
     @Param('tenantId') tenantId: string,
     @Body() dto: UpdateOrganizationStatusDto,
   ) {
-    return this.tenantClient.send(MESSAGE_PATTERNS.PLATFORM_ORGANIZATIONS.UPDATE_STATUS, {
-      tenantId,
-      status: dto.status,
-    });
+    const result = await firstValueFrom(
+      this.tenantClient.send(MESSAGE_PATTERNS.PLATFORM_ORGANIZATIONS.UPDATE_STATUS, {
+        tenantId,
+        status: dto.status,
+      }),
+    );
+    // Deactivation locks the organization's users out now, not after the guard's cache expires.
+    TenantGuard.forgetTenant(tenantId);
+    return result;
   }
 
   // Declared after ':tenantId/status' so the more specific route is matched
@@ -276,17 +319,17 @@ export class SuperAdminController {
     summary:
       'SuperAdmin: Permanently delete an Organization — its billing history and its isolated tenant database. Irreversible; requires the organization name as confirmation.',
   })
-  deleteOrganization(
+  async deleteOrganization(
     @Param('tenantId') tenantId: string,
     @Body() dto: DeleteOrganizationDto,
   ) {
     // The tenant DB drop routinely takes longer than the default 60s budget
     // other tenant-service calls use — same reasoning as CREATE_INITIAL above.
-    return this.tenantClient.send(
-      MESSAGE_PATTERNS.PLATFORM_ORGANIZATIONS.DELETE,
-      { tenantId, dto },
-      90000,
+    const result = await firstValueFrom(
+      this.tenantClient.send(MESSAGE_PATTERNS.PLATFORM_ORGANIZATIONS.DELETE, { tenantId, dto }, 90000),
     );
+    TenantGuard.forgetTenant(tenantId);
+    return result;
   }
 
   // ==========================================

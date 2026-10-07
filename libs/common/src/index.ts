@@ -33,6 +33,9 @@ export * from './dto/reports.dto';
 export * from './dto/settings.dto';
 export * from './dto/backup.dto';
 export * from './dto/help-support.dto';
+export * from './dto/ai-assistant.dto';
+export * from './dto/workspace.dto';
+export * from './dto/company-document.dto';
 export * from './dto/performance-payroll.dto';
 export * from './dto/payroll-compliance.dto';
 export * from './dto/payroll-compensation.dto';
@@ -85,9 +88,13 @@ export const MESSAGE_PATTERNS = {
     REFRESH_TOKEN: 'auth.refresh_token',
     LOGOUT: 'auth.logout',
     GET_LAST_LOGINS: 'auth.get_last_logins',
+    /** Whether an access token's session is still live (not logged out, revoked or expired). */
+    GET_SESSION_STATE: 'auth.get_session_state',
   },
   TENANT: {
     GET_TENANT: 'tenant.get',
+    /** `{ status, isActive }` only — the gateway's per-request organization check. */
+    GET_ACCESS_STATE: 'tenant.get_access_state',
     GET_ALL_TENANTS: 'tenant.get_all',
     CREATE_TENANT: 'tenant.create',
     PROVISION_TENANT: 'tenant.provision',
@@ -141,6 +148,7 @@ export const MESSAGE_PATTERNS = {
     VALIDATE_INITIAL_STEP: 'org.validate_initial_step',
     REVIEW_INITIAL: 'org.review_initial',
     CREATE_INITIAL: 'org.create_initial',
+    GET_CREATION_STATUS: 'org.get_creation_status',
   },
   ORGANIZATION_SETUP: {
     GET_PROGRESS: 'org_setup.get_progress',
@@ -415,6 +423,8 @@ export const MESSAGE_PATTERNS = {
     REVIEW_DOCUMENT: 'employee_portal.review_document',
     GET_REQUESTS: 'employee_portal.get_requests',
     CREATE_REQUEST: 'employee_portal.create_request',
+    UPDATE_REQUEST: 'employee_portal.update_request',
+    DELETE_REQUEST: 'employee_portal.delete_request',
     CANCEL_REQUEST: 'employee_portal.cancel_request',
     DECIDE_REQUEST: 'employee_portal.decide_request',
     /** HR: every employee's requests, and the counts above them. */
@@ -533,6 +543,9 @@ export const MESSAGE_PATTERNS = {
   PLATFORM_ORGANIZATIONS: {
     GET_ALL: 'platform_organizations.get_all',
     GET_STATS: 'platform_organizations.get_stats',
+    GET_OVERVIEW: 'platform_organizations.get_overview',
+    GET_PLAN_BREAKDOWN: 'platform_organizations.get_plan_breakdown',
+    GET_ALERTS: 'platform_organizations.get_alerts',
     GET_ONE: 'platform_organizations.get_one',
     UPDATE: 'platform_organizations.update',
     UPDATE_STATUS: 'platform_organizations.update_status',
@@ -678,6 +691,51 @@ export const MESSAGE_PATTERNS = {
   PLATFORM_SETTINGS: {
     GET: 'platform_settings.get',
     UPDATE: 'platform_settings.update',
+  },
+  WORKSPACE_TASK: {
+    GET_ALL: 'workspace_task.get_all',
+    GET_STATS: 'workspace_task.get_stats',
+    EXPORT: 'workspace_task.export',
+    GET_ONE: 'workspace_task.get_one',
+    CREATE: 'workspace_task.create',
+    UPDATE: 'workspace_task.update',
+    DELETE: 'workspace_task.delete',
+    GET_PEOPLE: 'workspace_task.get_people',
+    GET_MINE: 'workspace_task.get_mine',
+    UPDATE_MY_STATUS: 'workspace_task.update_my_status',
+  },
+  WORKSPACE_PROJECT: {
+    GET_ALL: 'workspace_project.get_all',
+    GET_OPTIONS: 'workspace_project.get_options',
+    EXPORT: 'workspace_project.export',
+    CREATE: 'workspace_project.create',
+    UPDATE: 'workspace_project.update',
+    DELETE: 'workspace_project.delete',
+  },
+  CALENDAR: {
+    GET_MONTH: 'calendar.get_month',
+    CREATE_EVENT: 'calendar.create_event',
+    UPDATE_EVENT: 'calendar.update_event',
+    DELETE_EVENT: 'calendar.delete_event',
+    GET_MY_MONTH: 'calendar.get_my_month',
+    GET_HOLIDAYS: 'calendar.get_holidays',
+    CREATE_HOLIDAY: 'calendar.create_holiday',
+    UPDATE_HOLIDAY: 'calendar.update_holiday',
+    DELETE_HOLIDAY: 'calendar.delete_holiday',
+  },
+  COMPANY_DOCUMENT: {
+    GET_ALL: 'company_document.get_all',
+    GET_PUBLISHED: 'company_document.get_published',
+    CREATE: 'company_document.create',
+    UPDATE: 'company_document.update',
+    DELETE: 'company_document.delete',
+  },
+  AI_ASSISTANT: {
+    GET_CONVERSATION: 'ai_assistant.get_conversation',
+    LIST_CONVERSATIONS: 'ai_assistant.list_conversations',
+    SAVE_CONVERSATION: 'ai_assistant.save_conversation',
+    DELETE_CONVERSATION: 'ai_assistant.delete_conversation',
+    LOG_FAILURE: 'ai_assistant.log_failure',
   },
   AUDIT: {
     QUERY_LOGS: 'audit.query_logs',

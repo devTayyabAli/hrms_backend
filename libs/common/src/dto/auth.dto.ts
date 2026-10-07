@@ -12,6 +12,8 @@ import {
   ValidateNested,
   IsArray,
   ArrayNotEmpty,
+  IsUUID,
+  MaxLength,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -361,6 +363,13 @@ export class LoginPayloadDto {
   @IsOptional()
   @IsString()
   userAgent?: string;
+
+  /** "Lahore, Punjab, PK" from the edge proxy's geo headers; absent when untrusted. */
+  @ApiPropertyOptional({ example: 'Lahore, Punjab, PK' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  location?: string;
 }
 
 export class SuperAdminLoginPayloadDto {
@@ -379,6 +388,13 @@ export class SuperAdminLoginPayloadDto {
   @IsOptional()
   @IsString()
   userAgent?: string;
+
+  /** "Lahore, Punjab, PK" from the edge proxy's geo headers; absent when untrusted. */
+  @ApiPropertyOptional({ example: 'Lahore, Punjab, PK' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  location?: string;
 }
 
 export class VerifyTwoFactorChallengePayloadDto {
@@ -397,6 +413,13 @@ export class VerifyTwoFactorChallengePayloadDto {
   @IsOptional()
   @IsString()
   userAgent?: string;
+
+  /** "Lahore, Punjab, PK" from the edge proxy's geo headers; absent when untrusted. */
+  @ApiPropertyOptional({ example: 'Lahore, Punjab, PK' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  location?: string;
 }
 
 export class RefreshTokenPayloadDto {
@@ -447,4 +470,10 @@ export class GetLastLoginsDto {
   @ArrayNotEmpty()
   @IsString({ each: true })
   tenantIds: string[];
+}
+
+/** `auth.get_session_state` — the session id carried in an access token's `sid` claim. */
+export class SessionStateQueryDto {
+  @IsUUID()
+  sessionId: string;
 }

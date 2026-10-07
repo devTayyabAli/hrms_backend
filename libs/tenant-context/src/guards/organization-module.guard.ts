@@ -44,13 +44,14 @@ export class OrganizationModuleGuard implements CanActivate {
    * Only positive decisions are cached. A denial is a cheap path already (it
    * short-circuits to a 403), and not caching it means a tenant who has just
    * paid regains access immediately instead of after the TTL. The reverse
-   * direction — access being revoked — is the one that tolerates lag, and a
-   * short TTL keeps that lag to seconds.
+   * direction — access being revoked — is the one that tolerates lag. 60s
+   * keeps that lag to a minute; at 15s most page loads paid a TCP hop and a
+   * database query here before the handler even started.
    */
   private readonly cache = new Map<string, number>();
 
   private readonly ttlMs = parseInt(
-    process.env.MODULE_ACCESS_TTL_MS || '15000',
+    process.env.MODULE_ACCESS_TTL_MS || '60000',
     10,
   );
 

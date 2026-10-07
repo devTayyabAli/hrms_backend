@@ -13,6 +13,8 @@ import {
 import { ApiGatewayAuthController } from './controllers/auth.controller';
 import { SuperAdminController } from './controllers/superadmin.controller';
 import { SuperAdminProfileController } from './controllers/superadmin-profile.controller';
+import { SuperAdminAiController } from './controllers/superadmin-ai.controller';
+import { AiAssistantService } from './ai-assistant/ai-assistant.service';
 import { FilesController } from './controllers/files.controller';
 import { OrganizationAdminActivationController } from './controllers/activation.controller';
 import { OrganizationSetupController } from './controllers/organization-setup.controller';
@@ -32,6 +34,8 @@ import { PayrollController } from './controllers/payroll.controller';
 import { PayrollComplianceController } from './controllers/payroll-compliance.controller';
 import { PayrollCompensationController } from './controllers/payroll-compensation.controller';
 import { EmployeePortalController, EmployeePortalReviewController } from './controllers/employee-portal.controller';
+import { WorkspaceController, WorkspaceSelfController } from './controllers/workspace.controller';
+import { CompanyDocumentsController } from './controllers/company-documents.controller';
 import {
   HrPortalController,
   HrReportsController,
@@ -99,6 +103,7 @@ import { MaintenanceModeGuard } from './guards/maintenance-mode.guard';
     ApiGatewayHealthController,
     ApiGatewayAuthController,
     SuperAdminController,
+    SuperAdminAiController,
     SuperAdminProfileController,
     FilesController,
     OrganizationAdminActivationController,
@@ -124,6 +129,9 @@ import { MaintenanceModeGuard } from './guards/maintenance-mode.guard';
     PayrollComplianceController,
     PayrollCompensationController,
     EmployeePortalController,
+    WorkspaceController,
+    WorkspaceSelfController,
+    CompanyDocumentsController,
     EmployeePortalReviewController,
     HrPortalController,
     HrReportsController,
@@ -188,6 +196,7 @@ import { MaintenanceModeGuard } from './guards/maintenance-mode.guard';
         }),
     },
     IpAllowlistGuard,
+    AiAssistantService,
     {
       // Global so maintenance mode covers every tenant-facing route at once;
       // the guard itself exempts /superadmin, /profile and /health.

@@ -661,29 +661,21 @@ export class HrDashboardService {
           const { from, to } = rangeBounds(range, today);
           const created =
             range === AdminDashboardRange.ALL_TIME ? {} : { createdAt: { [Op.between]: [startOfDay(from), endOfDay(to)] } };
-          const [Goal, Task] = await Promise.all([
-            this.modelProvider.getPerformanceGoalModel(tenantId),
-            this.modelProvider.getOnboardingTaskModel(tenantId),
-          ]);
-          const [goalRows, taskRows] = await Promise.all([
-            Goal.findAll({
-              where: { tenantId, ...created },
-              attributes: ['status', [fn('COUNT', col('id')), 'count']],
-              group: ['status'],
-              raw: true,
-            }),
-            Task.findAll({
-              where: { tenantId, ...created },
-              attributes: ['status', [fn('COUNT', col('id')), 'count']],
-              group: ['status'],
-              raw: true,
-            }),
-          ]);
-          const count = (rows: any[], status: string) =>
-            Number(rows.find((row) => row.status === status)?.count ?? 0);
-          const completed = count(goalRows as any[], 'COMPLETED') + count(taskRows as any[], 'COMPLETED');
-          const inProgress = count(goalRows as any[], 'IN_PROGRESS');
-          const pending = count(goalRows as any[], 'NOT_STARTED') + count(taskRows as any[], 'PENDING');
+          // The Workspace task list — the same tasks Workspace › Tasks shows,
+          // narrowed to the caller's team for a scoped role. Performance goals
+          // and onboarding checklists used to be counted here as "tasks",
+          // which matched no list anyone could open.
+          const Task = await this.modelProvider.getWorkspaceTaskModel(tenantId);
+          const rows = (await Task.findAll({
+            where: { tenantId, ...created, ...(await this.scopeWhere(tenantId, 'assigneeEmployeeId')) },
+            attributes: ['status', [fn('COUNT', col('id')), 'count']],
+            group: ['status'],
+            raw: true,
+          })) as any[];
+          const count = (status: string) => Number(rows.find((row) => row.status === status)?.count ?? 0);
+          const completed = count('COMPLETED');
+          const inProgress = count('IN_PROGRESS');
+          const pending = count('PENDING');
           return { range, total: completed + inProgress + pending, completed, inProgress, pending };
         }, null),
 

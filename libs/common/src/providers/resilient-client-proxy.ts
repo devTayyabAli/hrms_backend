@@ -1,6 +1,6 @@
 import { Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
-import { Observable, TimeoutError, throwError } from 'rxjs';
+import { Observable, TimeoutError, throwError, timer } from 'rxjs';
 import { catchError, retry, tap, timeout } from 'rxjs/operators';
 
 export interface ResilientClientProxyOptions {
@@ -92,6 +92,15 @@ export function isIdempotentPattern(pattern: unknown): boolean {
   if (typeof pattern !== 'string') return false;
   const action = pattern.split('.').pop() || pattern;
   return IDEMPOTENT_ACTION_PREFIXES.some((prefix) => action.startsWith(prefix));
+}
+
+/** The transport itself failed — the request may never have reached the service. */
+function isConnectionFailure(err: any): boolean {
+  return (
+    err?.code === 'ECONNREFUSED' ||
+    err?.code === 'ECONNRESET' ||
+    /ECONNREFUSED|ECONNRESET/i.test(err?.message || err?.toString?.() || '')
+  );
 }
 
 function isInfrastructureFailure(err: any): boolean {
@@ -196,7 +205,17 @@ export class ResilientClientProxy {
       .pipe(timeout(timeoutMs ?? this.timeoutMs));
 
     if (isIdempotentPattern(pattern)) {
-      source$ = source$.pipe(retry({ count: this.retryCount, delay: this.retryDelayMs }));
+      // Only a dropped or refused connection is worth another attempt. A
+      // business error (not found, validation, forbidden) is the service's
+      // real answer, and retrying it just ran the handler three times and
+      // added 2s to every such response. A timeout isn't retried either: the
+      // service is slow, and asking again makes the caller wait 3× as long.
+      source$ = source$.pipe(
+        retry({
+          count: this.retryCount,
+          delay: (err) => (isConnectionFailure(err) ? timer(this.retryDelayMs) : throwError(() => err)),
+        }),
+      );
     }
 
     return source$.pipe(

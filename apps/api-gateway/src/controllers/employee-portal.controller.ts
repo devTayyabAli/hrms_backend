@@ -58,6 +58,7 @@ import {
   TaxYearQueryDto,
   UpdateMyProfileDto,
   UpdateMyDocumentDto,
+  UpdateMyRequestDto,
   UploadMyDocumentDto,
   UploadMyDocumentFormDto,
 } from '@app/common';
@@ -709,6 +710,40 @@ export class EmployeePortalController {
       tenantId,
       userId, email,
       dto,
+    });
+  }
+
+  @Patch('requests/:requestId')
+  @ApiParam({ name: 'requestId' })
+  @ApiOperation({ summary: 'Edit a pending request — only permitted while status is PENDING' })
+  updateRequest(
+    @Headers('x-tenant-id') tenantId: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('email') email: string,
+    @Param('requestId') requestId: string,
+    @Body() dto: UpdateMyRequestDto,
+  ) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.UPDATE_REQUEST, {
+      tenantId,
+      userId, email,
+      requestId,
+      dto,
+    });
+  }
+
+  @Delete('requests/:requestId')
+  @ApiParam({ name: 'requestId' })
+  @ApiOperation({ summary: 'Delete a pending request — only permitted while status is PENDING' })
+  deleteRequest(
+    @Headers('x-tenant-id') tenantId: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('email') email: string,
+    @Param('requestId') requestId: string,
+  ) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.DELETE_REQUEST, {
+      tenantId,
+      userId, email,
+      requestId,
     });
   }
 

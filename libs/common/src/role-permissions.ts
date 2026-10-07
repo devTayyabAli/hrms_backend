@@ -66,6 +66,11 @@ export const SYSTEM_TENANT_ROLES: SystemTenantRoleDef[] = [
       // payroll.compliance.manage, which HR doesn't start with.
       'payroll.tax.manage',
       'payroll.compliance.view',
+      // Workspace: HR runs the team's tasks, projects and company calendar.
+      'tasks.manage',
+      'projects.manage',
+      'calendar.manage',
+      'documents.manage',
     ],
     locked: false,
   },

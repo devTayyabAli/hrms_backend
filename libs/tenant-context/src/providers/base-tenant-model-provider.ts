@@ -163,11 +163,66 @@ export abstract class BaseTenantModelProvider {
     }
 
     const startedAt = Date.now();
-    await connection.sync({ force: false });
+    if (process.env.TENANT_DB_SYNC_MODE === 'full') {
+      await connection.sync({ force: false });
+    } else {
+      await this.createMissingTables(connection);
+    }
     BaseTenantModelProvider.syncedTenants.add(tenantId);
     this.logger.debug(
       `Schema sync for tenant ${tenantId} took ${Date.now() - startedAt}ms`,
     );
+  }
+
+  /**
+   * `sync()` checks every model's table, enums and indexes one at a time —
+   * about three round trips per model, ~120 for tenant-service — before the
+   * first request of every process start can be answered. With a remote
+   * database that was 25s+ after each restart.
+   *
+   * One query lists the tables and columns that exist. Missing tables are
+   * created, in registration order (so a table is created after the ones it
+   * has FKs to), and columns a model has gained since are added. The only
+   * thing skipped is adding a new index to an existing table — set
+   * TENANT_DB_SYNC_MODE=full when a change needs that.
+   */
+  private async createMissingTables(connection: Sequelize): Promise<void> {
+    // One catalog query covers both: which tables exist, and their columns.
+    const [rows] = (await connection.query(
+      `SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'public'`,
+    )) as [{ table_name: string; column_name: string }[], unknown];
+    const columnsByTable = new Map<string, Set<string>>();
+    for (const row of rows) {
+      if (!columnsByTable.has(row.table_name)) columnsByTable.set(row.table_name, new Set());
+      columnsByTable.get(row.table_name)!.add(row.column_name);
+    }
+
+    const queryInterface = connection.getQueryInterface();
+    for (const model of Object.values(connection.models)) {
+      const table = model.getTableName();
+      const name = typeof table === 'string' ? table : table.tableName;
+      const existingColumns = columnsByTable.get(name);
+      if (!existingColumns) {
+        this.logger.log(`Creating missing table "${name}"`);
+        await model.sync();
+        continue;
+      }
+      // A column added to an existing model. Only ever added — never altered
+      // or dropped — so this can't damage data, and plain sync() wouldn't
+      // have added it at all.
+      for (const attribute of Object.values(model.getAttributes()) as any[]) {
+        const column = attribute.field ?? attribute.fieldName;
+        if (!column || existingColumns.has(column) || attribute.type?.key === 'VIRTUAL') continue;
+        this.logger.log(`Adding missing column "${name}"."${column}"`);
+        try {
+          await queryInterface.addColumn(name, column, { ...attribute, primaryKey: false, references: undefined });
+        } catch (error: any) {
+          // e.g. NOT NULL without a default on a table that has rows. Logged,
+          // not thrown: one column must not take every request down with it.
+          this.logger.error(`Could not add "${name}"."${column}": ${error?.message ?? error}`);
+        }
+      }
+    }
   }
 
   /** Convenience for the `getXModel()` accessors every subclass exposes. */

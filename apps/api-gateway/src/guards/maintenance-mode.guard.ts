@@ -52,7 +52,7 @@ export class MaintenanceModeGuard implements CanActivate {
   private cachedAt = 0;
 
   private readonly ttlMs = parseInt(
-    process.env.MAINTENANCE_STATE_TTL_MS || '15000',
+    process.env.MAINTENANCE_STATE_TTL_MS || '60000',
     10,
   );
 

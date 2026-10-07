@@ -34,6 +34,7 @@
     "db:rebuild-directory": "ts-node --transpile-only -r tsconfig-paths/register apps/tenant-service/src/scripts/rebuild-directory.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.131.0",
     "@aws-sdk/client-s3": "^3.1124.0",
     "@aws-sdk/s3-request-presigner": "^3.1124.0",
     "@nestjs/common": "^11.0.1",

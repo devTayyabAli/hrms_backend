@@ -54,6 +54,8 @@ interface SessionMeta {
   authCredentialId?: string;
   ipAddress?: string;
   userAgent?: string;
+  /** "Lahore, Punjab, PK" — from the edge proxy's geo headers, when trusted. */
+  location?: string;
 }
 
 @Injectable()
@@ -236,8 +238,8 @@ export class AuthService implements OnModuleInit {
     } else {
       // Device/browser/OS are parsed from the User-Agent so the Sessions
       // screen can show "MacBook Pro / Chrome 126" instead of a raw UA blob.
-      // `location` is deliberately left unset: deriving a city from an IP
-      // needs a geo-IP provider, and none is configured.
+      // `location` comes from the edge proxy's geo headers (see the
+      // gateway's request-location util); unset when none are trusted.
       const agent = parseUserAgent(sessionMeta.userAgent);
       await this.userSessionModel.create({
         id: sessionId,
@@ -246,7 +248,9 @@ export class AuthService implements OnModuleInit {
         device: agent.device,
         browser: agent.browser,
         operatingSystem: agent.operatingSystem,
-        ipAddress: sessionMeta.ipAddress || 'unknown',
+        // "::ffff:1.2.3.4" is how Node reports IPv4 over an IPv6 socket.
+        ipAddress: sessionMeta.ipAddress?.replace(/^::ffff:/i, '') || 'unknown',
+        location: sessionMeta.location || null,
         lastActiveAt: now,
         status: 'active',
         refreshTokenHash,
@@ -358,7 +362,7 @@ export class AuthService implements OnModuleInit {
     return { message: isActive ? 'Credential reactivated successfully' : 'Credential deactivated successfully' };
   }
 
-  async superAdminLogin(dto: SuperAdminLoginDto, ipAddress?: string, userAgent?: string) {
+  async superAdminLogin(dto: SuperAdminLoginDto, ipAddress?: string, userAgent?: string, location?: string) {
     const admin = await this.superAdminModel.findOne({ where: { email: dto.email } });
 
     // Checked before the password comparison so a locked account can't be
@@ -447,7 +451,7 @@ export class AuthService implements OnModuleInit {
         role: 'SuperAdmin',
         roles: ['superadmin'],
       },
-      { superAdminId: admin.id, ipAddress, userAgent },
+      { superAdminId: admin.id, ipAddress, userAgent, location },
     );
 
     await this.auditService.log({
@@ -476,7 +480,7 @@ export class AuthService implements OnModuleInit {
   /**
    * Verify 2FA Login Challenge Code
    */
-  async verifyTwoFactorLogin(dto: VerifyTwoFactorChallengeDto, ipAddress?: string, userAgent?: string) {
+  async verifyTwoFactorLogin(dto: VerifyTwoFactorChallengeDto, ipAddress?: string, userAgent?: string, location?: string) {
     let payload: any;
     try {
       payload = this.jwtService.verify(dto.challengeToken);
@@ -554,7 +558,7 @@ export class AuthService implements OnModuleInit {
         role: 'SuperAdmin',
         roles: ['superadmin'],
       },
-      { superAdminId: admin.id, ipAddress, userAgent },
+      { superAdminId: admin.id, ipAddress, userAgent, location },
     );
 
     await this.auditService.log({
@@ -802,7 +806,7 @@ export class AuthService implements OnModuleInit {
     };
   }
 
-  async login(dto: LoginDto, ipAddress?: string, userAgent?: string) {
+  async login(dto: LoginDto, ipAddress?: string, userAgent?: string, location?: string) {
     const cred = await this.credentialModel.findOne({ where: { email: dto.email } });
 
     if (cred) {
@@ -824,9 +828,12 @@ export class AuthService implements OnModuleInit {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    await this.accountLockoutService.registerSuccess(cred);
-
-    const effectiveAuth = await this.resolveEffectiveAuthorization(cred);
+    // Independent: the lockout reset is a platform-DB write, the authorization
+    // lookup a call to user-service. Each is a remote round trip, so together.
+    const [, effectiveAuth] = await Promise.all([
+      this.accountLockoutService.registerSuccess(cred),
+      this.resolveEffectiveAuthorization(cred),
+    ]);
 
     if (effectiveAuth.isActive === false) {
       throw new UnauthorizedException('Account is no longer active.');
@@ -847,24 +854,25 @@ export class AuthService implements OnModuleInit {
         isFullAccess: effectiveAuth.isFullAccess,
         dataScope: effectiveAuth.dataScope,
       },
-      { authCredentialId: cred.id, ipAddress, userAgent },
+      { authCredentialId: cred.id, ipAddress, userAgent, location },
     );
 
-    await cred.update({
-      lastLoginAt: new Date(),
-      lastLoginIp: ipAddress || 'unknown',
-      ...(effectiveRole && cred.role !== effectiveRole ? { role: effectiveRole } : {}),
-    });
-
-    await this.auditService.log({
-      action: 'LOGIN_SUCCESS',
-      actorType: 'tenant',
-      userId: cred.id,
-      email: cred.email,
-      tenantId: cred.tenantId,
-      ipAddress,
-      userAgent,
-    });
+    await Promise.all([
+      cred.update({
+        lastLoginAt: new Date(),
+        lastLoginIp: ipAddress || 'unknown',
+        ...(effectiveRole && cred.role !== effectiveRole ? { role: effectiveRole } : {}),
+      }),
+      this.auditService.log({
+        action: 'LOGIN_SUCCESS',
+        actorType: 'tenant',
+        userId: cred.id,
+        email: cred.email,
+        tenantId: cred.tenantId,
+        ipAddress,
+        userAgent,
+      }),
+    ]);
 
     return {
       message: 'Login successful',
@@ -1057,6 +1065,31 @@ export class AuthService implements OnModuleInit {
     });
 
     return tokens;
+  }
+
+  /**
+   * Whether the session behind an access token can still be used. The gateway
+   * asks this (cached) on authenticated requests, so a logout or revocation
+   * ends the session's access tokens too, not just its refresh token.
+   */
+  async getSessionState(sessionId: string): Promise<{ active: boolean; reason?: string }> {
+    const session = await this.userSessionModel.findByPk(sessionId, {
+      attributes: ['id', 'status', 'expiresAt'],
+    });
+    if (!session) return { active: false, reason: 'Your session has ended. Please sign in again.' };
+    if (session.status !== 'active') {
+      return {
+        active: false,
+        reason:
+          session.status === 'logged_out'
+            ? 'You have been signed out. Please sign in again.'
+            : 'This session was ended. Please sign in again.',
+      };
+    }
+    if (session.expiresAt && new Date(session.expiresAt).getTime() < Date.now()) {
+      return { active: false, reason: 'Your session has expired. Please sign in again.' };
+    }
+    return { active: true };
   }
 
   /**

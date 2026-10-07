@@ -91,6 +91,20 @@ export class CryptoUtils {
   /**
    * Encrypt a sensitive text (e.g. tenant DB password, 2FA secret)
    */
+  /**
+   * Why ENCRYPTION_KEY can't be used, or null when it can. For a startup
+   * check: a bad key otherwise surfaces only as a 500 the first time
+   * something is encrypted (e.g. 2FA setup).
+   */
+  static configurationProblem(): string | null {
+    try {
+      this.getSecretKey();
+      return null;
+    } catch (error: any) {
+      return error?.message ?? String(error);
+    }
+  }
+
   static encrypt(text: string): string {
     if (!text) return text;
     const key = this.getSecretKey();

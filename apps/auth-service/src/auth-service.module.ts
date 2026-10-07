@@ -30,6 +30,7 @@ import { CustomDomainsService } from './services/custom-domains.service';
 import { MaintenanceSettingsService } from './services/maintenance-settings.service';
 import { AccountLockoutService } from './services/account-lockout.service';
 import { HelpSupportService } from './services/help-support.service';
+import { AiConversationService } from './services/ai-conversation.service';
 
 import { AuthMicroserviceController } from './controllers/auth.controller';
 
@@ -49,6 +50,7 @@ import {
   SupportTicket,
   KnowledgeBaseArticle,
   VideoTutorial,
+  AiConversation,
 } from './models';
 
 @Module({
@@ -78,6 +80,7 @@ import {
       SupportTicket,
       KnowledgeBaseArticle,
       VideoTutorial,
+      AiConversation,
     ]),
 
     JwtModule.registerAsync({
@@ -147,6 +150,7 @@ import {
     MaintenanceSettingsService,
     AccountLockoutService,
     HelpSupportService,
+    AiConversationService,
   ],
 
   controllers: [AuthMicroserviceController],

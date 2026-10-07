@@ -1,3 +1,4 @@
+import { firstValueFrom } from 'rxjs';
 import {
   Controller,
   Get,
@@ -46,9 +47,10 @@ export class SuperAdminProfileController {
   @ApiTags(TAGS.SA_PROFILE)
   @Get()
   @ApiOperation({ summary: 'Get SuperAdmin Profile Details' })
-  getProfile(@CurrentUser('id') superAdminId: string) {
+  getProfile(@CurrentUser('id') superAdminId: string, @CurrentUser('sid') currentSessionId: string) {
     return this.authClient.send(MESSAGE_PATTERNS.PROFILE.GET_PROFILE, {
       superAdminId: superAdminId || 'default-superadmin-id',
+      currentSessionId,
     });
   }
 
@@ -122,9 +124,11 @@ export class SuperAdminProfileController {
   @ApiTags(TAGS.SA_PROFILE)
   @Get('security/login-activity')
   @ApiOperation({ summary: 'Get SuperAdmin Recent Login Activity History' })
-  getLoginActivity(@CurrentUser('id') superAdminId: string) {
+  getLoginActivity(@CurrentUser('id') superAdminId: string, @CurrentUser('sid') currentSessionId: string) {
     return this.authClient.send(MESSAGE_PATTERNS.PROFILE.GET_LOGIN_ACTIVITY, {
       superAdminId: superAdminId || 'default-superadmin-id',
+      // Marks this request's own session, instead of guessing the newest row.
+      currentSessionId,
     });
   }
 
@@ -253,22 +257,33 @@ export class SuperAdminProfileController {
   @ApiTags(TAGS.SA_PROFILE)
   @Delete(['sessions/revoke-others', 'sessions/others'])
   @ApiOperation({ summary: 'Revoke All Other Active Sessions' })
-  revokeAllOtherSessions(@CurrentUser('id') superAdminId: string) {
-    return this.authClient.send(MESSAGE_PATTERNS.PROFILE.REVOKE_OTHER_SESSIONS, {
-      superAdminId: superAdminId || 'default-superadmin-id',
-    });
+  async revokeAllOtherSessions(@CurrentUser('id') superAdminId: string, @CurrentUser('sid') currentSessionId: string) {
+    const result = await firstValueFrom(
+      this.authClient.send(MESSAGE_PATTERNS.PROFILE.REVOKE_OTHER_SESSIONS, {
+        superAdminId: superAdminId || 'default-superadmin-id',
+        // Without it the caller's own session is ended too.
+        currentSessionId,
+      }),
+    );
+    // Which sessions those were isn't known here, so start the cache over.
+    JwtAuthGuard.forgetAllSessions();
+    return result;
   }
 
   @ApiTags(TAGS.SA_PROFILE)
   @Delete('sessions/:sessionId')
   @ApiOperation({ summary: 'Revoke a Specific Active Session' })
-  revokeSession(
+  async revokeSession(
     @CurrentUser('id') superAdminId: string,
     @Param('sessionId') sessionId: string,
   ) {
-    return this.authClient.send(MESSAGE_PATTERNS.PROFILE.REVOKE_SESSION, {
-      superAdminId: superAdminId || 'default-superadmin-id',
-      sessionId,
-    });
+    const result = await firstValueFrom(
+      this.authClient.send(MESSAGE_PATTERNS.PROFILE.REVOKE_SESSION, {
+        superAdminId: superAdminId || 'default-superadmin-id',
+        sessionId,
+      }),
+    );
+    JwtAuthGuard.forgetSession(sessionId);
+    return result;
   }
 }

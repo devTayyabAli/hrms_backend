@@ -84,6 +84,13 @@ export class OrganizationAdminInvitationService {
   ): Promise<AdminInvitationResult> {
     const tenant = await this.tenantService.getTenantById(tenantId);
 
+    if (tenant.status === TenantStatus.SUSPENDED || !tenant.isActive) {
+      throw new TenantException(
+        TenantErrorCode.INVALID_TENANT_CONTEXT,
+        'This organization is deactivated. Activate it before sending an invitation.',
+      );
+    }
+
     if (tenant.provisioningStatus !== TenantProvisioningStatus.READY) {
       throw new TenantException(
         TenantErrorCode.INVALID_TENANT_CONTEXT,
@@ -99,6 +106,13 @@ export class OrganizationAdminInvitationService {
       );
     }
 
+    // A resend (or a re-invite without a name) keeps the admin's own details
+    // from the earlier invitation — falling back to the organization's name
+    // made the org name become the admin's first/last name on activation.
+    const previous = adminName && phone ? null : await this.findPreviousAdminDetails(tenant, targetEmail);
+    const resolvedAdminName = adminName || previous?.adminName || null;
+    const resolvedPhone = phone || previous?.phone || null;
+
     // Cancel existing PENDING invitations for this tenant
     await this.invitationModel.update(
       { status: InvitationStatus.CANCELLED, cancelledAt: new Date() },
@@ -113,8 +127,8 @@ export class OrganizationAdminInvitationService {
     const invitation = await this.invitationModel.create({
       tenantId: tenant.id,
       adminEmail: targetEmail,
-      adminName: adminName || tenant.name,
-      phone,
+      adminName: resolvedAdminName,
+      phone: resolvedPhone,
       customMessage,
       tokenHash,
       status: InvitationStatus.PENDING,
@@ -134,7 +148,7 @@ export class OrganizationAdminInvitationService {
             subject: `Invitation to Join ${tenant.organizationName || tenant.name} as Administrator`,
             templateName: 'admin_invitation',
             variables: {
-              firstName: adminName || 'Admin',
+              firstName: resolvedAdminName || 'Admin',
               organizationName: tenant.organizationName || tenant.name,
               invitationLink: activationUrl,
               expiresAt: expiresAt.toDateString(),
@@ -165,7 +179,43 @@ export class OrganizationAdminInvitationService {
    */
   async resendAdminInvitation(tenantId: string): Promise<AdminInvitationResult> {
     const tenant = await this.tenantService.getTenantById(tenantId);
-    return this.createAdminInvitation(tenant.id, tenant.adminEmail, tenant.organizationName || tenant.name);
+    const accepted = await this.invitationModel.count({
+      where: { tenantId, status: InvitationStatus.ACCEPTED },
+    });
+    if (accepted > 0) {
+      throw new TenantException(
+        TenantErrorCode.INVALID_TENANT_CONTEXT,
+        "This organization's admin has already activated their account, so there is no invitation to resend.",
+      );
+    }
+    // No name passed on purpose: `createAdminInvitation` carries the admin's
+    // own name/phone over from the previous invitation.
+    return this.createAdminInvitation(tenant.id, tenant.adminEmail);
+  }
+
+  /**
+   * The admin's own name/phone from the most recent earlier invitation to
+   * this email. Invitations created by the old resend path stored the
+   * organization's name as `adminName`, so those are skipped.
+   */
+  private async findPreviousAdminDetails(
+    tenant: { id: string; name?: string; organizationName?: string },
+    adminEmail: string,
+  ): Promise<{ adminName: string | null; phone: string | null } | null> {
+    const orgNames = new Set(
+      [tenant.name, tenant.organizationName].filter(Boolean).map((n) => n!.trim().toLowerCase()),
+    );
+    const invitations = await this.invitationModel.findAll({
+      where: { tenantId: tenant.id, adminEmail },
+      order: [['createdAt', 'DESC']],
+    });
+    const named = invitations.find(
+      (inv) => inv.adminName && !orgNames.has(inv.adminName.trim().toLowerCase()),
+    );
+    return {
+      adminName: named?.adminName || null,
+      phone: invitations.find((inv) => inv.phone)?.phone || null,
+    };
   }
 
   /**
@@ -199,10 +249,27 @@ export class OrganizationAdminInvitationService {
       );
     }
 
+    // Checked before the invitation's own status: an invitation withdrawn by
+    // deactivation should say why while the organization is still off.
+    const owner = invitation.tenant;
+    if (owner && (owner.status === TenantStatus.SUSPENDED || !owner.isActive)) {
+      throw new TenantException(
+        TenantErrorCode.INVALID_TENANT_CONTEXT,
+        'This organization has been deactivated, so its invitation can no longer be used. Please contact your platform administrator.',
+      );
+    }
+
+    if (invitation.status === InvitationStatus.CANCELLED) {
+      throw new TenantException(
+        TenantErrorCode.INVALID_TENANT_CONTEXT,
+        'This invitation has been withdrawn or replaced by a newer one. Please use the most recent invitation email, or contact your platform administrator.',
+      );
+    }
+
     if (invitation.status !== InvitationStatus.PENDING) {
       throw new TenantException(
         TenantErrorCode.INVALID_TENANT_CONTEXT,
-        `Invitation is no longer valid. Status is '${invitation.status}'.`,
+        'This invitation has expired. Please request a new invitation from your platform administrator.',
       );
     }
 

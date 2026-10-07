@@ -9,7 +9,17 @@ import {
   IsUUID,
   IsDefined,
   ValidateNested,
+  ValidateIf,
 } from 'class-validator';
+
+/**
+ * E.164: "+", a country code, then the subscriber number — 8 to 15 digits in
+ * all, no spaces. The profile screens send this normalised form; anything
+ * else (letters, a local "0300…" number with no country) is refused. An empty
+ * string clears the field.
+ */
+const E164_PHONE = /^\+[1-9]\d{7,14}$/;
+const E164_MESSAGE = 'Enter a valid phone number in international format, e.g. +923001234567.';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsStrongPassword } from '../validators/strong-password.validator';
@@ -34,6 +44,8 @@ export class UpdateProfileDto {
   @ApiPropertyOptional({ example: '+15551234567' })
   @IsOptional()
   @IsString()
+  @ValidateIf((_, v) => v !== '')
+  @Matches(E164_PHONE, { message: E164_MESSAGE })
   phone?: string;
 
   @ApiPropertyOptional({ example: 'Super Admin' })
@@ -100,6 +112,8 @@ export class UpdateRecoveryDto {
   @ApiPropertyOptional({ example: '+15559876543' })
   @IsOptional()
   @IsString()
+  @ValidateIf((_, v) => v !== '')
+  @Matches(E164_PHONE, { message: E164_MESSAGE })
   recoveryPhone?: string;
 }
 

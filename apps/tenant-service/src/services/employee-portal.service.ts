@@ -24,6 +24,7 @@ import {
   LeaveRequestStatusFilter,
   UpdateMyDocumentDto,
   UpdateMyLeaveDto,
+  UpdateMyRequestDto,
   ReviewEmployeeDocumentDto,
   SELF_EDITABLE_PROFILE_FIELDS,
   TenantErrorCode,
@@ -1526,7 +1527,7 @@ export class EmployeePortalService {
     return {
       pending,
       types: REQUEST_CARDS,
-      rows: rows.map((row) => this.requestRow(row)),
+      rows: rows.map((row) => this.requestRow(row, employee)),
     };
   }
 
@@ -1538,6 +1539,42 @@ export class EmployeePortalService {
     this.assertRequestFields(dto);
     const Request = await this.modelProvider.getEmployeeRequestModel(tenantId);
     const requestDate = dto.date ?? dto.fromDate ?? new Date().toISOString().slice(0, 10);
+
+    const manager = employee.reportingManager;
+    const managerName = manager
+      ? [manager.firstName, manager.lastName].filter(Boolean).join(' ')
+      : null;
+    const stage = managerName ? 'MANAGER_PENDING' : 'HR_PENDING';
+
+    const resolution: Record<string, any> = {
+      stage,
+      managerName: managerName || null,
+      managerId: employee.reportingManagerId || null,
+      workflow: [
+        {
+          step: 'SUBMITTED',
+          title: 'Request Submitted',
+          description: `Submitted by ${[employee.firstName, employee.lastName].filter(Boolean).join(' ')}`,
+          at: new Date().toISOString(),
+          status: 'COMPLETED',
+        },
+        {
+          step: 'MANAGER_REVIEW',
+          title: 'Team Lead / Manager Review',
+          description: managerName
+            ? `Assigned to ${managerName} for initial review`
+            : 'No direct manager assigned — routed directly to HR',
+          status: managerName ? 'PENDING' : 'SKIPPED',
+        },
+        {
+          step: 'HR_APPROVAL',
+          title: 'HR Final Approval',
+          description: 'HR review and records update',
+          status: managerName ? 'WAITING' : 'PENDING',
+        },
+      ],
+    };
+
     const created = await Request.create({
       tenantId,
       employeeId: employee.id,
@@ -1550,6 +1587,7 @@ export class EmployeePortalService {
       timeFrom: dto.timeFrom ?? null,
       timeTo: dto.timeTo ?? null,
       status: EmployeeRequestStatus.PENDING,
+      resolution,
     });
     const when = dto.fromDate
       ? periodLabel(dto.fromDate, dto.toDate ?? dto.fromDate)
@@ -1562,7 +1600,56 @@ export class EmployeePortalService {
       title: requestTitle(dto.type),
       body: `Your ${requestTitle(dto.type).toLowerCase()} request for ${when} is under review.`,
     });
-    return this.requestRow(created);
+    return this.requestRow(created, employee);
+  }
+
+  async updateRequest(
+    tenantId: string,
+    userId: string,
+    requestId: string,
+    dto: UpdateMyRequestDto,
+    email?: string,
+  ) {
+    const employee = await this.me(tenantId, userId, email);
+    const Request = await this.modelProvider.getEmployeeRequestModel(tenantId);
+    const row = await Request.findOne({
+      where: { id: requestId, tenantId, employeeId: employee.id },
+    });
+    if (!row) this.notFound('Request not found.');
+    if (row.status !== EmployeeRequestStatus.PENDING) {
+      this.conflict('Only a pending request can be edited.');
+    }
+    if (dto.fromDate && dto.toDate && dto.toDate < dto.fromDate) {
+      this.badRequest('toDate must be on or after fromDate.');
+    }
+
+    const patch: any = {};
+    if (dto.description !== undefined) patch.description = dto.description.trim();
+    if (dto.date !== undefined) patch.requestDate = dto.date;
+    if (dto.fromDate !== undefined) patch.fromDate = dto.fromDate;
+    if (dto.toDate !== undefined) patch.toDate = dto.toDate;
+    if (dto.hours !== undefined) patch.hours = dto.hours;
+    if (dto.timeFrom !== undefined) patch.timeFrom = dto.timeFrom;
+    if (dto.timeTo !== undefined) patch.timeTo = dto.timeTo;
+
+    if (Object.keys(patch).length > 0) {
+      await row.update(patch);
+    }
+    return this.requestRow(row, employee);
+  }
+
+  async deleteRequest(tenantId: string, userId: string, requestId: string, email?: string) {
+    const employee = await this.me(tenantId, userId, email);
+    const Request = await this.modelProvider.getEmployeeRequestModel(tenantId);
+    const row = await Request.findOne({
+      where: { id: requestId, tenantId, employeeId: employee.id },
+    });
+    if (!row) this.notFound('Request not found.');
+    if (row.status !== EmployeeRequestStatus.PENDING) {
+      this.conflict('Only a pending request can be deleted.');
+    }
+    await row.destroy();
+    return { message: 'Request deleted successfully', id: requestId };
   }
 
   /**
@@ -1599,8 +1686,20 @@ export class EmployeePortalService {
     if (row.status !== EmployeeRequestStatus.PENDING) {
       this.conflict('Only a pending request can be cancelled.');
     }
-    await row.update({ status: EmployeeRequestStatus.CANCELLED });
-    return this.requestRow(row);
+    const currentRes = (row.resolution as Record<string, any>) || {};
+    const workflow = Array.isArray(currentRes.workflow) ? [...currentRes.workflow] : [];
+    workflow.push({
+      step: 'CANCELLED',
+      title: 'Cancelled',
+      description: 'Request cancelled by employee',
+      at: new Date().toISOString(),
+      status: 'CANCELLED',
+    });
+    await row.update({
+      status: EmployeeRequestStatus.CANCELLED,
+      resolution: { ...currentRes, stage: 'CANCELLED', workflow },
+    });
+    return this.requestRow(row, employee);
   }
 
   /**
@@ -1651,13 +1750,45 @@ export class EmployeePortalService {
         ? await this.applyApproval(tenantId, row, dto, actorUserId)
         : { patch: {}, resolution: null, summary: '' };
 
+    const currentRes = (row.resolution as Record<string, any>) || {};
+    const workflow = Array.isArray(currentRes.workflow) ? [...currentRes.workflow] : [];
+    if (dto.status === EmployeeRequestStatus.APPROVED) {
+      workflow.forEach((step: any) => {
+        if (step.status === 'PENDING' || step.status === 'WAITING') {
+          step.status = 'COMPLETED';
+        }
+      });
+      workflow.push({
+        step: 'RESOLVED',
+        title: 'Approved by HR',
+        description: dto.note?.trim() || 'Request approved and applied',
+        at: new Date().toISOString(),
+        status: 'COMPLETED',
+      });
+    } else {
+      workflow.push({
+        step: 'REJECTED',
+        title: 'Rejected by HR',
+        description: dto.note?.trim() || 'Request was rejected',
+        at: new Date().toISOString(),
+        status: 'REJECTED',
+      });
+    }
+
+    const mergedResolution = {
+      ...currentRes,
+      ...(applied.resolution || {}),
+      stage: dto.status === EmployeeRequestStatus.APPROVED ? 'APPROVED' : 'REJECTED',
+      workflow,
+    };
+
     await row.update({
       status: dto.status,
       decisionNote: dto.note ?? null,
       decidedByUserId: actorUserId,
       decidedAt: new Date(),
       ...applied.patch,
-      ...(applied.resolution ? { resolution: applied.resolution } : {}),
+      resolution: mergedResolution,
     });
 
     const verb = dto.status === EmployeeRequestStatus.APPROVED ? 'approved' : 'rejected';
@@ -2081,7 +2212,13 @@ export class EmployeePortalService {
     };
   }
 
-  private requestRow(row: any) {
+  private requestRow(row: any, employee?: any) {
+    const res = (row.resolution as Record<string, any>) || {};
+    const manager = employee?.reportingManager;
+    const defaultManagerName = manager ? [manager.firstName, manager.lastName].filter(Boolean).join(' ') : null;
+    const managerName = res.managerName ?? defaultManagerName ?? null;
+    const stage = res.stage ?? (row.status === EmployeeRequestStatus.PENDING ? (managerName ? 'MANAGER_PENDING' : 'HR_PENDING') : row.status);
+
     return {
       id: row.id,
       type: row.type,
@@ -2096,9 +2233,14 @@ export class EmployeePortalService {
       timeTo: row.timeTo ?? null,
       resolution: row.resolution ?? null,
       status: row.status,
+      stage,
+      managerName,
+      workflow: res.workflow ?? null,
       decisionNote: row.decisionNote ?? null,
       canCancel: row.status === EmployeeRequestStatus.PENDING,
+      canEdit: row.status === EmployeeRequestStatus.PENDING,
       createdAt: row.createdAt,
+      updatedAt: row.updatedAt ?? row.createdAt,
     };
   }
 

@@ -1,6 +1,8 @@
+import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { MicroserviceOptions, Transport } from '@nestjs/microservices';
 import {
+  CryptoUtils,
   createMicroserviceValidationPipe,
   MicroserviceLoggingInterceptor,
   HttpToRpcExceptionFilter,
@@ -46,5 +48,12 @@ async function bootstrap() {
 
   await app.listen();
   console.log(`Auth Microservice is listening on ${bindHost}:${port}`);
+
+  // Loud but not fatal: 2FA setup and other encrypted fields fail with a
+  // generic 500 until this is fixed, while login and the rest keep working.
+  const keyProblem = CryptoUtils.configurationProblem();
+  if (keyProblem) {
+    new Logger('Startup').error(`${keyProblem} — 2FA setup and other encrypted fields will fail until it is fixed.`);
+  }
 }
 bootstrap();

@@ -17,7 +17,10 @@ import {
 import {
   Tenant,
   TenantStatus,
+  TenantProvisioningStatus,
+  TenantSetupStatus,
   OrganizationAdminInvitation,
+  InvitationStatus,
   Subscription,
   Plan,
   Payment,
@@ -170,6 +173,13 @@ export class PlatformOrganizationsService {
     return map;
   }
 
+  /** PENDING past its expiry reads as EXPIRED; the row is only updated when the link is opened. */
+  private invitationState(invitation: OrganizationAdminInvitation): InvitationStatus {
+    return invitation.status === InvitationStatus.PENDING && new Date(invitation.expiresAt).getTime() < Date.now()
+      ? InvitationStatus.EXPIRED
+      : invitation.status;
+  }
+
   private toRow(
     tenant: Tenant,
     subscription: Subscription | undefined,
@@ -194,6 +204,16 @@ export class PlatformOrganizationsService {
         // the role stands in rather than leaving the column blank.
         designation: tenant.adminDesignation || 'Organization Admin',
         avatarUrl: tenant.adminAvatarUrl || null,
+      },
+      /**
+       * The admin invitation as the Organizations screen needs it. `canResend`
+       * is true only while the organization is switched on and its admin has
+       * never activated — the one situation a new invitation is for.
+       */
+      adminInvitation: {
+        status: invitation ? this.invitationState(invitation) : null,
+        expiresAt: invitation?.expiresAt ?? null,
+        canResend: tenant.isActive && tenant.status === TenantStatus.PENDING_ADMIN_ACTIVATION,
       },
       usersCount: counts?.total ?? 0,
       joinedOn: tenant.createdAt,
@@ -321,18 +341,55 @@ export class PlatformOrganizationsService {
     return this.getOrganizationById(tenantId);
   }
 
+  /**
+   * Platform-level switch, independent of the billing subscription lifecycle
+   * (see /superadmin/billing/subscriptions/:id/suspend for that).
+   *
+   * Deactivating withdraws any invitation still waiting on the admin, so a
+   * link already in their inbox can't bring a switched-off organization to
+   * life. Reactivating returns the organization to wherever its onboarding
+   * had got to — not straight to ACTIVE, which skipped admin activation and
+   * setup for an organization whose admin had never signed in.
+   */
   async updateOrganizationStatus(tenantId: string, status: OrganizationActionStatus) {
     const tenant = await this.tenantModel.findByPk(tenantId);
     if (!tenant) {
       throw new NotFoundException(`Organization ${tenantId} not found`);
     }
-    // Platform-level override only — independent of the billing subscription
-    // lifecycle (see /superadmin/billing/subscriptions/:id/suspend for that).
-    await tenant.update({
-      status: status === OrganizationActionStatus.ACTIVE ? TenantStatus.ACTIVE : TenantStatus.SUSPENDED,
-      isActive: status === OrganizationActionStatus.ACTIVE,
-    });
+
+    if (status === OrganizationActionStatus.ACTIVE) {
+      if (tenant.status === TenantStatus.SUSPENDED || !tenant.isActive) {
+        await tenant.update({ status: await this.statusOnReactivation(tenant), isActive: true });
+      }
+    } else if (tenant.status !== TenantStatus.SUSPENDED || tenant.isActive) {
+      await this.tenantModel.sequelize!.transaction(async (transaction) => {
+        await tenant.update({ status: TenantStatus.SUSPENDED, isActive: false }, { transaction });
+        await this.invitationModel.update(
+          { status: InvitationStatus.CANCELLED, cancelledAt: new Date() },
+          { where: { tenantId, status: InvitationStatus.PENDING }, transaction },
+        );
+      });
+    }
     return this.getOrganizationById(tenantId);
+  }
+
+  /**
+   * Where a reactivated organization's lifecycle resumes, read from what has
+   * actually happened rather than stored at suspension time:
+   * - setup finished                     → ACTIVE
+   * - admin accepted, setup not finished → SETUP_IN_PROGRESS
+   * - invited, admin never accepted      → PENDING_ADMIN_ACTIVATION
+   * - no invitation on record (created before invitations existed) → ACTIVE
+   */
+  private async statusOnReactivation(tenant: Tenant): Promise<TenantStatus> {
+    if (tenant.setupStatus === TenantSetupStatus.COMPLETED) return TenantStatus.ACTIVE;
+    const invitations = await this.invitationModel.findAll({
+      where: { tenantId: tenant.id },
+      attributes: ['status'],
+    });
+    if (invitations.some((inv) => inv.status === InvitationStatus.ACCEPTED)) return TenantStatus.SETUP_IN_PROGRESS;
+    if (invitations.length > 0) return TenantStatus.PENDING_ADMIN_ACTIVATION;
+    return TenantStatus.ACTIVE;
   }
 
   /**
@@ -421,5 +478,152 @@ export class PlatformOrganizationsService {
         deactivated: growthFor(deactivated),
       },
     };
+  }
+
+  /**
+   * Organizations registered in each of the last `months` calendar months
+   * (current month included), split by the status each one holds today.
+   * Status history isn't stored, so this deliberately doesn't claim what an
+   * organization's status *was* in a past month.
+   */
+  async getOverview(months = 6) {
+    const span = Math.min(Math.max(Math.trunc(months) || 6, 1), 24);
+    const now = new Date();
+    const windowStart = new Date(now.getFullYear(), now.getMonth() - (span - 1), 1);
+
+    const tenants = await this.tenantModel.findAll({
+      where: { createdAt: { [Op.gte]: windowStart } },
+    });
+    const subscriptionsMap = await this.fetchLatestSubscriptions(tenants);
+
+    const buckets = Array.from({ length: span }, (_, i) => {
+      const date = new Date(windowStart.getFullYear(), windowStart.getMonth() + i, 1);
+      return { key: `${date.getFullYear()}-${date.getMonth()}`, label: date.toLocaleString('en-US', { month: 'short' }) };
+    });
+    const indexOf = new Map(buckets.map((b, i) => [b.key, i]));
+
+    const categories = [
+      { key: 'active', label: 'Active', status: OrganizationStatusFilter.ACTIVE },
+      { key: 'trial', label: 'Trial', status: OrganizationStatusFilter.TRIAL },
+      { key: 'pending', label: 'Pending', status: OrganizationStatusFilter.PENDING },
+      { key: 'deactivated', label: 'Deactivated', status: OrganizationStatusFilter.DEACTIVATED },
+    ];
+    const series = categories.map((c) => ({ key: c.key, label: c.label, values: new Array<number>(span).fill(0) }));
+
+    for (const tenant of tenants) {
+      const created = new Date(tenant.createdAt);
+      const index = indexOf.get(`${created.getFullYear()}-${created.getMonth()}`);
+      if (index === undefined) continue;
+      const status = this.deriveStatus(tenant, subscriptionsMap[tenant.id]);
+      const target = categories.findIndex((c) => c.status === status);
+      if (target >= 0) series[target].values[index] += 1;
+    }
+
+    return { months: buckets.map((b) => b.label), series };
+  }
+
+  /** Every organization grouped by its current plan (latest subscription, else `planType`). */
+  async getPlanBreakdown() {
+    const tenants = await this.tenantModel.findAll();
+    const subscriptionsMap = await this.fetchLatestSubscriptions(tenants);
+
+    const counts = new Map<string, number>();
+    for (const tenant of tenants) {
+      const plan = subscriptionsMap[tenant.id]?.plan?.name || tenant.planType || 'No Plan';
+      counts.set(plan, (counts.get(plan) ?? 0) + 1);
+    }
+
+    return {
+      total: tenants.length,
+      plans: [...counts.entries()]
+        .map(([plan, count]) => ({ plan, count }))
+        .sort((a, b) => b.count - a.count),
+    };
+  }
+
+  /**
+   * Organization- and billing-side conditions a platform admin should act on.
+   * Only conditions that currently hold are returned; `at` is the most recent
+   * timestamp behind each one, for a "time ago" label.
+   */
+  async getAlerts() {
+    const tenants = await this.tenantModel.findAll();
+    const subscriptionsMap = await this.fetchLatestSubscriptions(tenants);
+    const now = Date.now();
+    const weekAhead = now + 7 * 86400000;
+    const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+    const latest = (dates: (Date | string | null | undefined)[]) => {
+      const times = dates.filter(Boolean).map((d) => new Date(d as Date).getTime());
+      return times.length ? new Date(Math.max(...times)).toISOString() : null;
+    };
+
+    const rows = tenants.map((tenant) => ({ tenant, subscription: subscriptionsMap[tenant.id] }));
+    const alerts: { id: string; kind: 'warning' | 'document' | 'calendar'; title: string; description: string; at: string | null }[] = [];
+
+    const failed = rows.filter((r) => r.tenant.provisioningStatus === TenantProvisioningStatus.FAILED);
+    if (failed.length) {
+      alerts.push({
+        id: 'provisioning-failed',
+        kind: 'warning',
+        title: `${plural(failed.length, 'organization', 'organizations')} failed database provisioning`,
+        description: 'Retry provisioning or remove the failed draft.',
+        at: latest(failed.map((r) => r.tenant.updatedAt)),
+      });
+    }
+
+    const overdue = rows.filter(
+      (r) => r.subscription && DEACTIVATING_SUBSCRIPTION_STATUSES.includes(r.subscription.status),
+    );
+    if (overdue.length) {
+      alerts.push({
+        id: 'billing-overdue',
+        kind: 'warning',
+        title: `${plural(overdue.length, 'organization has', 'organizations have')} overdue or suspended subscriptions`,
+        description: 'Please review and take action.',
+        at: latest(overdue.map((r) => r.subscription!.pastDueAt || r.subscription!.updatedAt)),
+      });
+    }
+
+    const pending = rows.filter((r) => this.deriveStatus(r.tenant, r.subscription) === OrganizationStatusFilter.PENDING);
+    if (pending.length) {
+      alerts.push({
+        id: 'organizations-pending',
+        kind: 'document',
+        title: `${plural(pending.length, 'organization is', 'organizations are')} pending activation`,
+        description: 'Awaiting admin activation, setup or first payment.',
+        at: latest(pending.map((r) => r.tenant.createdAt)),
+      });
+    }
+
+    const dueSoon = (status: SubscriptionStatus) =>
+      rows.filter((r) => {
+        if (r.subscription?.status !== status || !r.subscription.nextBillingDate) return false;
+        const due = new Date(r.subscription.nextBillingDate).getTime();
+        return due >= now && due <= weekAhead;
+      });
+
+    const trialsEnding = dueSoon(SubscriptionStatus.TRIAL);
+    if (trialsEnding.length) {
+      alerts.push({
+        id: 'trials-ending',
+        kind: 'calendar',
+        title: `${plural(trialsEnding.length, 'trial ends', 'trials end')} within 7 days`,
+        description: 'Follow up before these organizations lose access.',
+        at: latest(trialsEnding.map((r) => r.subscription!.updatedAt)),
+      });
+    }
+
+    const renewals = dueSoon(SubscriptionStatus.ACTIVE);
+    if (renewals.length) {
+      alerts.push({
+        id: 'renewals-due',
+        kind: 'calendar',
+        title: `${plural(renewals.length, 'subscription renews', 'subscriptions renew')} within 7 days`,
+        description: 'Upcoming renewals for active organizations.',
+        at: latest(renewals.map((r) => r.subscription!.updatedAt)),
+      });
+    }
+
+    return alerts;
   }
 }

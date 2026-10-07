@@ -226,11 +226,36 @@ import {
   TenantEmployeeDocumentIdDto,
   ReviewEmployeeDocumentMessageDto,
   CreateMyRequestMessageDto,
+  UpdateMyRequestMessageDto,
   MyRequestMessageDto,
   DecideEmployeeRequestMessageDto,
   GetEmployeeRequestsMessageDto,
   GetMyNotificationsMessageDto,
   MyNotificationMessageDto,
+  GetWorkspaceTasksMessageDto,
+  WorkspaceTaskStatsMessageDto,
+  ExportWorkspaceTasksMessageDto,
+  WorkspaceTaskIdMessageDto,
+  CreateWorkspaceTaskMessageDto,
+  UpdateWorkspaceTaskMessageDto,
+  GetMyTasksMessageDto,
+  UpdateMyTaskStatusMessageDto,
+  GetWorkspaceProjectsMessageDto,
+  WorkspaceProjectIdMessageDto,
+  CreateWorkspaceProjectMessageDto,
+  UpdateWorkspaceProjectMessageDto,
+  GetCalendarMessageDto,
+  CalendarEventIdMessageDto,
+  CreateCalendarEventMessageDto,
+  UpdateCalendarEventMessageDto,
+  GetHolidaysMessageDto,
+  CreateHolidayMessageDto,
+  UpdateHolidayMessageDto,
+  GetCompanyDocumentsMessageDto,
+  GetPublishedDocumentsMessageDto,
+  CreateCompanyDocumentMessageDto,
+  UpdateCompanyDocumentMessageDto,
+  CompanyDocumentIdMessageDto,
 } from '@app/common';
 import { AllowUnsignedRpc } from '@app/tenant-context';
 import { TenantService } from './services/tenant.service';
@@ -254,6 +279,10 @@ import { AttendanceService } from './services/attendance.service';
 import { OrganizationDepartmentsService } from './services/organization-departments.service';
 import { LeaveRequestService } from './services/leave-request.service';
 import { JobOpeningService } from './services/job-opening.service';
+import { WorkspaceTaskService } from './services/workspace-task.service';
+import { WorkspaceProjectService } from './services/workspace-project.service';
+import { CalendarService } from './services/calendar.service';
+import { CompanyDocumentService } from './services/company-document.service';
 import { CandidateService } from './services/candidate.service';
 import { InterviewService } from './services/interview.service';
 import { RecruitmentOverviewService } from './services/recruitment-overview.service';
@@ -296,6 +325,10 @@ export class TenantServiceController {
     private departmentsService: OrganizationDepartmentsService,
     private leaveRequestService: LeaveRequestService,
     private jobOpeningService: JobOpeningService,
+    private workspaceTaskService: WorkspaceTaskService,
+    private workspaceProjectService: WorkspaceProjectService,
+    private calendarService: CalendarService,
+    private companyDocumentService: CompanyDocumentService,
     private candidateService: CandidateService,
     private interviewService: InterviewService,
     private recruitmentOverviewService: RecruitmentOverviewService,
@@ -332,7 +365,12 @@ export class TenantServiceController {
 
   @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION.CREATE_ORGANIZATION)
   async createOrganizationMessage(@Payload() dto: CreateOrganizationProvisionDto) {
-    return this.tenantProvisioningService.createOrganizationAndProvision(dto);
+    return this.tenantProvisioningService.startOrganizationCreation(dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION.GET_CREATION_STATUS)
+  async getCreationStatusMessage(@Payload() data: TenantIdDto) {
+    return this.tenantProvisioningService.getCreationStatus(data.tenantId);
   }
 
   @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION.VALIDATE_ONBOARDING)
@@ -395,6 +433,11 @@ export class TenantServiceController {
     return this.tenantService.getTenantById(data.tenantId);
   }
 
+  @MessagePattern(MESSAGE_PATTERNS.TENANT.GET_ACCESS_STATE)
+  async getTenantAccessStateMessage(@Payload() data: TenantIdDto) {
+    return this.tenantService.getAccessState(data.tenantId);
+  }
+
   @MessagePattern(MESSAGE_PATTERNS.TENANT.GET_ALL_TENANTS)
   async getAllTenantsMessage(@Payload() query: GetAllTenantsQueryDto) {
     return this.tenantService.getAllTenantsPaginated(query || {});
@@ -412,6 +455,21 @@ export class TenantServiceController {
   @MessagePattern(MESSAGE_PATTERNS.PLATFORM_ORGANIZATIONS.GET_STATS)
   async getPlatformOrganizationsStatsMessage() {
     return this.platformOrganizationsService.getStats();
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PLATFORM_ORGANIZATIONS.GET_OVERVIEW)
+  async getPlatformOrganizationsOverviewMessage(@Payload() data: { months?: number }) {
+    return this.platformOrganizationsService.getOverview(data?.months);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PLATFORM_ORGANIZATIONS.GET_PLAN_BREAKDOWN)
+  async getPlatformOrganizationsPlanBreakdownMessage() {
+    return this.platformOrganizationsService.getPlanBreakdown();
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PLATFORM_ORGANIZATIONS.GET_ALERTS)
+  async getPlatformOrganizationsAlertsMessage() {
+    return this.platformOrganizationsService.getAlerts();
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PLATFORM_ORGANIZATIONS.GET_ONE)
@@ -2447,6 +2505,27 @@ export class TenantServiceController {
     return this.employeePortalService.createRequest(payload.tenantId, payload.userId, payload.dto, payload.email);
   }
 
+  @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.UPDATE_REQUEST)
+  handleEmployeeUpdateRequest(@Payload() payload: UpdateMyRequestMessageDto) {
+    return this.employeePortalService.updateRequest(
+      payload.tenantId,
+      payload.userId,
+      payload.requestId,
+      payload.dto,
+      payload.email,
+    );
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.DELETE_REQUEST)
+  handleEmployeeDeleteRequest(@Payload() payload: MyRequestMessageDto) {
+    return this.employeePortalService.deleteRequest(
+      payload.tenantId,
+      payload.userId,
+      payload.requestId,
+      payload.email,
+    );
+  }
+
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.CANCEL_REQUEST)
   handleEmployeeCancelRequest(@Payload() payload: MyRequestMessageDto) {
     return this.employeePortalService.cancelRequest(
@@ -2642,5 +2721,178 @@ export class TenantServiceController {
   @MessagePattern(MESSAGE_PATTERNS.HR_PORTAL.ACCEPT_INVITATION)
   handleAcceptEmployeeInvitation(@Payload() payload: { dto: AcceptEmployeeInvitationDto }) {
     return this.employeeInvitationService.accept(payload.dto);
+  }
+
+  // ==========================================
+  // WORKSPACE — Tasks
+  // ==========================================
+
+  @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_TASK.GET_ALL)
+  handleGetWorkspaceTasks(@Payload() payload: GetWorkspaceTasksMessageDto) {
+    return this.workspaceTaskService.getAll(payload.tenantId, payload.query);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_TASK.GET_STATS)
+  handleGetWorkspaceTaskStats(@Payload() payload: WorkspaceTaskStatsMessageDto) {
+    return this.workspaceTaskService.getStats(payload.tenantId, payload.query);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_TASK.EXPORT)
+  handleExportWorkspaceTasks(@Payload() payload: ExportWorkspaceTasksMessageDto) {
+    return this.workspaceTaskService.getAllForExport(payload.tenantId, payload.query);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_TASK.GET_ONE)
+  handleGetWorkspaceTask(@Payload() payload: WorkspaceTaskIdMessageDto) {
+    return this.workspaceTaskService.getOne(payload.tenantId, payload.taskId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_TASK.CREATE)
+  handleCreateWorkspaceTask(@Payload() payload: CreateWorkspaceTaskMessageDto) {
+    return this.workspaceTaskService.create(payload.tenantId, payload.dto, payload.actorUserId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_TASK.UPDATE)
+  handleUpdateWorkspaceTask(@Payload() payload: UpdateWorkspaceTaskMessageDto) {
+    return this.workspaceTaskService.update(payload.tenantId, payload.taskId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_TASK.DELETE)
+  handleDeleteWorkspaceTask(@Payload() payload: WorkspaceTaskIdMessageDto) {
+    return this.workspaceTaskService.remove(payload.tenantId, payload.taskId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_TASK.GET_PEOPLE)
+  handleGetWorkspacePeople(@Payload() payload: TenantIdDto) {
+    return this.workspaceTaskService.getPeople(payload.tenantId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_TASK.GET_MINE)
+  handleGetMyTasks(@Payload() payload: GetMyTasksMessageDto) {
+    return this.workspaceTaskService.getMine(payload.tenantId, payload.userId, payload.email, payload.query);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_TASK.UPDATE_MY_STATUS)
+  handleUpdateMyTaskStatus(@Payload() payload: UpdateMyTaskStatusMessageDto) {
+    return this.workspaceTaskService.updateMyStatus(
+      payload.tenantId,
+      payload.userId,
+      payload.email,
+      payload.taskId,
+      payload.status,
+    );
+  }
+
+  // ==========================================
+  // WORKSPACE — Projects
+  // ==========================================
+
+  @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_PROJECT.GET_ALL)
+  handleGetWorkspaceProjects(@Payload() payload: GetWorkspaceProjectsMessageDto) {
+    return this.workspaceProjectService.getAll(payload.tenantId, payload.query);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_PROJECT.GET_OPTIONS)
+  handleGetWorkspaceProjectOptions(@Payload() payload: TenantIdDto) {
+    return this.workspaceProjectService.getOptions(payload.tenantId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_PROJECT.EXPORT)
+  handleExportWorkspaceProjects(@Payload() payload: GetWorkspaceProjectsMessageDto) {
+    return this.workspaceProjectService.getAllForExport(payload.tenantId, payload.query);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_PROJECT.CREATE)
+  handleCreateWorkspaceProject(@Payload() payload: CreateWorkspaceProjectMessageDto) {
+    return this.workspaceProjectService.create(payload.tenantId, payload.dto, payload.actorUserId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_PROJECT.UPDATE)
+  handleUpdateWorkspaceProject(@Payload() payload: UpdateWorkspaceProjectMessageDto) {
+    return this.workspaceProjectService.update(payload.tenantId, payload.projectId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_PROJECT.DELETE)
+  handleDeleteWorkspaceProject(@Payload() payload: WorkspaceProjectIdMessageDto) {
+    return this.workspaceProjectService.remove(payload.tenantId, payload.projectId);
+  }
+
+  // ==========================================
+  // WORKSPACE — Company Calendar
+  // ==========================================
+
+  @MessagePattern(MESSAGE_PATTERNS.CALENDAR.GET_MONTH)
+  handleGetCalendarMonth(@Payload() payload: GetCalendarMessageDto) {
+    return this.calendarService.getMonth(payload.tenantId, payload.query, payload.canEdit ?? false);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.CALENDAR.GET_MY_MONTH)
+  handleGetMyCalendarMonth(@Payload() payload: GetCalendarMessageDto) {
+    // Self-service view: read-only for everyone.
+    return this.calendarService.getMonth(payload.tenantId, payload.query, false);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.CALENDAR.CREATE_EVENT)
+  handleCreateCalendarEvent(@Payload() payload: CreateCalendarEventMessageDto) {
+    return this.calendarService.create(payload.tenantId, payload.dto, payload.actorUserId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.CALENDAR.UPDATE_EVENT)
+  handleUpdateCalendarEvent(@Payload() payload: UpdateCalendarEventMessageDto) {
+    return this.calendarService.update(payload.tenantId, payload.eventId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.CALENDAR.DELETE_EVENT)
+  handleDeleteCalendarEvent(@Payload() payload: CalendarEventIdMessageDto) {
+    return this.calendarService.remove(payload.tenantId, payload.eventId);
+  }
+
+  // ==========================================
+  // WORKSPACE — Company documents
+  // ==========================================
+
+  @MessagePattern(MESSAGE_PATTERNS.COMPANY_DOCUMENT.GET_ALL)
+  handleGetCompanyDocuments(@Payload() payload: GetCompanyDocumentsMessageDto) {
+    return this.companyDocumentService.getAll(payload.tenantId, payload.query);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.COMPANY_DOCUMENT.GET_PUBLISHED)
+  handleGetPublishedDocuments(@Payload() payload: GetPublishedDocumentsMessageDto) {
+    return this.companyDocumentService.getPublished(payload.tenantId, payload.query);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.COMPANY_DOCUMENT.CREATE)
+  handleCreateCompanyDocument(@Payload() payload: CreateCompanyDocumentMessageDto) {
+    return this.companyDocumentService.create(payload.tenantId, payload.dto, payload.actorUserId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.COMPANY_DOCUMENT.UPDATE)
+  handleUpdateCompanyDocument(@Payload() payload: UpdateCompanyDocumentMessageDto) {
+    return this.companyDocumentService.update(payload.tenantId, payload.documentId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.COMPANY_DOCUMENT.DELETE)
+  handleDeleteCompanyDocument(@Payload() payload: CompanyDocumentIdMessageDto) {
+    return this.companyDocumentService.remove(payload.tenantId, payload.documentId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.CALENDAR.GET_HOLIDAYS)
+  handleGetHolidays(@Payload() payload: GetHolidaysMessageDto) {
+    return this.calendarService.listHolidays(payload.tenantId, payload.query.year);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.CALENDAR.CREATE_HOLIDAY)
+  handleCreateHoliday(@Payload() payload: CreateHolidayMessageDto) {
+    return this.calendarService.createHoliday(payload.tenantId, payload.dto, payload.actorUserId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.CALENDAR.UPDATE_HOLIDAY)
+  handleUpdateHoliday(@Payload() payload: UpdateHolidayMessageDto) {
+    return this.calendarService.updateHoliday(payload.tenantId, payload.eventId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.CALENDAR.DELETE_HOLIDAY)
+  handleDeleteHoliday(@Payload() payload: CalendarEventIdMessageDto) {
+    return this.calendarService.removeHoliday(payload.tenantId, payload.eventId);
   }
 }

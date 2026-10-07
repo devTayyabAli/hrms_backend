@@ -1,19 +1,89 @@
-import { Injectable, CanActivate, ExecutionContext } from '@nestjs/common';
+import { Injectable, CanActivate, ExecutionContext, HttpStatus, Inject, Logger, Optional } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import { ClientProxy } from '@nestjs/microservices';
+import { firstValueFrom } from 'rxjs';
 import {
   IS_PUBLIC_KEY,
   IS_PLATFORM_ROUTE_KEY,
   IS_TENANT_OPTIONAL_KEY,
+  MESSAGE_PATTERNS,
+  SERVICES,
   TenantException,
   TenantErrorCode,
 } from '@app/common';
 import { tenantStorage } from '../context/tenant-context.service';
+import { AccessStateCache } from './access-state.cache';
+
+/** `tenant.get_access_state`. */
+interface TenantAccessState {
+  found: boolean;
+  status: string | null;
+  isActive: boolean;
+}
+
+/** Shared across guard instances, so a deactivation is seen by every controller at once. */
+const tenantStates = new AccessStateCache<TenantAccessState>(
+  parseInt(process.env.TENANT_STATE_TTL_MS || '60000', 10),
+  5000,
+);
 
 @Injectable()
 export class TenantGuard implements CanActivate {
-  constructor(private readonly reflector: Reflector) {}
+  private readonly logger = new Logger(TenantGuard.name);
 
-  canActivate(context: ExecutionContext): boolean {
+  constructor(
+    private readonly reflector: Reflector,
+    @Optional() @Inject(SERVICES.TENANT_SERVICE) private readonly tenantClient?: ClientProxy,
+  ) {}
+
+  /** Forget an organization's cached state — call after activating or deactivating it. */
+  static forgetTenant(tenantId: string): void {
+    tenantStates.delete(tenantId);
+  }
+
+  /**
+   * A suspended (deactivated by the platform) or expired organization's users
+   * are refused. An expired one can still reach billing, to renew. Processes
+   * without a tenant-service client, and tenant-service outages, let the
+   * request through uncached — an outage shouldn't lock every organization out.
+   */
+  private async assertOrganizationActive(tenantId: string, url: string): Promise<void> {
+    if (!this.tenantClient) return;
+
+    let state: TenantAccessState;
+    try {
+      state = await tenantStates.get(tenantId, () =>
+        firstValueFrom(this.tenantClient!.send<TenantAccessState>(MESSAGE_PATTERNS.TENANT.GET_ACCESS_STATE, { tenantId })),
+      );
+    } catch (error: any) {
+      this.logger.warn(`Organization status check skipped (tenant-service unavailable): ${error?.message ?? error}`);
+      return;
+    }
+
+    if (!state.found) {
+      throw new TenantException(
+        TenantErrorCode.TENANT_ACCESS_DENIED,
+        'This organization no longer exists.',
+        HttpStatus.FORBIDDEN,
+      );
+    }
+    if (state.status === 'SUSPENDED' || !state.isActive) {
+      throw new TenantException(
+        TenantErrorCode.TENANT_SUSPENDED,
+        'Organization account is suspended. Please contact support.',
+        HttpStatus.FORBIDDEN,
+      );
+    }
+    if (state.status === 'EXPIRED' && !url.includes('/organization/billing')) {
+      throw new TenantException(
+        TenantErrorCode.TENANT_EXPIRED,
+        'Organization subscription has expired. Please renew your subscription.',
+        HttpStatus.FORBIDDEN,
+      );
+    }
+  }
+
+  async canActivate(context: ExecutionContext): Promise<boolean> {
     if (context.getType() === 'rpc') {
       return true;
     }
@@ -86,21 +156,7 @@ export class TenantGuard implements CanActivate {
     }
 
     // Tenant Status Validation
-    const tenantStatus =
-      request.user?.tenantStatus || request.tenantStatus || 'ACTIVE';
-    if (tenantStatus === 'SUSPENDED') {
-      throw new TenantException(
-        TenantErrorCode.TENANT_SUSPENDED,
-        'Organization account is suspended. Please contact support.',
-      );
-    }
-
-    if (tenantStatus === 'EXPIRED') {
-      throw new TenantException(
-        TenantErrorCode.TENANT_EXPIRED,
-        'Organization subscription has expired. Please renew your subscription.',
-      );
-    }
+    await this.assertOrganizationActive(tenantId, request.url || request.originalUrl || '');
 
     request.tenantId = tenantId;
 

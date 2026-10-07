@@ -81,6 +81,18 @@ export class TenantService {
   }
 
   /**
+   * Just what the gateway needs to decide whether an organization's users may
+   * act: its lifecycle status and active flag. Cached there per tenant, so
+   * this stays a single narrow primary-key read.
+   */
+  async getAccessState(tenantId: string): Promise<{ found: boolean; status: string | null; isActive: boolean }> {
+    const tenant = await this.tenantModel.findByPk(tenantId, { attributes: ['id', 'status', 'isActive'] });
+    return tenant
+      ? { found: true, status: tenant.status, isActive: tenant.isActive !== false }
+      : { found: false, status: null, isActive: false };
+  }
+
+  /**
    * Find tenant by domain or slug
    */
   async getTenantByDomainOrSlug(slugOrDomain: string): Promise<Tenant | null> {

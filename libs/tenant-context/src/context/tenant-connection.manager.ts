@@ -14,6 +14,10 @@ export interface TenantConnectionMetrics {
   missCount: number;
 }
 
+/** A PgBouncer-style pooler endpoint, which tolerates many more client connections than Postgres itself. */
+const isPooledHost = (host?: string): boolean =>
+  process.env.DB_POOLER === 'true' || /-pooler\./i.test(host ?? '');
+
 @Injectable()
 export class TenantConnectionManager implements OnModuleDestroy {
   private readonly logger = new Logger(TenantConnectionManager.name);
@@ -141,10 +145,9 @@ export class TenantConnectionManager implements OnModuleDestroy {
           database,
           dialect: options.dialect || 'postgres',
           dialectOptions: options.dialectOptions ?? creds.dialectOptions,
-          logging:
-            process.env.NODE_ENV === 'development'
-              ? (msg) => this.logger.debug(msg)
-              : false,
+          // Opt-in: printing every statement is slow (synchronous stdout,
+          // painfully so on Windows) and was on for all of development.
+          logging: process.env.DB_LOG_SQL === 'true' ? (msg) => this.logger.debug(msg) : false,
           pool: {
             // Sized for the total, not for one tenant.
             //
@@ -157,16 +160,19 @@ export class TenantConnectionManager implements OnModuleDestroy {
             // tenants fail to connect at all and the failure looks like a
             // database outage rather than a pool misconfiguration.
             //
-            // 2 keeps the same arithmetic at 200 and, more importantly,
-            // makes the ceiling adjustable from configuration when a
-            // deployment's real Postgres limit is known. Per-tenant
-            // concurrency is low by nature — these are one organization's
-            // requests, not the whole platform's — so a small per-tenant
-            // pool costs little, while `min: 0` means an idle tenant holds
-            // no socket at all between requests.
-            max: parseInt(process.env.TENANT_DB_POOL_MAX || '2', 10),
+            // 2 keeps the same arithmetic at 200 against a plain Postgres.
+            //
+            // Behind a connection pooler (PgBouncer — Neon's `-pooler`
+            // hosts) the client-side limit is in the thousands, and 2 was
+            // the bottleneck instead: a dashboard's ~30 parallel queries ran
+            // two at a time, ~15 serial round trips. So the default is 8
+            // there and 2 otherwise; TENANT_DB_POOL_MAX overrides both.
+            max: parseInt(process.env.TENANT_DB_POOL_MAX || (isPooledHost(host) ? '8' : '2'), 10),
             min: parseInt(process.env.TENANT_DB_POOL_MIN || '0', 10),
-            idle: 10000,
+            // Opening a connection (TLS + auth) costs far more than holding
+            // one: at 10s idle, the extra connections a page needs were
+            // closed and reopened on nearly every page load.
+            idle: parseInt(process.env.TENANT_DB_POOL_IDLE_MS || '300000', 10),
             acquire: 30000,
           },
         });

@@ -479,6 +479,48 @@ export class CreateMyRequestDto {
   timeTo?: string;
 }
 
+export class UpdateMyRequestDto {
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(1000)
+  description?: string;
+
+  @ApiProperty({ required: false, format: 'date' })
+  @IsOptional()
+  @IsDateString()
+  date?: string;
+
+  @ApiProperty({ required: false, format: 'date' })
+  @IsOptional()
+  @IsDateString()
+  fromDate?: string;
+
+  @ApiProperty({ required: false, format: 'date' })
+  @IsOptional()
+  @IsDateString()
+  toDate?: string;
+
+  @ApiProperty({ required: false, minimum: 0.5, maximum: 24 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0.5)
+  @Max(24)
+  hours?: number;
+
+  @ApiProperty({ required: false, example: '09:30' })
+  @IsOptional()
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/, { message: 'timeFrom must be a time like 09:30' })
+  timeFrom?: string;
+
+  @ApiProperty({ required: false, example: '18:00' })
+  @IsOptional()
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/, { message: 'timeTo must be a time like 18:00' })
+  timeTo?: string;
+}
+
 /**
  * Approve or reject. On approval, the optional fields are what HR actually
  * approves when it differs from what was asked — they're applied to the
@@ -733,6 +775,13 @@ export class CreateMyRequestMessageDto extends EmployeeActorDto {
 export class MyRequestMessageDto extends EmployeeActorDto {
   @IsUUID()
   requestId: string;
+}
+
+export class UpdateMyRequestMessageDto extends MyRequestMessageDto {
+  @ValidateNested()
+  @Type(() => UpdateMyRequestDto)
+  @IsDefined()
+  dto: UpdateMyRequestDto;
 }
 
 export class DecideEmployeeRequestMessageDto {

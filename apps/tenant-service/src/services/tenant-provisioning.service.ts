@@ -12,6 +12,20 @@ import { TENANT_OPERATIONAL_MODELS } from './tenant-model-provider.service';
 import { TenantProvisioningStatus, TenantStatus, TenantSetupStatus } from '../models/tenant.model';
 import { TenantException, TenantErrorCode, CreateOrganizationOnboardingDto, ConfigureModuleAccessDto, BillingCycle, SubscriptionStatus } from '@app/common';
 
+/** Where a background organization creation has got to. */
+export interface OrganizationCreationStatus {
+  tenantId: string;
+  state: 'running' | 'done' | 'failed';
+  result?: OrganizationCreationResult;
+  error?: string;
+}
+
+/**
+ * A draft left PROVISIONING this long was abandoned — the process creating it
+ * restarted — and may be cleaned up so the name can be used again.
+ */
+const STALE_PROVISIONING_MS = 15 * 60 * 1000;
+
 export interface OrganizationCreationResult {
   tenantId: string;
   organizationName: string;
@@ -28,6 +42,11 @@ export interface OrganizationCreationResult {
 @Injectable()
 export class TenantProvisioningService {
   private readonly logger = new Logger(TenantProvisioningService.name);
+  /**
+   * Creations still running or recently finished, by tenant id. Memory is
+   * enough: after a restart the tenant row's provisioning status answers.
+   */
+  private readonly creations = new Map<string, OrganizationCreationStatus>();
 
   constructor(
     private tenantService: TenantService,
@@ -62,9 +81,92 @@ export class TenantProvisioningService {
   }
 
   /**
-   * Full Organization Creation & Tenant DB Provisioning Flow (Steps 1-4)
+   * Starts creating an organization and returns as soon as its tenant row
+   * exists. Provisioning the database (a full schema sync — well over a
+   * minute against a remote Postgres), module access, the invitation and the
+   * subscription carry on in the background; poll `getCreationStatus`.
+   *
+   * Done in one request it outlived the reverse proxy's 60s timeout: the
+   * caller got a 504 while the organization was still created, and retrying
+   * then failed on "already exists".
    */
-  async createOrganizationAndProvision(data: any): Promise<OrganizationCreationResult> {
+  async startOrganizationCreation(data: any): Promise<OrganizationCreationResult> {
+    let started!: (tenant: any) => void;
+    const tenantCreated = new Promise<any>((resolve) => (started = resolve));
+
+    const run = this.createOrganizationAndProvision(data, started);
+    // Validation and duplicate-name errors happen before the tenant exists,
+    // so they still reach the caller as an ordinary failed request.
+    const first = await Promise.race([tenantCreated, run.then(() => null)]);
+    const tenant = first ?? (await tenantCreated);
+
+    this.creations.set(tenant.id, { tenantId: tenant.id, state: 'running' });
+    run.then(
+      (result) => this.finishCreation(tenant.id, { tenantId: tenant.id, state: 'done', result }),
+      (error: any) => {
+        this.logger.error(`Creating organization ${tenant.id} failed: ${error?.message ?? error}`);
+        this.finishCreation(tenant.id, {
+          tenantId: tenant.id,
+          state: 'failed',
+          error: error?.message || 'Organization creation failed.',
+        });
+      },
+    );
+
+    return {
+      tenantId: tenant.id,
+      organizationName: tenant.organizationName || tenant.name,
+      slug: tenant.slug,
+      databaseName: this.generateDatabaseName(tenant.id),
+      status: tenant.status,
+      provisioningStatus: TenantProvisioningStatus.PROVISIONING,
+      setupStatus: tenant.setupStatus,
+      message: `Organization '${tenant.organizationName || tenant.name}' is being created.`,
+    };
+  }
+
+  /** Kept for an hour so a slow poller still sees the outcome, then dropped. */
+  private finishCreation(tenantId: string, status: OrganizationCreationStatus) {
+    this.creations.set(tenantId, status);
+    setTimeout(() => this.creations.delete(tenantId), 60 * 60 * 1000).unref?.();
+  }
+
+  async getCreationStatus(tenantId: string): Promise<OrganizationCreationStatus> {
+    const known = this.creations.get(tenantId);
+    if (known) return known;
+
+    // Not created by this process (or it restarted): read the tenant row.
+    const tenant = await this.tenantService.getTenantById(tenantId);
+    if (tenant.provisioningStatus === TenantProvisioningStatus.READY) {
+      return {
+        tenantId,
+        state: 'done',
+        result: {
+          tenantId,
+          organizationName: tenant.organizationName || tenant.name,
+          slug: tenant.slug || tenant.domain,
+          databaseName: this.generateDatabaseName(tenantId),
+          status: tenant.status,
+          provisioningStatus: tenant.provisioningStatus,
+          setupStatus: tenant.setupStatus,
+          message: `Organization '${tenant.organizationName || tenant.name}' created.`,
+        },
+      };
+    }
+    if (tenant.provisioningStatus === TenantProvisioningStatus.FAILED) {
+      return { tenantId, state: 'failed', error: tenant.provisioningError || 'Organization creation failed.' };
+    }
+    return { tenantId, state: 'running' };
+  }
+
+  /**
+   * Full Organization Creation & Tenant DB Provisioning Flow (Steps 1-4).
+   * `onTenantCreated` fires once the tenant row exists, before provisioning.
+   */
+  async createOrganizationAndProvision(
+    data: any,
+    onTenantCreated?: (tenant: any) => void,
+  ): Promise<OrganizationCreationResult> {
     const org = data.organizationInfo || data;
     const admin = data.adminInfo || data;
 
@@ -111,10 +213,12 @@ export class TenantProvisioningService {
     // Check duplicate organization slug
     const existing = await this.tenantService.getTenantByDomainOrSlug(slug);
     if (existing) {
-      if (
-        existing.status === TenantStatus.DRAFT &&
-        existing.provisioningStatus === TenantProvisioningStatus.FAILED
-      ) {
+      const abandoned =
+        existing.provisioningStatus === TenantProvisioningStatus.FAILED ||
+        (existing.provisioningStatus !== TenantProvisioningStatus.READY &&
+          !this.creations.has(existing.id) &&
+          Date.now() - new Date(existing.updatedAt).getTime() > STALE_PROVISIONING_MS);
+      if (existing.status === TenantStatus.DRAFT && abandoned) {
         this.logger.warn(
           `Found previously failed draft tenant ${existing.id} with slug '${slug}'. Cleaning up before retrying creation.`,
         );
@@ -125,7 +229,9 @@ export class TenantProvisioningService {
       } else {
         throw new TenantException(
           TenantErrorCode.INVALID_TENANT_CONTEXT,
-          `Organization with slug or domain '${slug}' already exists.`,
+          this.creations.get(existing.id)?.state === 'running'
+            ? `Organization '${slug}' is already being created. Please wait for it to finish.`
+            : `Organization with slug or domain '${slug}' already exists.`,
         );
       }
     }
@@ -160,6 +266,7 @@ export class TenantProvisioningService {
     });
 
     const databaseName = this.generateDatabaseName(tenant.id);
+    onTenantCreated?.(tenant);
 
     // Step 2: Trigger Idempotent DB Provisioning Flow
     const provisioningResult = await this.provisionTenantDatabase(tenant.id, databaseName, orgName, slug);
@@ -176,7 +283,7 @@ export class TenantProvisioningService {
         adminEmail,
         fullAdminName,
         'SuperAdmin',
-        phone,
+        adminPhone,
         customInvitationMessage,
       );
     }

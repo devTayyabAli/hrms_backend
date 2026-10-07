@@ -55,6 +55,10 @@ import { AttendanceService } from './services/attendance.service';
 import { OrganizationDepartmentsService } from './services/organization-departments.service';
 import { LeaveRequestService } from './services/leave-request.service';
 import { JobOpeningService } from './services/job-opening.service';
+import { WorkspaceTaskService } from './services/workspace-task.service';
+import { WorkspaceProjectService } from './services/workspace-project.service';
+import { CalendarService } from './services/calendar.service';
+import { CompanyDocumentService } from './services/company-document.service';
 import { CandidateService } from './services/candidate.service';
 import { InterviewService } from './services/interview.service';
 import { RecruitmentOverviewService } from './services/recruitment-overview.service';
@@ -206,6 +210,10 @@ import { PaymentProviderFactory } from './billing/providers/payment-provider.fac
     AttendanceAutoCheckoutScheduler,
     OrganizationDepartmentsService,
     LeaveRequestService,
+    WorkspaceTaskService,
+    WorkspaceProjectService,
+    CalendarService,
+    CompanyDocumentService,
     JobOpeningService,
     CandidateService,
     InterviewService,

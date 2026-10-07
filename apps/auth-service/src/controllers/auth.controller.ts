@@ -56,6 +56,11 @@ import {
   GetSupportTicketsQueryDto,
   CreateSupportTicketMessageDto,
   UpdateSupportTicketMessageDto,
+  SessionStateQueryDto,
+  AiConversationOwnerDto,
+  AiConversationRefDto,
+  LogAiFailureDto,
+  SaveAiConversationDto,
 } from '@app/common';
 import { AllowUnsignedRpc } from '@app/tenant-context';
 import { AuthService } from '../services/auth.service';
@@ -70,6 +75,7 @@ import { SecuritySettingsService } from '../services/security-settings.service';
 import { CustomDomainsService } from '../services/custom-domains.service';
 import { MaintenanceSettingsService } from '../services/maintenance-settings.service';
 import { HelpSupportService } from '../services/help-support.service';
+import { AiConversationService } from '../services/ai-conversation.service';
 
 @Controller()
 export class AuthMicroserviceController {
@@ -86,6 +92,7 @@ export class AuthMicroserviceController {
     private readonly customDomainsService: CustomDomainsService,
     private readonly maintenanceSettingsService: MaintenanceSettingsService,
     private readonly helpSupportService: HelpSupportService,
+    private readonly aiConversationService: AiConversationService,
   ) { }
 
   // The former `wrapRpcError` helper lived here and re-implemented, per call
@@ -131,12 +138,12 @@ export class AuthMicroserviceController {
 
   @MessagePattern(MESSAGE_PATTERNS.AUTH.SUPERADMIN_LOGIN)
   async superAdminLogin(@Payload() payload: SuperAdminLoginPayloadDto) {
-    return await this.authService.superAdminLogin(payload.dto, payload.ipAddress, payload.userAgent);
+    return await this.authService.superAdminLogin(payload.dto, payload.ipAddress, payload.userAgent, payload.location);
   }
 
   @MessagePattern(MESSAGE_PATTERNS.AUTH.VERIFY_2FA)
   async verifyTwoFactorLogin(@Payload() payload: VerifyTwoFactorChallengePayloadDto) {
-    return await this.authService.verifyTwoFactorLogin(payload.dto, payload.ipAddress, payload.userAgent);
+    return await this.authService.verifyTwoFactorLogin(payload.dto, payload.ipAddress, payload.userAgent, payload.location);
   }
 
   @MessagePattern(MESSAGE_PATTERNS.AUTH.REFRESH_TOKEN)
@@ -147,6 +154,11 @@ export class AuthMicroserviceController {
   @MessagePattern(MESSAGE_PATTERNS.AUTH.LOGOUT)
   async logout(@Payload() payload: LogoutPayloadDto) {
     return await this.authService.logout(payload.dto, payload.ipAddress, payload.userAgent);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.AUTH.GET_SESSION_STATE)
+  getSessionState(@Payload() payload: SessionStateQueryDto) {
+    return this.authService.getSessionState(payload.sessionId);
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PLATFORM_SETTINGS.GET)
@@ -209,7 +221,7 @@ export class AuthMicroserviceController {
 
   @MessagePattern(MESSAGE_PATTERNS.AUTH.LOGIN)
   async login(@Payload() payload: LoginPayloadDto) {
-    return await this.authService.login(payload.dto, payload.ipAddress, payload.userAgent);
+    return await this.authService.login(payload.dto, payload.ipAddress, payload.userAgent, payload.location);
   }
 
   @MessagePattern(MESSAGE_PATTERNS.AUTH.GET_LAST_LOGINS)
@@ -222,8 +234,10 @@ export class AuthMicroserviceController {
   // ==========================================
 
   @MessagePattern(MESSAGE_PATTERNS.PROFILE.GET_PROFILE)
-  getProfile(@Payload() payload: SuperAdminIdPayloadDto) {
-    return this.profileService.getProfile(payload.superAdminId);
+  getProfile(@Payload() payload: GetSessionsPayloadDto) {
+    // Same shape as the sessions list: the caller's own session id lets the
+    // profile tell this sign-in apart from the previous one.
+    return this.profileService.getProfile(payload.superAdminId, payload.currentSessionId);
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PROFILE.UPDATE_PROFILE)
@@ -242,8 +256,8 @@ export class AuthMicroserviceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PROFILE.GET_LOGIN_ACTIVITY)
-  getLoginActivity(@Payload() payload: SuperAdminIdPayloadDto) {
-    return this.profileService.getLoginActivity(payload.superAdminId);
+  getLoginActivity(@Payload() payload: GetSessionsPayloadDto) {
+    return this.profileService.getLoginActivity(payload.superAdminId, payload.currentSessionId);
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PROFILE.GET_RECOVERY)
@@ -590,5 +604,34 @@ export class AuthMicroserviceController {
   @MessagePattern(MESSAGE_PATTERNS.HELP.UPDATE_TICKET)
   updateTicket(@Payload() payload: UpdateSupportTicketMessageDto) {
     return this.helpSupportService.updateTicket(payload.id, payload.dto);
+  }
+
+  // ==========================================
+  // AI ASSISTANT — conversation history
+  // ==========================================
+
+  @MessagePattern(MESSAGE_PATTERNS.AI_ASSISTANT.LIST_CONVERSATIONS)
+  listAiConversations(@Payload() payload: AiConversationOwnerDto) {
+    return this.aiConversationService.list(payload);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.AI_ASSISTANT.GET_CONVERSATION)
+  getAiConversation(@Payload() payload: AiConversationRefDto) {
+    return this.aiConversationService.get(payload);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.AI_ASSISTANT.SAVE_CONVERSATION)
+  saveAiConversation(@Payload() payload: SaveAiConversationDto) {
+    return this.aiConversationService.save(payload);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.AI_ASSISTANT.LOG_FAILURE)
+  logAiFailure(@Payload() payload: LogAiFailureDto) {
+    return this.aiConversationService.logFailure(payload);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.AI_ASSISTANT.DELETE_CONVERSATION)
+  deleteAiConversation(@Payload() payload: AiConversationRefDto) {
+    return this.aiConversationService.delete(payload);
   }
 }

@@ -41,6 +41,9 @@ import {
   ExportAttendanceRegisterQueryDto,
   AttendancePeriodQueryDto,
   UnmarkedAttendanceQueryDto,
+  GetHolidaysQueryDto,
+  CreateHolidayDto,
+  UpdateHolidayDto,
 } from '@app/common';
 import {
   JwtAuthGuard,
@@ -93,6 +96,54 @@ export class AttendanceController {
   // NOTE: every static sub-route is declared before ':recordId' so Express
   // doesn't match "stats" or "overview" as a record id.
   // ==========================================
+
+  // ==========================================
+  // Holidays — the same rows the Company Calendar shows as holidays
+  // ==========================================
+
+  @ApiTags(TAGS.ORG_ATTENDANCE)
+  @Get('holidays')
+  @RequireModule(HRMSModuleKey.ATTENDANCE, ModuleAction.VIEW)
+  @RequirePermissions('attendance.view', 'attendance.manage')
+  @ApiOperation({ summary: "One year's holidays with type and mandatory/optional counts" })
+  getHolidays(@Headers('x-tenant-id') tenantId: string, @Query() query: GetHolidaysQueryDto) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.CALENDAR.GET_HOLIDAYS, { tenantId, query });
+  }
+
+  @ApiTags(TAGS.ORG_ATTENDANCE)
+  @Post('holidays')
+  @RequireModule(HRMSModuleKey.ATTENDANCE, ModuleAction.CREATE)
+  @RequirePermissions('attendance.create', 'attendance.manage')
+  @ApiOperation({ summary: 'Add a holiday (also shown on the Company Calendar)' })
+  createHoliday(
+    @Headers('x-tenant-id') tenantId: string,
+    @Body() dto: CreateHolidayDto,
+    @CurrentUser('id') actorUserId: string,
+  ) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.CALENDAR.CREATE_HOLIDAY, { tenantId, dto, actorUserId });
+  }
+
+  @ApiTags(TAGS.ORG_ATTENDANCE)
+  @Patch('holidays/:holidayId')
+  @RequireModule(HRMSModuleKey.ATTENDANCE, ModuleAction.EDIT)
+  @RequirePermissions('attendance.edit', 'attendance.manage')
+  @ApiOperation({ summary: 'Edit a holiday' })
+  updateHoliday(
+    @Headers('x-tenant-id') tenantId: string,
+    @Param('holidayId', ParseUUIDPipe) eventId: string,
+    @Body() dto: UpdateHolidayDto,
+  ) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.CALENDAR.UPDATE_HOLIDAY, { tenantId, eventId, dto });
+  }
+
+  @ApiTags(TAGS.ORG_ATTENDANCE)
+  @Delete('holidays/:holidayId')
+  @RequireModule(HRMSModuleKey.ATTENDANCE, ModuleAction.DELETE)
+  @RequirePermissions('attendance.delete', 'attendance.manage')
+  @ApiOperation({ summary: 'Remove a holiday' })
+  deleteHoliday(@Headers('x-tenant-id') tenantId: string, @Param('holidayId', ParseUUIDPipe) eventId: string) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.CALENDAR.DELETE_HOLIDAY, { tenantId, eventId });
+  }
 
   @ApiTags(TAGS.ORG_ATTENDANCE)
   @Get('stats')

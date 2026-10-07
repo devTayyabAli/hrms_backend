@@ -40,6 +40,7 @@ export const TAGS = {
   ORG_ATTENDANCE: 'Organization: Attendance',
   ORG_LEAVE: 'Organization: Leave Management',
   ORG_RECRUITMENT: 'Organization: Recruitment',
+  ORG_WORKSPACE: 'Organization: Workspace (Tasks, Projects, Calendar)',
   ORG_ONBOARDING: 'Organization: Onboarding',
   ORG_PERFORMANCE: 'Organization: Performance',
   ORG_PAYROLL: 'Organization: Payroll',
@@ -153,6 +154,11 @@ export const SWAGGER_TAG_GROUPS: ReadonlyArray<{
     name: TAGS.ORG_HR_REPORTS,
     description:
       'Reports screen. The six template cards (Employee, Attendance, Leave, Onboarding, Department Summary, Custom) each showing when they were last generated, and the Generate dialog: a date range preset or a custom from/to, an optional department, and JSON for the client to render or CSV as a download.',
+  },
+  {
+    name: TAGS.ORG_WORKSPACE,
+    description:
+      'Workspace screens. Tasks: KPI cards, the team task list (search, status tabs, project/assignee/priority/overdue filters), create/edit/delete with an assignment notification, and CSV export. Projects: cards with computed progress and task counts, status KPIs, create/edit/delete (tasks are kept), CSV export. Company Calendar: one month of events and holidays plus birthdays and work anniversaries from employee records. Tasks and Projects need the `projects` module; the calendar needs `calendar`.',
   },
   {
     name: TAGS.ORG_DEPARTMENTS,
@@ -282,6 +288,7 @@ export const SWAGGER_PORTALS: ReadonlyArray<{
       TAGS.ORG_RECRUITMENT,
       TAGS.ORG_PERFORMANCE,
       TAGS.ORG_PAYROLL,
+      TAGS.ORG_WORKSPACE,
     ],
   },
   {

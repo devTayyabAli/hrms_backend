@@ -47,3 +47,7 @@ export { EmployeeNotification, EmployeeNotificationKind } from './employee-notif
 export { EmployeeInvitation, EmployeeInvitationStatus } from './employee-invitation.model';
 export { EmployeeInvitationLookup } from './employee-invitation-lookup.model';
 export { HrReportRun } from './hr-report-run.model';
+export { WorkspaceProject } from './workspace-project.model';
+export { WorkspaceTask } from './workspace-task.model';
+export { CalendarEvent } from './calendar-event.model';
+export { CompanyDocument } from './company-document.model';

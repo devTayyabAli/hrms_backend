@@ -44,6 +44,10 @@ import {
   EmployeeNotification,
   EmployeeInvitation,
   HrReportRun,
+  WorkspaceProject,
+  WorkspaceTask,
+  CalendarEvent,
+  CompanyDocument,
 } from '../models';
 import { ProjectionOutbox } from '@app/database';
 
@@ -118,6 +122,13 @@ export const TENANT_OPERATIONAL_MODELS: Array<typeof Model> = [
   EmployeeNotification,
   EmployeeInvitation,
   HrReportRun,
+  // Workspace. After Employee and Department, which projects FK to; the
+  // project before the tasks that FK to it.
+  WorkspaceProject,
+  WorkspaceTask,
+  CalendarEvent,
+  // After Employee, which it FKs to.
+  CompanyDocument,
   // Shared with user-service: one outbox table per tenant database,
   // drained by ProjectionRelayService.
   ProjectionOutbox,
@@ -302,6 +313,22 @@ export class TenantModelProviderService extends BaseTenantModelProvider {
 
   getEmployeeNotificationModel(tenantId?: string): Promise<typeof EmployeeNotification> {
     return this.model<typeof EmployeeNotification>('EmployeeNotification', tenantId);
+  }
+
+  getWorkspaceProjectModel(tenantId?: string): Promise<typeof WorkspaceProject> {
+    return this.model<typeof WorkspaceProject>('WorkspaceProject', tenantId);
+  }
+
+  getWorkspaceTaskModel(tenantId?: string): Promise<typeof WorkspaceTask> {
+    return this.model<typeof WorkspaceTask>('WorkspaceTask', tenantId);
+  }
+
+  getCalendarEventModel(tenantId?: string): Promise<typeof CalendarEvent> {
+    return this.model<typeof CalendarEvent>('CalendarEvent', tenantId);
+  }
+
+  getCompanyDocumentModel(tenantId?: string): Promise<typeof CompanyDocument> {
+    return this.model<typeof CompanyDocument>('CompanyDocument', tenantId);
   }
 
   getEmployeeInvitationModel(tenantId?: string): Promise<typeof EmployeeInvitation> {

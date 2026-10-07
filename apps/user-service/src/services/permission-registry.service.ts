@@ -115,10 +115,36 @@ export const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
   { resource: 'recruitment', action: ModuleAction.DELETE, description: 'Delete job openings, candidates and interviews', moduleKey: HRMSModuleKey.RECRUITMENT },
   { resource: 'recruitment', action: ModuleAction.MANAGE, description: 'Manage job postings and candidate hiring', moduleKey: HRMSModuleKey.RECRUITMENT },
 
-  // EXTENSIBLE FUTURE MODULES
-
+  // WORKSPACE — Tasks and Projects share the PROJECTS module ("Projects & Tasks").
   { resource: 'projects', action: ModuleAction.VIEW, description: 'View organization projects', moduleKey: HRMSModuleKey.PROJECTS },
+  { resource: 'projects', action: ModuleAction.CREATE, description: 'Create projects', moduleKey: HRMSModuleKey.PROJECTS },
+  { resource: 'projects', action: ModuleAction.EDIT, description: 'Edit projects, their lead and status', moduleKey: HRMSModuleKey.PROJECTS },
+  { resource: 'projects', action: ModuleAction.DELETE, description: 'Delete projects', moduleKey: HRMSModuleKey.PROJECTS },
+  { resource: 'projects', action: ModuleAction.EXPORT, description: 'Export projects to CSV', moduleKey: HRMSModuleKey.PROJECTS },
   { resource: 'projects', action: ModuleAction.MANAGE, description: 'Manage projects and assignments', moduleKey: HRMSModuleKey.PROJECTS },
+
+  { resource: 'tasks', action: ModuleAction.VIEW, description: 'View team tasks', moduleKey: HRMSModuleKey.PROJECTS },
+  { resource: 'tasks', action: ModuleAction.CREATE, description: 'Create and assign tasks', moduleKey: HRMSModuleKey.PROJECTS },
+  { resource: 'tasks', action: ModuleAction.EDIT, description: 'Edit, reassign and complete tasks', moduleKey: HRMSModuleKey.PROJECTS },
+  { resource: 'tasks', action: ModuleAction.DELETE, description: 'Delete tasks', moduleKey: HRMSModuleKey.PROJECTS },
+  { resource: 'tasks', action: ModuleAction.EXPORT, description: 'Export tasks to CSV', moduleKey: HRMSModuleKey.PROJECTS },
+  { resource: 'tasks', action: ModuleAction.MANAGE, description: 'Full management of tasks', moduleKey: HRMSModuleKey.PROJECTS },
+
+  { resource: 'calendar', action: ModuleAction.VIEW, description: 'View the company calendar', moduleKey: HRMSModuleKey.CALENDAR },
+  { resource: 'calendar', action: ModuleAction.CREATE, description: 'Add company events and holidays', moduleKey: HRMSModuleKey.CALENDAR },
+  { resource: 'calendar', action: ModuleAction.EDIT, description: 'Edit company events and holidays', moduleKey: HRMSModuleKey.CALENDAR },
+  { resource: 'calendar', action: ModuleAction.DELETE, description: 'Delete company events and holidays', moduleKey: HRMSModuleKey.CALENDAR },
+  { resource: 'calendar', action: ModuleAction.EXPORT, description: 'Export the calendar to CSV', moduleKey: HRMSModuleKey.CALENDAR },
+  { resource: 'calendar', action: ModuleAction.MANAGE, description: 'Full management of the company calendar', moduleKey: HRMSModuleKey.CALENDAR },
+
+  { resource: 'documents', action: ModuleAction.VIEW, description: 'View the company document library', moduleKey: HRMSModuleKey.DOCUMENTS },
+  { resource: 'documents', action: ModuleAction.CREATE, description: 'Upload company documents', moduleKey: HRMSModuleKey.DOCUMENTS },
+  { resource: 'documents', action: ModuleAction.EDIT, description: 'Edit, publish and replace company documents', moduleKey: HRMSModuleKey.DOCUMENTS },
+  { resource: 'documents', action: ModuleAction.DELETE, description: 'Delete company documents', moduleKey: HRMSModuleKey.DOCUMENTS },
+  { resource: 'documents', action: ModuleAction.EXPORT, description: 'Export the document list to CSV', moduleKey: HRMSModuleKey.DOCUMENTS },
+  { resource: 'documents', action: ModuleAction.MANAGE, description: 'Full management of company documents', moduleKey: HRMSModuleKey.DOCUMENTS },
+
+  // EXTENSIBLE FUTURE MODULES
 
   { resource: 'expenses', action: ModuleAction.VIEW, description: 'View expense claims', moduleKey: HRMSModuleKey.EXPENSES },
   { resource: 'expenses', action: ModuleAction.MANAGE, description: 'Approve and process expense claims', moduleKey: HRMSModuleKey.EXPENSES },
