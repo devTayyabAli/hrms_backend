@@ -3,6 +3,7 @@ import {
   IsEnum,
   IsInt,
   IsNotEmpty,
+  IsNumber,
   IsOptional,
   IsString,
   IsUUID,
@@ -60,6 +61,12 @@ export class PushSubscriptionDto {
   @ValidateNested()
   @Type(() => PushSubscriptionKeysDto)
   keys: PushSubscriptionKeysDto;
+
+  /** Part of the browser's toJSON(); almost always null. Accepted, not stored. */
+  @ApiPropertyOptional({ nullable: true, example: null })
+  @IsOptional()
+  @IsNumber()
+  expirationTime?: number | null;
 }
 
 export class PushUnsubscribeDto {
