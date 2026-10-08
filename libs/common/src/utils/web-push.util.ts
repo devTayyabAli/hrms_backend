@@ -47,6 +47,15 @@ const b64url = {
   decode: (value: string) => Buffer.from(value, 'base64url'),
 };
 
+/**
+ * The private scalar as exactly 32 bytes. Node's `ECDH.getPrivateKey()` drops
+ * leading zero bytes (about 1 key in 256), and JWK requires the full length.
+ */
+const privateScalar = (privateKey: string): Buffer => {
+  const raw = b64url.decode(privateKey);
+  return raw.length >= 32 ? raw : Buffer.concat([Buffer.alloc(32 - raw.length), raw]);
+};
+
 /** One HKDF-Expand block (RFC 5869), all this scheme ever needs. */
 const hkdf = (salt: Buffer, ikm: Buffer, info: Buffer, length: number): Buffer => {
   const prk = crypto.createHmac('sha256', salt).update(ikm).digest();
@@ -64,14 +73,14 @@ export class WebPushUtil {
     ecdh.generateKeys();
     return {
       publicKey: b64url.encode(ecdh.getPublicKey()),
-      privateKey: b64url.encode(ecdh.getPrivateKey()),
+      privateKey: b64url.encode(privateScalar(b64url.encode(ecdh.getPrivateKey()))),
     };
   }
 
   /** Throws with a readable reason when the configured VAPID keys can't be used. */
   static assertVapidKeys(config: VapidConfig): void {
     const pub = b64url.decode(config.publicKey);
-    const priv = b64url.decode(config.privateKey);
+    const priv = privateScalar(config.privateKey);
     if (pub.length !== 65 || pub[0] !== 0x04) throw new Error('VAPID_PUBLIC_KEY must be a base64url 65-byte uncompressed P-256 key.');
     if (priv.length !== 32) throw new Error('VAPID_PRIVATE_KEY must be a base64url 32-byte P-256 private key.');
     const ecdh = crypto.createECDH('prime256v1');
@@ -132,7 +141,7 @@ export class WebPushUtil {
       key: {
         kty: 'EC',
         crv: 'P-256',
-        d: config.privateKey,
+        d: b64url.encode(privateScalar(config.privateKey)),
         x: b64url.encode(pub.subarray(1, 33)),
         y: b64url.encode(pub.subarray(33, 65)),
       },

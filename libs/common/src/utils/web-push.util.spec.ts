@@ -96,3 +96,26 @@ describe('WebPushUtil', () => {
     );
   });
 });
+
+describe('WebPushUtil private key length', () => {
+  it('accepts a private key whose leading zero byte was dropped', () => {
+    // Find a key whose scalar starts with 0x00, as ECDH.getPrivateKey() returns it (31 bytes).
+    const crypto = require('crypto');
+    let ecdh;
+    do {
+      ecdh = crypto.createECDH('prime256v1');
+      ecdh.generateKeys();
+    } while (ecdh.getPrivateKey().length === 32);
+    const config = {
+      publicKey: ecdh.getPublicKey().toString('base64url'),
+      privateKey: ecdh.getPrivateKey().toString('base64url'),
+      subject: 'mailto:ops@example.com',
+    };
+    expect(() => WebPushUtil.assertVapidKeys(config)).not.toThrow();
+    expect(WebPushUtil.vapidAuthorization('https://push.example/x', config)).toMatch(/^vapid t=/);
+  });
+
+  it('always generates a 43-character private key', () => {
+    for (let i = 0; i < 50; i += 1) expect(WebPushUtil.generateVapidKeys().privateKey).toHaveLength(43);
+  });
+});
