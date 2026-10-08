@@ -551,6 +551,7 @@ export const MESSAGE_PATTERNS = {
     UPDATE: 'platform_organizations.update',
     UPDATE_STATUS: 'platform_organizations.update_status',
     DELETE: 'platform_organizations.delete',
+    GET_CLIENT_CONTACTS: 'platform_organizations.get_client_contacts',
   },
   PLATFORM_STATUS: {
     GET_STATUS: 'platform_status.get_status',

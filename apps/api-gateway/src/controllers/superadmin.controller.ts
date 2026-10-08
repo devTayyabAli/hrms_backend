@@ -723,6 +723,16 @@ export class SuperAdminController {
   // ==========================================
 
   @ApiTags(TAGS.SA_CLIENTS)
+  @Get('clients/contacts')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'SuperAdmin: Client contacts — every organization\'s admins and HR, pending admin invitations, last sign-in and status',
+  })
+  getClientContacts() {
+    return this.tenantClient.send(MESSAGE_PATTERNS.PLATFORM_ORGANIZATIONS.GET_CLIENT_CONTACTS, {});
+  }
+
+  @ApiTags(TAGS.SA_CLIENTS)
   @Get('clients/stats')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'SuperAdmin: Clients KPI Cards (Total / Admins / HRs / Employees)' })
@@ -765,17 +775,23 @@ export class SuperAdminController {
   @ApiTags(TAGS.SA_CLIENTS)
   @Patch('clients/:tenantId/:userId/status')
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'SuperAdmin: Activate / Deactivate a client (Admin/HR)' })
-  updateClientStatus(
+  @ApiOperation({ summary: 'SuperAdmin: Allow or block a client\'s (Admin/HR) sign-in; blocking ends their sessions' })
+  async updateClientStatus(
     @Param('tenantId') tenantId: string,
     @Param('userId') userId: string,
     @Body() dto: UpdatePlatformClientStatusDto,
   ) {
-    return this.userClient.send(MESSAGE_PATTERNS.PLATFORM_CLIENTS.UPDATE_STATUS, {
-      tenantId,
-      userId,
-      isActive: dto.isActive,
-    });
+    const result = await firstValueFrom(
+      this.userClient.send(MESSAGE_PATTERNS.PLATFORM_CLIENTS.UPDATE_STATUS, {
+        tenantId,
+        userId,
+        isActive: dto.isActive,
+      }),
+    );
+    // Their sessions were revoked in auth-service; drop this gateway's cached
+    // "still valid" answers so the block takes effect on the next request.
+    if (!dto.isActive) JwtAuthGuard.forgetAllSessions();
+    return result;
   }
 
   @ApiTags(TAGS.SA_CLIENTS)

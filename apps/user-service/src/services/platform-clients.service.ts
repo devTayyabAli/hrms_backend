@@ -1,9 +1,11 @@
-import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import { firstValueFrom } from 'rxjs';
 import { SERVICES, MESSAGE_PATTERNS, ClientRoleFilter, ClientStatusFilter, ClientSortableField } from '@app/common';
 import { TenantContextService } from '@app/tenant-context';
 import { TenantModelProviderService } from './tenant-model-provider.service';
+import { DirectoryEmitterService } from './directory-emitter.service';
+import { ProjectionEventType } from '@app/database';
 
 export interface TenantSummary {
   id: string;
@@ -63,6 +65,7 @@ export class PlatformClientsService {
     private readonly tenantContextService: TenantContextService,
     @Inject(SERVICES.TENANT_SERVICE) private readonly tenantClient: ClientProxy,
     @Inject(SERVICES.AUTH_SERVICE) private readonly authClient: ClientProxy,
+    @Optional() private readonly directory?: DirectoryEmitterService,
   ) {}
 
   /**
@@ -161,6 +164,13 @@ export class PlatformClientsService {
       updatedAt: row.sourceUpdatedAt,
       lastActiveAt: null,
     }));
+
+    // The projection does not always carry the organization's name (user
+    // events have none); the tenant list always does.
+    if (data.some((row) => !row.organizationName)) {
+      const names = new Map((await this.fetchTenants()).map((t) => [t.id, t.organizationName || t.name]));
+      for (const row of data) row.organizationName ||= names.get(row.tenantId) ?? '';
+    }
 
     // Still fetched per page only — at most `limit` rows, so this stays cheap
     // and does not need projecting until it becomes hot.
@@ -359,15 +369,35 @@ export class PlatformClientsService {
     return row;
   }
 
+  /**
+   * Allows or blocks a client's sign-in. Three places must agree, so all three
+   * are written: the tenant user (checked at login and on every token
+   * refresh), the auth credential (whose deactivation also ends the person's
+   * open sessions), and the Super Admin directory (so Clients shows it now,
+   * not after the next relay pass).
+   */
   async updateStatus(tenantId: string, userId: string, isActive: boolean): Promise<PlatformClientRow> {
-    await this.tenantContextService.run({ tenantId }, async () => {
+    const email = await this.tenantContextService.run({ tenantId }, async () => {
       const UserModel = await this.modelProvider.getUserModel();
-      const user = await UserModel.findByPk(userId);
+      const RoleModel = await this.modelProvider.getRoleModel();
+      const user: any = await UserModel.findByPk(userId, {
+        include: [{ model: RoleModel, through: { attributes: [] } }],
+      });
       if (!user) {
         throw new NotFoundException(`Client ${userId} not found in organization ${tenantId}`);
       }
       await user.update({ isActive });
+      if (this.directory) {
+        await this.directory.emitUpsert(tenantId, user, ProjectionEventType.UPDATED).catch(() => undefined);
+      }
+      return user.email as string;
     });
+
+    if (this.directory) await this.directory.flush(tenantId).catch(() => undefined);
+    await firstValueFrom(
+      this.authClient.send(MESSAGE_PATTERNS.AUTH.DEACTIVATE_TENANT_CREDENTIAL, { email, tenantId, isActive }),
+    ).catch((error: any) => this.logger.warn(`Credential for ${email} not updated: ${error?.message ?? error}`));
+
     return this.getOne(tenantId, userId);
   }
 

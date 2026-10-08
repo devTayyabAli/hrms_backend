@@ -283,6 +283,7 @@ import { JobOpeningService } from './services/job-opening.service';
 import { WorkspaceTaskService } from './services/workspace-task.service';
 import { WorkspaceProjectService } from './services/workspace-project.service';
 import { PlatformNotifierService } from './services/platform-notifier.service';
+import { PlatformClientContactsService } from './services/platform-client-contacts.service';
 import { CalendarService } from './services/calendar.service';
 import { CompanyDocumentService } from './services/company-document.service';
 import { CandidateService } from './services/candidate.service';
@@ -350,6 +351,7 @@ export class TenantServiceController {
     private directoryProjectionService: DirectoryProjectionService,
     private projectionRelayService: ProjectionRelayService,
     private readonly platformNotifier: PlatformNotifierService,
+    private readonly clientContacts: PlatformClientContactsService,
   ) {}
 
   @MessagePattern(MESSAGE_PATTERNS.HEALTH.CHECK)
@@ -369,6 +371,12 @@ export class TenantServiceController {
   @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION.CREATE_ORGANIZATION)
   async createOrganizationMessage(@Payload() dto: CreateOrganizationProvisionDto) {
     return this.tenantProvisioningService.createOrganizationAndProvision(dto);
+  }
+
+  /** Super Admin › Clients: organizations' admins and HR, plus admins invited but not yet activated. */
+  @MessagePattern(MESSAGE_PATTERNS.PLATFORM_ORGANIZATIONS.GET_CLIENT_CONTACTS)
+  getClientContactsMessage() {
+    return this.clientContacts.getContacts();
   }
 
   @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION.GET_CREATION_STATUS)

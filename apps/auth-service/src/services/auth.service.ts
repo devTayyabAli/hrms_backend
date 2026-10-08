@@ -385,6 +385,13 @@ export class AuthService implements OnModuleInit {
       return { message: 'No credential found for this tenant — nothing to change.' };
     }
     await credential.update({ isActive });
+    if (!isActive) {
+      // Blocked now, not when the current access token next tries to refresh.
+      await this.userSessionModel.update(
+        { status: 'revoked', revokedAt: new Date(), revokedReason: 'Account deactivated' },
+        { where: { authCredentialId: credential.id, status: 'active' } },
+      );
+    }
     return { message: isActive ? 'Credential reactivated successfully' : 'Credential deactivated successfully' };
   }
 
