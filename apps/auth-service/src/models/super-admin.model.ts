@@ -7,6 +7,7 @@ import {
   IsUUID,
   Default,
 } from 'sequelize-typescript';
+import { Logger } from '@nestjs/common';
 import { CryptoUtils } from '@app/common';
 
 @Table({ tableName: 'super_admins' })
@@ -90,7 +91,20 @@ export class SuperAdmin extends Model {
     },
     get(): string | null {
       const raw = this.getDataValue('twoFactorSecret');
-      return raw ? CryptoUtils.decrypt(raw) : raw;
+      if (!raw) return raw;
+      try {
+        return CryptoUtils.decrypt(raw);
+      } catch (error: any) {
+        // Encrypted under a different ENCRYPTION_KEY than the one running
+        // now. Read as "no secret" rather than throwing: every caller already
+        // treats a missing secret as 2FA unavailable (login is refused, setup
+        // issues a new one), whereas throwing here broke anything that reads
+        // the whole row — the profile page included.
+        new Logger('SuperAdmin').warn(
+          `twoFactorSecret for super admin ${this.getDataValue('id')} could not be decrypted with the current ENCRYPTION_KEY (${error?.message ?? error}). Treating 2FA as not set up.`,
+        );
+        return null;
+      }
     },
   })
   declare twoFactorSecret: string;
