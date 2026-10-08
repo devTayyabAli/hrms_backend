@@ -5,7 +5,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
-import { Op } from 'sequelize';
+import { Op, Sequelize } from 'sequelize';
 import * as bcrypt from 'bcrypt';
 import * as QRCode from 'qrcode';
 import { SuperAdmin, NotificationPreferences, UserSession } from '../models';
@@ -20,6 +20,11 @@ import {
   PASSWORD_HISTORY_LIMIT,
 } from '@app/common';
 import { PasswordPolicyService } from './password-policy.service';
+
+/** Idle this long, a session recorded without an expiresAt is treated as expired (the default refresh-token lifetime). */
+const STALE_SESSION_MS = 7 * 24 * 60 * 60 * 1000;
+/** Logged-out history returned to the Sessions screen. */
+const LOGGED_OUT_SESSIONS_SHOWN = 50;
 
 @Injectable()
 export class ProfileService {
@@ -154,6 +159,7 @@ export class ProfileService {
       ? Math.floor((Date.now() - new Date(passwordChangedAt).getTime()) / 86400000)
       : null;
 
+    await this.expireStaleSessions(superAdminId);
     const [activeSessionsCount, preferences] = await Promise.all([
       this.userSessionModel.count({ where: { superAdminId, status: 'active' } }),
       this.notificationPrefModel.findOne({ where: { superAdminId } }),
@@ -409,9 +415,39 @@ export class ProfileService {
   }
 
   /**
+   * Marks sessions whose refresh token has run out as 'expired'. Nothing
+   * signs in with them any more (the gateway and token refresh both check
+   * `expiresAt`), but they stayed 'active' in the table, so the Sessions
+   * screen counted every device ever used — 96 "active" sessions for an
+   * account a handful of people share. Rows from before `expiresAt` was
+   * recorded go after a week idle, the default refresh-token lifetime.
+   */
+  private async expireStaleSessions(superAdminId: string) {
+    const now = new Date();
+    await this.userSessionModel.update(
+      {
+        status: 'expired',
+        revokedAt: Sequelize.fn('COALESCE', Sequelize.col('expiresAt'), Sequelize.col('lastActiveAt')) as any,
+        revokedReason: 'Session expired',
+      },
+      {
+        where: {
+          superAdminId,
+          status: 'active',
+          [Op.or]: [
+            { expiresAt: { [Op.lt]: now } },
+            { expiresAt: null, lastActiveAt: { [Op.lt]: new Date(now.getTime() - STALE_SESSION_MS) } },
+          ],
+        },
+      },
+    );
+  }
+
+  /**
    * Get User Sessions
    */
   async getActiveSessions(superAdminId: string, currentSessionId?: string) {
+    await this.expireStaleSessions(superAdminId);
     const sessions = await this.userSessionModel.findAll({
       where: { superAdminId },
       order: [['lastActiveAt', 'DESC']],
@@ -439,7 +475,11 @@ export class ProfileService {
     });
 
     const activeSessions = sessions.filter((s) => s.status === 'active').map(toRow);
-    const loggedOutSessions = sessions.filter((s) => s.status !== 'active').map(toRow);
+    // History, not state: the most recent ones are what anyone reads.
+    const loggedOutSessions = sessions
+      .filter((s) => s.status !== 'active')
+      .slice(0, LOGGED_OUT_SESSIONS_SHOWN)
+      .map(toRow);
 
     return {
       success: true,
