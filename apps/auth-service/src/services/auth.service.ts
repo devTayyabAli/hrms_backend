@@ -6,6 +6,7 @@ import {
   BadRequestException,
   ForbiddenException,
   OnModuleInit,
+  Optional,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
@@ -47,6 +48,8 @@ import { ConfigService } from '@nestjs/config';
 import { OtpService } from './otp.service';
 import { MailService } from './mail.service';
 import { AuditService } from './audit.service';
+import { PlatformNotificationService } from './platform-notification.service';
+import { PlatformNotificationCategory } from '../models';
 
 interface SessionMeta {
   sessionId?: string;
@@ -75,7 +78,30 @@ export class AuthService implements OnModuleInit {
     private passwordPolicyService: PasswordPolicyService,
     private securitySettingsService: SecuritySettingsService,
     private accountLockoutService: AccountLockoutService,
+    @Optional() private platformNotifications?: PlatformNotificationService,
   ) { }
+
+  /** "Chrome 154 on Windows 10/11 · 18.143.151.88 · Lahore, PK" — what a security alert tells the admin. */
+  private describeAccess(ipAddress?: string, userAgent?: string, location?: string): string {
+    const { browser, operatingSystem } = parseUserAgent(userAgent);
+    const device = [browser, operatingSystem].filter((p) => p && !/^unknown/i.test(p)).join(' on ');
+    const ip = ipAddress && ipAddress !== 'unknown' ? ipAddress.replace(/^::ffff:/i, '') : null;
+    return [device || 'Unknown device', ip, location].filter(Boolean).join(' · ');
+  }
+
+  /**
+   * Security alert to the Super Admin whose account this is. Not awaited: a
+   * notification (and its push delivery) must never slow or fail a sign-in.
+   */
+  private alertSuperAdmin(superAdminId: string, title: string, body: string) {
+    void this.platformNotifications?.notify({
+      category: PlatformNotificationCategory.SECURITY,
+      superAdminId,
+      title,
+      body,
+      url: '/profile',
+    });
+  }
 
   async onModuleInit() {
     // Seed default SuperAdmin if none exists
@@ -375,6 +401,14 @@ export class AuthService implements OnModuleInit {
     if (!admin || !(await bcrypt.compare(dto.password, admin.passwordHash))) {
       if (admin) {
         await this.accountLockoutService.registerFailedAttempt(admin);
+        const lockedNow = admin.lockedUntil && new Date(admin.lockedUntil).getTime() > Date.now();
+        this.alertSuperAdmin(
+          admin.id,
+          lockedNow ? 'Account locked after failed sign-ins' : 'Failed sign-in attempt',
+          lockedNow
+            ? `Too many wrong passwords. Sign-in is blocked for ${Math.max(1, Math.ceil((new Date(admin.lockedUntil).getTime() - Date.now()) / 60000))} minutes. Last attempt: ${this.describeAccess(ipAddress, userAgent, location)}.`
+            : `A wrong password was entered for your account from ${this.describeAccess(ipAddress, userAgent, location)}.`,
+        );
       }
       await this.auditService.log({
         action: 'LOGIN_FAILED',
@@ -462,6 +496,7 @@ export class AuthService implements OnModuleInit {
       ipAddress,
       userAgent,
     });
+    this.alertSuperAdmin(admin.id, 'New sign-in to your account', this.describeAccess(ipAddress, userAgent, location));
 
     return {
       message: 'SuperAdmin login successful',
@@ -540,6 +575,11 @@ export class AuthService implements OnModuleInit {
         userAgent,
         reason: 'invalid_otp_code',
       });
+      this.alertSuperAdmin(
+        admin.id,
+        'Wrong 2FA code entered',
+        `Your password was correct but the 2FA code was not, from ${this.describeAccess(ipAddress, userAgent, location)}. If this wasn't you, change your password.`,
+      );
       throw new UnauthorizedException('Invalid 2FA verification code.');
     }
 
@@ -570,6 +610,7 @@ export class AuthService implements OnModuleInit {
       userAgent,
       reason: 'via_2fa',
     });
+    this.alertSuperAdmin(admin.id, 'New sign-in to your account', `${this.describeAccess(ipAddress, userAgent, location)} · verified with 2FA`);
 
     return {
       message: 'SuperAdmin 2FA login successful',

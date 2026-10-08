@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { Sequelize } from 'sequelize-typescript';
 import { TenantService } from './tenant.service';
 import { TenantDatabaseConfigService } from './tenant-database-config.service';
@@ -6,6 +6,7 @@ import { OrganizationModuleAccessService } from './organization-module-access.se
 import { OrganizationAdminInvitationService, AdminInvitationResult } from './organization-admin-invitation.service';
 import { PlatformBillingService } from './platform-billing.service';
 import { DirectoryProjectionService } from './directory-projection.service';
+import { PlatformNotifierService } from './platform-notifier.service';
 import { BaseTenantModelProvider, TenantConnectionManager } from '@app/tenant-context';
 import { bindModelsToConnection, resolveDbCredentials } from '@app/database';
 import { TENANT_OPERATIONAL_MODELS } from './tenant-model-provider.service';
@@ -56,6 +57,7 @@ export class TenantProvisioningService {
     private invitationService: OrganizationAdminInvitationService,
     private billingService: PlatformBillingService,
     private directoryProjection: DirectoryProjectionService,
+    @Optional() private platformNotifier?: PlatformNotifierService,
   ) { }
 
   /**
@@ -101,8 +103,17 @@ export class TenantProvisioningService {
     const tenant = first ?? (await tenantCreated);
 
     this.creations.set(tenant.id, { tenantId: tenant.id, state: 'running' });
+    const orgName = tenant.organizationName || tenant.name;
     run.then(
-      (result) => this.finishCreation(tenant.id, { tenantId: tenant.id, state: 'done', result }),
+      (result) => {
+        this.finishCreation(tenant.id, { tenantId: tenant.id, state: 'done', result });
+        this.platformNotifier?.account(
+          `Organization created: ${orgName}`,
+          result.invitation
+            ? `Its database is ready and an activation invitation was sent to ${result.invitation.adminEmail}.`
+            : 'Its database is ready. No admin invitation was sent.',
+        );
+      },
       (error: any) => {
         this.logger.error(`Creating organization ${tenant.id} failed: ${error?.message ?? error}`);
         this.finishCreation(tenant.id, {
@@ -110,6 +121,10 @@ export class TenantProvisioningService {
           state: 'failed',
           error: error?.message || 'Organization creation failed.',
         });
+        this.platformNotifier?.account(
+          `Organization setup failed: ${orgName}`,
+          `Provisioning stopped with: ${error?.message || 'an unknown error'}. Creating it again with the same name will retry.`,
+        );
       },
     );
 

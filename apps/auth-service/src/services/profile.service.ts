@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Optional,
   NotFoundException,
   BadRequestException,
   UnauthorizedException,
@@ -20,11 +21,33 @@ import {
   PASSWORD_HISTORY_LIMIT,
 } from '@app/common';
 import { PasswordPolicyService } from './password-policy.service';
+import { PlatformNotificationService } from './platform-notification.service';
+import { PlatformNotificationCategory } from '../models';
 
 /** Idle this long, a session recorded without an expiresAt is treated as expired (the default refresh-token lifetime). */
 const STALE_SESSION_MS = 7 * 24 * 60 * 60 * 1000;
 /** Logged-out history returned to the Sessions screen. */
 const LOGGED_OUT_SESSIONS_SHOWN = 50;
+
+/** Shortest quiet-hours window worth having. */
+const MIN_QUIET_MINUTES = 15;
+
+/**
+ * Why a quiet-hours window is unusable, or null. A window may cross midnight
+ * (22:00 → 07:00); identical ends would mean either nothing or all day, so
+ * they're refused rather than guessed at.
+ */
+export const quietHoursProblem = (start?: string | null, end?: string | null): string | null => {
+  if (!start || !end) return 'Set both a start and an end time for quiet hours.';
+  const toMinutes = (t: string) => {
+    const [h, m] = t.split(':').map(Number);
+    return h * 60 + m;
+  };
+  const length = (toMinutes(end) - toMinutes(start) + 24 * 60) % (24 * 60);
+  if (length === 0) return 'Quiet hours must start and end at different times.';
+  if (length < MIN_QUIET_MINUTES) return `Quiet hours must last at least ${MIN_QUIET_MINUTES} minutes.`;
+  return null;
+};
 
 @Injectable()
 export class ProfileService {
@@ -34,7 +57,19 @@ export class ProfileService {
     private readonly notificationPrefModel: typeof NotificationPreferences,
     @InjectModel(UserSession) private readonly userSessionModel: typeof UserSession,
     private readonly passwordPolicyService: PasswordPolicyService,
+    @Optional() private readonly platformNotifications?: PlatformNotificationService,
   ) {}
+
+  /** Security alert about a change to this admin's own account — recorded, never awaited by the caller's result. */
+  private alertAccountChange(superAdminId: string, title: string, body: string) {
+    void this.platformNotifications?.notify({
+      category: PlatformNotificationCategory.SECURITY,
+      superAdminId,
+      title,
+      body,
+      url: '/profile',
+    });
+  }
 
   /**
    * Fetch Super Admin Profile
@@ -221,6 +256,11 @@ export class ProfileService {
       passwordLastChangedAt: new Date(),
       passwordHistory: history,
     });
+    this.alertAccountChange(
+      superAdminId,
+      'Your password was changed',
+      "If you didn't change it, reset your password now and end any sessions you don't recognise.",
+    );
 
     return {
       success: true,
@@ -326,6 +366,7 @@ export class ProfileService {
     }
 
     await admin.update({ twoFactorEnabled: true });
+    this.alertAccountChange(superAdminId, 'Two-factor authentication turned on', 'Signing in now also needs a code from your authenticator app.');
 
     return {
       success: true,
@@ -360,6 +401,11 @@ export class ProfileService {
       twoFactorEnabled: false,
       twoFactorSecret: null,
     });
+    this.alertAccountChange(
+      superAdminId,
+      'Two-factor authentication turned off',
+      "Your account is now protected by its password only. If you didn't do this, turn 2FA back on and change your password.",
+    );
 
     return {
       success: true,
@@ -398,6 +444,16 @@ export class ProfileService {
    */
   async updateNotificationPreferences(superAdminId: string, dto: UpdateNotificationsDto) {
     let pref = await this.notificationPrefModel.findOne({ where: { superAdminId } });
+
+    // Checked against the merged result, since a patch may change only one end.
+    const enabled = dto.quietHoursEnabled ?? pref?.quietHoursEnabled ?? false;
+    if (enabled) {
+      const problem = quietHoursProblem(
+        dto.quietHoursStartTime ?? pref?.quietHoursStartTime,
+        dto.quietHoursEndTime ?? pref?.quietHoursEndTime,
+      );
+      if (problem) throw new BadRequestException(problem);
+    }
     if (!pref) {
       pref = await this.notificationPrefModel.create({
         superAdminId,
@@ -536,6 +592,13 @@ export class ProfileService {
       },
       { where: whereCondition },
     );
+    if (updatedCount > 0) {
+      this.alertAccountChange(
+        superAdminId,
+        'Other sessions signed out',
+        `${updatedCount} other device${updatedCount === 1 ? ' was' : 's were'} signed out of your account.`,
+      );
+    }
 
     return {
       success: true,

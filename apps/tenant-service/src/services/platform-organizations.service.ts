@@ -1,4 +1,4 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
 import { Op } from 'sequelize';
 import { ClientProxy } from '@nestjs/microservices';
@@ -28,6 +28,7 @@ import {
   BillingEvent,
 } from '../models';
 import { TenantProvisioningService } from './tenant-provisioning.service';
+import { PlatformNotifierService } from './platform-notifier.service';
 
 export interface GetPlatformOrganizationsQuery {
   page?: number;
@@ -59,6 +60,7 @@ export class PlatformOrganizationsService {
     @InjectModel(BillingEvent) private readonly billingEventModel: typeof BillingEvent,
     @Inject(SERVICES.USER_SERVICE) private readonly userClient: ClientProxy,
     private readonly tenantProvisioningService: TenantProvisioningService,
+    @Optional() private readonly platformNotifier?: PlatformNotifierService,
   ) {}
 
   /**
@@ -360,6 +362,12 @@ export class PlatformOrganizationsService {
     if (status === OrganizationActionStatus.ACTIVE) {
       if (tenant.status === TenantStatus.SUSPENDED || !tenant.isActive) {
         await tenant.update({ status: await this.statusOnReactivation(tenant), isActive: true });
+        this.platformNotifier?.account(
+          `Organization reactivated: ${tenant.organizationName || tenant.name}`,
+          tenant.status === TenantStatus.PENDING_ADMIN_ACTIVATION
+            ? 'It is back on and waiting for its admin to activate — send them a new invitation.'
+            : 'Its users can sign in again.',
+        );
       }
     } else if (tenant.status !== TenantStatus.SUSPENDED || tenant.isActive) {
       await this.tenantModel.sequelize!.transaction(async (transaction) => {
@@ -369,6 +377,10 @@ export class PlatformOrganizationsService {
           { where: { tenantId, status: InvitationStatus.PENDING }, transaction },
         );
       });
+      this.platformNotifier?.account(
+        `Organization deactivated: ${tenant.organizationName || tenant.name}`,
+        'Its users are signed out and blocked until it is activated again.',
+      );
     }
     return this.getOrganizationById(tenantId);
   }
@@ -437,6 +449,10 @@ export class PlatformOrganizationsService {
     // Point of no return: drops the tenant's isolated database and its
     // remaining platform rows (tenant_database_configs, tenants).
     await this.tenantProvisioningService.deprovisionTenant(tenantId);
+    this.platformNotifier?.account(
+      `Organization deleted: ${organizationName}`,
+      'Its database, users and billing history were permanently removed.',
+    );
 
     return { tenantId, organizationName };
   }

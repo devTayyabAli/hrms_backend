@@ -13,6 +13,7 @@ import {
 import { ApiGatewayAuthController } from './controllers/auth.controller';
 import { SuperAdminController } from './controllers/superadmin.controller';
 import { SuperAdminProfileController } from './controllers/superadmin-profile.controller';
+import { SuperAdminNotificationsController } from './controllers/superadmin-notifications.controller';
 import { SuperAdminAiController } from './controllers/superadmin-ai.controller';
 import { AiAssistantService } from './ai-assistant/ai-assistant.service';
 import { FilesController } from './controllers/files.controller';
@@ -105,6 +106,7 @@ import { MaintenanceModeGuard } from './guards/maintenance-mode.guard';
     SuperAdminController,
     SuperAdminAiController,
     SuperAdminProfileController,
+    SuperAdminNotificationsController,
     FilesController,
     OrganizationAdminActivationController,
     // Declared before OrganizationSetupController so the admin Departments

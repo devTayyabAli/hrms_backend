@@ -256,6 +256,7 @@ import {
   CreateCompanyDocumentMessageDto,
   UpdateCompanyDocumentMessageDto,
   CompanyDocumentIdMessageDto,
+  PlatformNotificationCategory,
 } from '@app/common';
 import { AllowUnsignedRpc } from '@app/tenant-context';
 import { TenantService } from './services/tenant.service';
@@ -281,6 +282,7 @@ import { LeaveRequestService } from './services/leave-request.service';
 import { JobOpeningService } from './services/job-opening.service';
 import { WorkspaceTaskService } from './services/workspace-task.service';
 import { WorkspaceProjectService } from './services/workspace-project.service';
+import { PlatformNotifierService } from './services/platform-notifier.service';
 import { CalendarService } from './services/calendar.service';
 import { CompanyDocumentService } from './services/company-document.service';
 import { CandidateService } from './services/candidate.service';
@@ -347,6 +349,7 @@ export class TenantServiceController {
     private hrReportsService: HrReportsService,
     private directoryProjectionService: DirectoryProjectionService,
     private projectionRelayService: ProjectionRelayService,
+    private readonly platformNotifier: PlatformNotifierService,
   ) {}
 
   @MessagePattern(MESSAGE_PATTERNS.HEALTH.CHECK)
@@ -1065,12 +1068,27 @@ export class TenantServiceController {
 
   @MessagePattern(MESSAGE_PATTERNS.REPORTS.GENERATE)
   async handleGenerateReport(@Payload() dto: any) {
+    // Not announced: previews and the AI assistant call this constantly.
     return this.reportsService.generateReport(dto);
+  }
+
+  /** "Organization summary report exported (CSV, last 6 months)" — under Reports & Analytics. */
+  private announceReport(verb: 'exported', dto: any) {
+    const name = String(dto?.reportType ?? 'Custom').replace(/[-_]+/g, ' ');
+    const details = [dto?.format ? String(dto.format).toUpperCase() : null, dto?.period ? String(dto.period).replace(/-/g, ' ') : null].filter(Boolean).join(', ');
+    void this.platformNotifier.notify({
+      category: PlatformNotificationCategory.REPORTS,
+      title: `${name.charAt(0).toUpperCase()}${name.slice(1)} report ${verb}`,
+      body: details ? `${details}.` : 'From the Reports page.',
+      url: '/reports',
+    });
   }
 
   @MessagePattern(MESSAGE_PATTERNS.REPORTS.EXPORT)
   async handleExportReport(@Payload() dto: any) {
-    return this.reportsService.exportReport(dto);
+    const result = await this.reportsService.exportReport(dto);
+    this.announceReport('exported', dto);
+    return result;
   }
 
   @MessagePattern(MESSAGE_PATTERNS.REPORTS.GET_CUSTOM_REPORTS)

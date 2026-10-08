@@ -98,6 +98,16 @@ export class EmailTemplateUtil {
         textFallback = `Welcome to HRMS! Your account is active.`;
         break;
 
+      // Built and escaped by the caller (PlatformNotificationService), which
+      // owns the grouping; the template only frames it.
+      case 'notification_digest':
+        contentHtml = `
+          <h2 style="color: #1e293b; margin-top: 0;">${String(variables.title ?? 'Your notification summary').replace(/[<>&]/g, '')}</h2>
+          ${variables.messageHtml || ''}
+        `;
+        textFallback = variables.messageText || '';
+        break;
+
       default:
         contentHtml = `
           <h2 style="color: #1e293b; margin-top: 0;">${variables.title || 'System Notification'}</h2>

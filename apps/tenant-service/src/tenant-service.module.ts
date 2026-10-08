@@ -57,6 +57,7 @@ import { LeaveRequestService } from './services/leave-request.service';
 import { JobOpeningService } from './services/job-opening.service';
 import { WorkspaceTaskService } from './services/workspace-task.service';
 import { WorkspaceProjectService } from './services/workspace-project.service';
+import { PlatformNotifierService } from './services/platform-notifier.service';
 import { CalendarService } from './services/calendar.service';
 import { CompanyDocumentService } from './services/company-document.service';
 import { CandidateService } from './services/candidate.service';
@@ -212,6 +213,7 @@ import { PaymentProviderFactory } from './billing/providers/payment-provider.fac
     LeaveRequestService,
     WorkspaceTaskService,
     WorkspaceProjectService,
+    PlatformNotifierService,
     CalendarService,
     CompanyDocumentService,
     JobOpeningService,

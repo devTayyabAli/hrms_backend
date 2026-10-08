@@ -26,6 +26,7 @@ export * from './dto/platform-clients.dto';
 export * from './dto/platform-organizations.dto';
 export * from './dto/billing.dto';
 export * from './dto/profile.dto';
+export * from './dto/platform-notification.dto';
 export * from './dto/mail.dto';
 export * from './dto/file.dto';
 export * from './dto/user-service.dto';
@@ -660,6 +661,17 @@ export const MESSAGE_PATTERNS = {
     GET_SESSIONS: 'profile.get_sessions',
     REVOKE_SESSION: 'profile.revoke_session',
     REVOKE_OTHER_SESSIONS: 'profile.revoke_other_sessions',
+  },
+  /** Super Admin notifications: the bell, browser push, and what other services report. */
+  PLATFORM_NOTIFICATIONS: {
+    LIST: 'platform_notifications.list',
+    MARK_READ: 'platform_notifications.mark_read',
+    MARK_ALL_READ: 'platform_notifications.mark_all_read',
+    NOTIFY: 'platform_notifications.notify',
+    PUSH_CONFIG: 'platform_notifications.push_config',
+    PUSH_SUBSCRIBE: 'platform_notifications.push_subscribe',
+    PUSH_UNSUBSCRIBE: 'platform_notifications.push_unsubscribe',
+    PUSH_TEST: 'platform_notifications.push_test',
   },
   /**
    * Self-service account for a tenant user (org admin today; HR/Employee once

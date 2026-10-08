@@ -1,8 +1,11 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
 import { SecuritySettings } from '../models';
 import { AllowedIpAddress } from '../models';
 import { AddAllowedIpDto, UpdateSecuritySettingsDto } from '@app/common';
+import { PlatformNotificationCategory } from '../models';
+import { PlatformNotificationService } from './platform-notification.service';
+import { describeChangedSettings } from './settings-change.util';
 
 /**
  * Minimal IPv4 CIDR / exact-match check — no IPv6 CIDR support. Good enough
@@ -35,7 +38,18 @@ export class SecuritySettingsService {
   constructor(
     @InjectModel(SecuritySettings) private readonly settingsModel: typeof SecuritySettings,
     @InjectModel(AllowedIpAddress) private readonly allowedIpModel: typeof AllowedIpAddress,
+    @Optional() private readonly platformNotifications?: PlatformNotificationService,
   ) {}
+
+  /** Platform security policy changes go to every Super Admin, under Security alerts. */
+  private announce(title: string, body: string) {
+    void this.platformNotifications?.notify({
+      category: PlatformNotificationCategory.SECURITY,
+      title,
+      body,
+      url: '/system-management',
+    });
+  }
 
   /** Singleton row, created with defaults on first access. */
   async getOrCreate(): Promise<SecuritySettings> {
@@ -50,7 +64,9 @@ export class SecuritySettingsService {
 
   async updateSecurity(dto: UpdateSecuritySettingsDto): Promise<SecuritySettings> {
     const settings = await this.getOrCreate();
+    const changed = describeChangedSettings(settings.get({ plain: true }), dto);
     await settings.update(dto);
+    if (changed) this.announce('Platform security settings changed', `Updated: ${changed}.`);
     return settings;
   }
 
@@ -63,7 +79,9 @@ export class SecuritySettingsService {
     if (existing) {
       throw new BadRequestException(`${dto.ipOrCidr} is already on the allowlist.`);
     }
-    return this.allowedIpModel.create({ ipOrCidr: dto.ipOrCidr });
+    const created = await this.allowedIpModel.create({ ipOrCidr: dto.ipOrCidr });
+    this.announce('IP added to the allowlist', `${dto.ipOrCidr} can now reach the Super Admin portal.`);
+    return created;
   }
 
   /**
@@ -77,6 +95,7 @@ export class SecuritySettingsService {
       throw new NotFoundException(`Allowed IP entry ${id} not found.`);
     }
     await entry.destroy();
+    this.announce('IP removed from the allowlist', `${entry.ipOrCidr} can no longer reach the Super Admin portal while the allowlist is on.`);
     return { success: true };
   }
 

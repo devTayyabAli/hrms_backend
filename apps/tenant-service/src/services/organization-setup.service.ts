@@ -1,4 +1,5 @@
-import { HttpStatus, Injectable, Logger } from '@nestjs/common';
+import { HttpStatus, Injectable, Logger, Optional } from '@nestjs/common';
+import { PlatformNotifierService } from './platform-notifier.service';
 import {
   Tenant,
   TenantStatus,
@@ -56,6 +57,7 @@ export class OrganizationSetupService {
   constructor(
     private tenantService: TenantService,
     private readonly modelProvider: TenantModelProviderService,
+    @Optional() private readonly platformNotifier?: PlatformNotifierService,
   ) { }
 
   /**
@@ -553,6 +555,10 @@ export class OrganizationSetupService {
     });
 
     this.logger.log(`Organization ${tenant.id} (${tenant.name}) setup COMPLETED. Tenant status set to ACTIVE.`);
+    this.platformNotifier?.account(
+      `${tenant.organizationName || tenant.name} is live`,
+      'Its admin finished the setup wizard; the organization is now active.',
+    );
 
     return {
       message: 'Organization setup completed successfully. Organization is now ACTIVE.',

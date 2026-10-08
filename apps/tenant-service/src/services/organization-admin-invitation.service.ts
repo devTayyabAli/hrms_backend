@@ -1,4 +1,4 @@
-import { Injectable, Inject, Logger } from '@nestjs/common';
+import { Injectable, Inject, Logger, Optional } from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
 import { ConfigService } from '@nestjs/config';
 import { ClientProxy } from '@nestjs/microservices';
@@ -13,6 +13,7 @@ import {
 import { OrganizationAdminInvitation, InvitationStatus } from '../models/organization-admin-invitation.model';
 import { Tenant, TenantStatus, TenantSetupStatus, TenantProvisioningStatus } from '../models/tenant.model';
 import { TenantService } from './tenant.service';
+import { PlatformNotifierService } from './platform-notifier.service';
 
 export interface AdminInvitationResult {
   invitationId: string;
@@ -36,6 +37,7 @@ export class OrganizationAdminInvitationService {
     private readonly config: ConfigService,
     @Inject(SERVICES.AUTH_SERVICE) private readonly authClient: ClientProxy,
     @Inject(SERVICES.USER_SERVICE) private readonly userClient: ClientProxy,
+    @Optional() private readonly platformNotifier?: PlatformNotifierService,
   ) {}
 
   /**
@@ -394,6 +396,10 @@ export class OrganizationAdminInvitationService {
 
     this.logger.log(
       `Organization Admin (${invitation.adminEmail}) activated for tenant ${tenant.id}. Tenant status: SETUP_IN_PROGRESS.`,
+    );
+    this.platformNotifier?.account(
+      `${tenant.organizationName || tenant.name}: admin activated their account`,
+      `${invitation.adminEmail} accepted the invitation and is now setting up the organization.`,
     );
 
     return {

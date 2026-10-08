@@ -2,6 +2,11 @@ import { Controller } from '@nestjs/common';
 import { MessagePattern, Payload } from '@nestjs/microservices';
 import {
   MESSAGE_PATTERNS,
+  PlatformNotificationListPayloadDto,
+  PlatformNotificationReadPayloadDto,
+  PlatformNotifyPayloadDto,
+  PushSubscribePayloadDto,
+  PushUnsubscribePayloadDto,
   RegisterTenantDto,
   OnboardOrganizationDto,
   ForgotPasswordDto,
@@ -76,6 +81,7 @@ import { CustomDomainsService } from '../services/custom-domains.service';
 import { MaintenanceSettingsService } from '../services/maintenance-settings.service';
 import { HelpSupportService } from '../services/help-support.service';
 import { AiConversationService } from '../services/ai-conversation.service';
+import { PlatformNotificationService } from '../services/platform-notification.service';
 
 @Controller()
 export class AuthMicroserviceController {
@@ -93,6 +99,7 @@ export class AuthMicroserviceController {
     private readonly maintenanceSettingsService: MaintenanceSettingsService,
     private readonly helpSupportService: HelpSupportService,
     private readonly aiConversationService: AiConversationService,
+    private readonly platformNotificationService: PlatformNotificationService,
   ) { }
 
   // The former `wrapRpcError` helper lived here and re-implemented, per call
@@ -298,6 +305,51 @@ export class AuthMicroserviceController {
   @MessagePattern(MESSAGE_PATTERNS.PROFILE.UPDATE_NOTIFICATIONS)
   updateNotificationPreferences(@Payload() payload: UpdateNotificationsPayloadDto) {
     return this.profileService.updateNotificationPreferences(payload.superAdminId, payload.dto);
+  }
+
+  // ==========================================
+  // SUPER ADMIN NOTIFICATIONS (bell, browser push)
+  // ==========================================
+
+  @MessagePattern(MESSAGE_PATTERNS.PLATFORM_NOTIFICATIONS.LIST)
+  listPlatformNotifications(@Payload() payload: PlatformNotificationListPayloadDto) {
+    return this.platformNotificationService.list(payload.superAdminId, payload.limit);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PLATFORM_NOTIFICATIONS.MARK_READ)
+  markPlatformNotificationRead(@Payload() payload: PlatformNotificationReadPayloadDto) {
+    return this.platformNotificationService.markRead(payload.superAdminId, payload.id);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PLATFORM_NOTIFICATIONS.MARK_ALL_READ)
+  markAllPlatformNotificationsRead(@Payload() payload: SuperAdminIdPayloadDto) {
+    return this.platformNotificationService.markAllRead(payload.superAdminId);
+  }
+
+  /** Other services (organizations, billing) reporting events for Super Admins. */
+  @MessagePattern(MESSAGE_PATTERNS.PLATFORM_NOTIFICATIONS.NOTIFY)
+  async notifyPlatform(@Payload() payload: PlatformNotifyPayloadDto) {
+    return { success: true, created: await this.platformNotificationService.notify(payload) };
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PLATFORM_NOTIFICATIONS.PUSH_CONFIG)
+  getPushConfig() {
+    return this.platformNotificationService.pushConfig();
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PLATFORM_NOTIFICATIONS.PUSH_SUBSCRIBE)
+  subscribePush(@Payload() payload: PushSubscribePayloadDto) {
+    return this.platformNotificationService.subscribe(payload.superAdminId, payload.subscription, payload.userAgent);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PLATFORM_NOTIFICATIONS.PUSH_UNSUBSCRIBE)
+  unsubscribePush(@Payload() payload: PushUnsubscribePayloadDto) {
+    return this.platformNotificationService.unsubscribe(payload.superAdminId, payload.endpoint);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PLATFORM_NOTIFICATIONS.PUSH_TEST)
+  sendTestPush(@Payload() payload: SuperAdminIdPayloadDto) {
+    return this.platformNotificationService.sendTest(payload.superAdminId);
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PROFILE.GET_SESSIONS)

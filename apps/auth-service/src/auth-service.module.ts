@@ -31,6 +31,7 @@ import { MaintenanceSettingsService } from './services/maintenance-settings.serv
 import { AccountLockoutService } from './services/account-lockout.service';
 import { HelpSupportService } from './services/help-support.service';
 import { AiConversationService } from './services/ai-conversation.service';
+import { PlatformNotificationService } from './services/platform-notification.service';
 
 import { AuthMicroserviceController } from './controllers/auth.controller';
 
@@ -51,6 +52,8 @@ import {
   KnowledgeBaseArticle,
   VideoTutorial,
   AiConversation,
+  PlatformNotification,
+  PushSubscription,
 } from './models';
 
 @Module({
@@ -81,6 +84,8 @@ import {
       KnowledgeBaseArticle,
       VideoTutorial,
       AiConversation,
+      PlatformNotification,
+      PushSubscription,
     ]),
 
     JwtModule.registerAsync({
@@ -151,6 +156,7 @@ import {
     AccountLockoutService,
     HelpSupportService,
     AiConversationService,
+    PlatformNotificationService,
   ],
 
   controllers: [AuthMicroserviceController],

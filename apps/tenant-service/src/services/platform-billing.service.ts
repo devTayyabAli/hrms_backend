@@ -1,4 +1,5 @@
-import { Injectable, Logger, HttpStatus } from '@nestjs/common';
+import { Injectable, Logger, HttpStatus, Optional } from '@nestjs/common';
+import { PlatformNotifierService } from './platform-notifier.service';
 import { InjectModel } from '@nestjs/sequelize';
 import { Op, fn, col } from 'sequelize';
 import {
@@ -71,7 +72,14 @@ export class PlatformBillingService {
     @InjectModel(BillingEvent)
     private readonly billingEventModel: typeof BillingEvent,
     private readonly providerFactory: PaymentProviderFactory,
+    @Optional() private readonly platformNotifier?: PlatformNotifierService,
   ) {}
+
+  /** Manual subscription changes write no billing event, so they announce themselves. */
+  private announceSubscription(tenantId: string, title: (org: string) => string, body: string) {
+    if (!this.platformNotifier) return;
+    void this.platformNotifier.organizationName(tenantId).then((org) => this.platformNotifier!.account(title(org), body, '/subscriptions'));
+  }
 
   // ---------------------------------------------------------
   // PLAN MANAGEMENT
@@ -1118,6 +1126,7 @@ export class PlatformBillingService {
     this.logger.log(
       `Subscription '${subscriptionId}' cancelled for tenant '${tenantId}'`,
     );
+    this.announceSubscription(tenantId, (org) => `${org} cancelled its subscription`, subscription.cancellationReason || 'No reason was given.');
     return subscription;
   }
 
@@ -1143,6 +1152,7 @@ export class PlatformBillingService {
     });
 
     this.logger.log(`Subscription '${subscriptionId}' suspended`);
+    this.announceSubscription(subscription.tenantId, (org) => `${org}'s subscription was suspended`, 'Suspended by a platform administrator.');
     return subscription;
   }
 

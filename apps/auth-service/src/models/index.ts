@@ -14,3 +14,5 @@ export * from './support-ticket.model';
 export * from './knowledge-base-article.model';
 export * from './video-tutorial.model';
 export * from './ai-conversation.model';
+export * from './platform-notification.model';
+export * from './push-subscription.model';

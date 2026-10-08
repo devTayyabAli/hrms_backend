@@ -33,6 +33,8 @@ import {
   SecuritySettings,
   AllowedIpAddress,
   PlatformDomain,
+  PlatformNotification,
+  PushSubscription,
 } from '../models';
 
 dotenv.config({ path: '.env.development' });
@@ -49,6 +51,8 @@ const PLATFORM_MODELS = [
   SecuritySettings,
   AllowedIpAddress,
   PlatformDomain,
+  PlatformNotification,
+  PushSubscription,
 ];
 
 async function main(): Promise<void> {
