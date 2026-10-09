@@ -1,4 +1,9 @@
-import { Inject, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  NotFoundException,
+  Optional,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
 import { Op } from 'sequelize';
 import { ClientProxy } from '@nestjs/microservices';
@@ -27,7 +32,9 @@ import {
   Invoice,
   BillingEvent,
 } from '../models';
+import { PlatformTenantCounters } from '@app/database';
 import { TenantProvisioningService } from './tenant-provisioning.service';
+import { setupStateOf } from './tenant-setup-state';
 import { PlatformNotifierService } from './platform-notifier.service';
 
 export interface GetPlatformOrganizationsQuery {
@@ -40,7 +47,12 @@ export interface GetPlatformOrganizationsQuery {
   sortOrder?: 'ASC' | 'DESC';
 }
 
-type TenantUserCounts = { total: number; admins: number; hrs: number; employees: number };
+type TenantUserCounts = {
+  total: number;
+  admins: number;
+  hrs: number;
+  employees: number;
+};
 
 const DEACTIVATING_SUBSCRIPTION_STATUSES = [
   SubscriptionStatus.PAST_DUE,
@@ -54,13 +66,18 @@ export class PlatformOrganizationsService {
     @InjectModel(Tenant) private readonly tenantModel: typeof Tenant,
     @InjectModel(OrganizationAdminInvitation)
     private readonly invitationModel: typeof OrganizationAdminInvitation,
-    @InjectModel(Subscription) private readonly subscriptionModel: typeof Subscription,
+    @InjectModel(Subscription)
+    private readonly subscriptionModel: typeof Subscription,
     @InjectModel(Payment) private readonly paymentModel: typeof Payment,
     @InjectModel(Invoice) private readonly invoiceModel: typeof Invoice,
-    @InjectModel(BillingEvent) private readonly billingEventModel: typeof BillingEvent,
+    @InjectModel(BillingEvent)
+    private readonly billingEventModel: typeof BillingEvent,
     @Inject(SERVICES.USER_SERVICE) private readonly userClient: ClientProxy,
     private readonly tenantProvisioningService: TenantProvisioningService,
     @Optional() private readonly platformNotifier?: PlatformNotifierService,
+    @Optional()
+    @InjectModel(PlatformTenantCounters)
+    private readonly countersModel?: typeof PlatformTenantCounters,
   ) {}
 
   /**
@@ -70,9 +87,14 @@ export class PlatformOrganizationsService {
    * an org an admin has manually disabled shouldn't read as "Active" just
    * because its subscription happens to still be paid up.
    */
-  private deriveStatus(tenant: Tenant, subscription: Subscription | undefined): OrganizationStatusFilter {
-    if (tenant.status === TenantStatus.SUSPENDED) return OrganizationStatusFilter.DEACTIVATED;
-    if (tenant.status === TenantStatus.EXPIRED) return OrganizationStatusFilter.DEACTIVATED;
+  deriveStatus(
+    tenant: Tenant,
+    subscription: Subscription | undefined,
+  ): OrganizationStatusFilter {
+    if (tenant.status === TenantStatus.SUSPENDED)
+      return OrganizationStatusFilter.DEACTIVATED;
+    if (tenant.status === TenantStatus.EXPIRED)
+      return OrganizationStatusFilter.DEACTIVATED;
 
     if (subscription) {
       switch (subscription.status) {
@@ -108,39 +130,55 @@ export class PlatformOrganizationsService {
     subscription: Subscription | undefined,
     category: OrganizationStatusFilter,
   ): string | null {
-    if (tenant.status === TenantStatus.SUSPENDED) return 'Deactivated by platform administrator';
+    if (tenant.status === TenantStatus.SUSPENDED)
+      return 'Deactivated by platform administrator';
     if (!subscription) return null;
 
-    if (DEACTIVATING_SUBSCRIPTION_STATUSES.includes(subscription.status)) return 'Payment overdue';
+    if (DEACTIVATING_SUBSCRIPTION_STATUSES.includes(subscription.status))
+      return 'Payment overdue';
 
     if (category === OrganizationStatusFilter.TRIAL) {
       if (!subscription.nextBillingDate) return 'Trial in progress';
       const daysLeft = Math.max(
         0,
-        Math.ceil((new Date(subscription.nextBillingDate).getTime() - Date.now()) / 86400000),
+        Math.ceil(
+          (new Date(subscription.nextBillingDate).getTime() - Date.now()) /
+            86400000,
+        ),
       );
       return `Trial ends in ${daysLeft} day${daysLeft === 1 ? '' : 's'}`;
     }
 
-    if (category === OrganizationStatusFilter.ACTIVE && subscription.nextBillingDate) {
+    if (
+      category === OrganizationStatusFilter.ACTIVE &&
+      subscription.nextBillingDate
+    ) {
       const expiresAt = new Date(subscription.nextBillingDate);
       return `Expires on ${expiresAt.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}`;
     }
 
-    if (subscription.status === SubscriptionStatus.PENDING_PAYMENT) return 'Awaiting first payment';
+    if (subscription.status === SubscriptionStatus.PENDING_PAYMENT)
+      return 'Awaiting first payment';
     return null;
   }
 
-  private async fetchUserCounts(tenants: Tenant[]): Promise<Record<string, TenantUserCounts>> {
+  private async fetchUserCounts(
+    tenants: Tenant[],
+  ): Promise<Record<string, TenantUserCounts>> {
     if (tenants.length === 0) return {};
     return firstValueFrom(
-      this.userClient.send<Record<string, TenantUserCounts>>(MESSAGE_PATTERNS.USER.GET_TENANT_USER_COUNTS, {
-        tenantIds: tenants.map((t) => t.id),
-      }),
+      this.userClient.send<Record<string, TenantUserCounts>>(
+        MESSAGE_PATTERNS.USER.GET_TENANT_USER_COUNTS,
+        {
+          tenantIds: tenants.map((t) => t.id),
+        },
+      ),
     );
   }
 
-  private async fetchPrimaryAdmins(tenants: Tenant[]): Promise<Record<string, OrganizationAdminInvitation>> {
+  private async fetchPrimaryAdmins(
+    tenants: Tenant[],
+  ): Promise<Record<string, OrganizationAdminInvitation>> {
     if (tenants.length === 0) return {};
     const invitations = await this.invitationModel.findAll({
       where: { tenantId: { [Op.in]: tenants.map((t) => t.id) } },
@@ -159,7 +197,9 @@ export class PlatformOrganizationsService {
    * Each tenant's most recent subscription (a tenant may have an old
    * CANCELLED one and a newer ACTIVE one — only the latest reflects reality).
    */
-  private async fetchLatestSubscriptions(tenants: Tenant[]): Promise<Record<string, Subscription>> {
+  private async fetchLatestSubscriptions(
+    tenants: Tenant[],
+  ): Promise<Record<string, Subscription>> {
     if (tenants.length === 0) return {};
     const subscriptions = await this.subscriptionModel.findAll({
       where: { tenantId: { [Op.in]: tenants.map((t) => t.id) } },
@@ -176,8 +216,11 @@ export class PlatformOrganizationsService {
   }
 
   /** PENDING past its expiry reads as EXPIRED; the row is only updated when the link is opened. */
-  private invitationState(invitation: OrganizationAdminInvitation): InvitationStatus {
-    return invitation.status === InvitationStatus.PENDING && new Date(invitation.expiresAt).getTime() < Date.now()
+  private invitationState(
+    invitation: OrganizationAdminInvitation,
+  ): InvitationStatus {
+    return invitation.status === InvitationStatus.PENDING &&
+      new Date(invitation.expiresAt).getTime() < Date.now()
       ? InvitationStatus.EXPIRED
       : invitation.status;
   }
@@ -189,6 +232,10 @@ export class PlatformOrganizationsService {
     counts: TenantUserCounts | undefined,
   ) {
     const derivedStatus = this.deriveStatus(tenant, subscription);
+    const setup = setupStateOf(
+      tenant,
+      this.tenantProvisioningService.isSetupRunning(tenant.id),
+    );
     return {
       id: tenant.id,
       organizationName: tenant.organizationName || tenant.name,
@@ -197,8 +244,10 @@ export class PlatformOrganizationsService {
       planType: subscription?.plan?.name || tenant.planType || null,
       status: derivedStatus,
       isActive: tenant.isActive,
+      /** Database, modules, invitation: `failed` offers "Retry setup". */
+      setup,
       primaryAdmin: {
-        name: invitation?.adminName || null,
+        name: invitation?.adminName || tenant.setupRequest?.adminName || null,
         email: invitation?.adminEmail || tenant.adminEmail || null,
         phone: invitation?.phone || tenant.phone || null,
         // Organizations provisioned before `adminDesignation` was recorded
@@ -215,7 +264,10 @@ export class PlatformOrganizationsService {
       adminInvitation: {
         status: invitation ? this.invitationState(invitation) : null,
         expiresAt: invitation?.expiresAt ?? null,
-        canResend: tenant.isActive && tenant.status === TenantStatus.PENDING_ADMIN_ACTIVATION,
+        canResend:
+          tenant.isActive &&
+          tenant.status === TenantStatus.PENDING_ADMIN_ACTIVATION &&
+          setup.state === 'ready',
       },
       usersCount: counts?.total ?? 0,
       joinedOn: tenant.createdAt,
@@ -233,6 +285,147 @@ export class PlatformOrganizationsService {
     const page = query.page && query.page > 0 ? query.page : 1;
     const limit = query.limit && query.limit > 0 ? query.limit : 10;
 
+    const candidates = await this.filteredCandidates(query);
+    const total = candidates.length;
+    const start = (page - 1) * limit;
+    const pageSlice = candidates.slice(start, start + limit);
+
+    const pageTenants = pageSlice.map((c) => c.tenant);
+    const [countsMap, adminsMap] = await Promise.all([
+      this.fetchUserCounts(pageTenants),
+      this.fetchPrimaryAdmins(pageTenants),
+    ]);
+
+    const data = pageSlice.map((c) =>
+      this.toRow(
+        c.tenant,
+        c.subscription,
+        adminsMap[c.tenant.id],
+        countsMap[c.tenant.id],
+      ),
+    );
+
+    return {
+      data,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit) || 1,
+    };
+  }
+
+  /**
+   * Every organization matching the filters, as CSV. Headcounts come from the
+   * directory rollup, so no organization database is opened for the export.
+   */
+  async exportOrganizations(query: GetPlatformOrganizationsQuery) {
+    const candidates = await this.filteredCandidates(query);
+    const tenants = candidates.map((c) => c.tenant);
+    const [adminsMap, counters] = await Promise.all([
+      this.fetchPrimaryAdmins(tenants),
+      this.countersModel && tenants.length
+        ? this.countersModel.findAll({
+            where: { tenantId: { [Op.in]: tenants.map((t) => t.id) } },
+            raw: true,
+          })
+        : Promise.resolve([]),
+    ]);
+    const counts = new Map<string, any>(
+      (counters as any[]).map((c) => [c.tenantId, c]),
+    );
+
+    const STATUS: Record<string, string> = {
+      ACTIVE: 'Active',
+      TRIAL: 'Trial',
+      PENDING: 'Pending',
+      DEACTIVATED: 'Deactivated',
+    };
+    const INVITE: Record<string, string> = {
+      PENDING: 'Sent',
+      ACCEPTED: 'Accepted',
+      EXPIRED: 'Expired',
+      CANCELLED: 'Withdrawn',
+    };
+    const date = (d: Date | null | undefined) =>
+      d ? new Date(d).toISOString().slice(0, 10) : '';
+    // A leading = + - @ would be run as a formula by Excel/Sheets.
+    const cell = (value: unknown) => {
+      if (value === null || value === undefined) return '';
+      let text = String(value);
+      if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
+      return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+    };
+
+    const header = [
+      'Organization',
+      'Legal name',
+      'Domain',
+      'Status',
+      'Setup',
+      'Plan',
+      'Subscription',
+      'Primary admin',
+      'Admin email',
+      'Admin phone',
+      'Invitation',
+      'People',
+      'Active people',
+      'Industry',
+      'Company size',
+      'Country',
+      'Official email',
+      'Website',
+      'Joined',
+    ];
+    const lines = candidates.map(({ tenant, subscription }) => {
+      const row = this.toRow(
+        tenant,
+        subscription,
+        adminsMap[tenant.id],
+        undefined,
+      );
+      const c = counts.get(tenant.id);
+      return [
+        row.organizationName,
+        tenant.legalName,
+        tenant.domain,
+        tenant.isActive ? (STATUS[row.status] ?? row.status) : 'Deactivated',
+        row.setup.state === 'failed'
+          ? `Failed — ${row.setup.error}`
+          : row.setup.state === 'running'
+            ? 'In progress'
+            : 'Complete',
+        row.planType,
+        row.subscription.summary,
+        row.primaryAdmin.name,
+        row.primaryAdmin.email,
+        row.primaryAdmin.phone,
+        row.adminInvitation.status
+          ? (INVITE[row.adminInvitation.status] ?? row.adminInvitation.status)
+          : 'Not sent',
+        c?.totalUsers ?? 0,
+        c?.activeUsers ?? 0,
+        tenant.industry,
+        tenant.companySize,
+        tenant.country,
+        tenant.officialEmail,
+        tenant.website,
+        date(tenant.createdAt),
+      ]
+        .map(cell)
+        .join(',');
+    });
+
+    return {
+      filename: `organizations-${new Date().toISOString().slice(0, 10)}.csv`,
+      contentType: 'text/csv; charset=utf-8',
+      csv: `﻿${[header.join(','), ...lines].join('\r\n')}`,
+      total: candidates.length,
+    };
+  }
+
+  /** Every tenant matching the filters, with its latest subscription, in the requested order. */
+  private async filteredCandidates(query: GetPlatformOrganizationsQuery) {
     const where: Record<symbol | string, any> = query.search
       ? {
           [Op.or]: [
@@ -251,36 +444,35 @@ export class PlatformOrganizationsService {
     // Organizations are a platform-scale list (not per-tenant user data), so
     // a full scan here is the same tradeoff PlatformClientsService already
     // makes, and keeps one predictable code path instead of two.
-    const allTenants = await this.tenantModel.findAll({ where, order: [[sortBy, sortOrder]] });
+    const allTenants = await this.tenantModel.findAll({
+      where,
+      order: [[sortBy, sortOrder]],
+    });
     const subscriptionsMap = await this.fetchLatestSubscriptions(allTenants);
 
-    let candidates = allTenants.map((tenant) => ({ tenant, subscription: subscriptionsMap[tenant.id] }));
+    let candidates = allTenants.map((tenant) => ({
+      tenant,
+      subscription: subscriptionsMap[tenant.id],
+    }));
 
     if (query.status && query.status !== OrganizationStatusFilter.ALL) {
-      candidates = candidates.filter((c) => this.deriveStatus(c.tenant, c.subscription) === query.status);
+      candidates = candidates.filter(
+        (c) => this.deriveStatus(c.tenant, c.subscription) === query.status,
+      );
     }
     if (query.planType) {
       const planFilter = query.planType.toLowerCase();
       candidates = candidates.filter(
-        (c) => (c.subscription?.plan?.name || c.tenant.planType || '').toLowerCase() === planFilter,
+        (c) =>
+          (
+            c.subscription?.plan?.name ||
+            c.tenant.planType ||
+            ''
+          ).toLowerCase() === planFilter,
       );
     }
 
-    const total = candidates.length;
-    const start = (page - 1) * limit;
-    const pageSlice = candidates.slice(start, start + limit);
-
-    const pageTenants = pageSlice.map((c) => c.tenant);
-    const [countsMap, adminsMap] = await Promise.all([
-      this.fetchUserCounts(pageTenants),
-      this.fetchPrimaryAdmins(pageTenants),
-    ]);
-
-    const data = pageSlice.map((c) =>
-      this.toRow(c.tenant, c.subscription, adminsMap[c.tenant.id], countsMap[c.tenant.id]),
-    );
-
-    return { data, total, page, limit, totalPages: Math.ceil(total / limit) || 1 };
+    return candidates;
   }
 
   async getOrganizationById(tenantId: string) {
@@ -297,7 +489,12 @@ export class PlatformOrganizationsService {
     // paginated list payload stays lean — only the detail view and the edit
     // form need these, and they fetch one organization at a time.
     return {
-      ...this.toRow(tenant, subscriptionsMap[tenant.id], adminsMap[tenant.id], countsMap[tenant.id]),
+      ...this.toRow(
+        tenant,
+        subscriptionsMap[tenant.id],
+        adminsMap[tenant.id],
+        countsMap[tenant.id],
+      ),
       profile: {
         legalName: tenant.legalName ?? null,
         officialEmail: tenant.officialEmail ?? null,
@@ -324,7 +521,9 @@ export class PlatformOrganizationsService {
     // `domain` is a unique column, so a collision would surface as a raw
     // Sequelize constraint error rather than something the UI can show.
     if (dto.domain && dto.domain !== tenant.domain) {
-      const clash = await this.tenantModel.findOne({ where: { domain: dto.domain } });
+      const clash = await this.tenantModel.findOne({
+        where: { domain: dto.domain },
+      });
       if (clash && clash.id !== tenantId) {
         throw new TenantException(
           TenantErrorCode.INVALID_TENANT_CONTEXT,
@@ -335,7 +534,9 @@ export class PlatformOrganizationsService {
 
     // Only keys actually present are applied, so an omitted field keeps its
     // stored value instead of being nulled by an undefined.
-    const patch = Object.fromEntries(Object.entries(dto).filter(([, value]) => value !== undefined));
+    const patch = Object.fromEntries(
+      Object.entries(dto).filter(([, value]) => value !== undefined),
+    );
     if (Object.keys(patch).length > 0) {
       await tenant.update(patch);
     }
@@ -353,7 +554,10 @@ export class PlatformOrganizationsService {
    * had got to — not straight to ACTIVE, which skipped admin activation and
    * setup for an organization whose admin had never signed in.
    */
-  async updateOrganizationStatus(tenantId: string, status: OrganizationActionStatus) {
+  async updateOrganizationStatus(
+    tenantId: string,
+    status: OrganizationActionStatus,
+  ) {
     const tenant = await this.tenantModel.findByPk(tenantId);
     if (!tenant) {
       throw new NotFoundException(`Organization ${tenantId} not found`);
@@ -361,7 +565,10 @@ export class PlatformOrganizationsService {
 
     if (status === OrganizationActionStatus.ACTIVE) {
       if (tenant.status === TenantStatus.SUSPENDED || !tenant.isActive) {
-        await tenant.update({ status: await this.statusOnReactivation(tenant), isActive: true });
+        await tenant.update({
+          status: await this.statusOnReactivation(tenant),
+          isActive: true,
+        });
         this.platformNotifier?.account(
           `Organization reactivated: ${tenant.organizationName || tenant.name}`,
           tenant.status === TenantStatus.PENDING_ADMIN_ACTIVATION
@@ -371,10 +578,16 @@ export class PlatformOrganizationsService {
       }
     } else if (tenant.status !== TenantStatus.SUSPENDED || tenant.isActive) {
       await this.tenantModel.sequelize!.transaction(async (transaction) => {
-        await tenant.update({ status: TenantStatus.SUSPENDED, isActive: false }, { transaction });
+        await tenant.update(
+          { status: TenantStatus.SUSPENDED, isActive: false },
+          { transaction },
+        );
         await this.invitationModel.update(
           { status: InvitationStatus.CANCELLED, cancelledAt: new Date() },
-          { where: { tenantId, status: InvitationStatus.PENDING }, transaction },
+          {
+            where: { tenantId, status: InvitationStatus.PENDING },
+            transaction,
+          },
         );
       });
       this.platformNotifier?.account(
@@ -394,12 +607,14 @@ export class PlatformOrganizationsService {
    * - no invitation on record (created before invitations existed) → ACTIVE
    */
   private async statusOnReactivation(tenant: Tenant): Promise<TenantStatus> {
-    if (tenant.setupStatus === TenantSetupStatus.COMPLETED) return TenantStatus.ACTIVE;
+    if (tenant.setupStatus === TenantSetupStatus.COMPLETED)
+      return TenantStatus.ACTIVE;
     const invitations = await this.invitationModel.findAll({
       where: { tenantId: tenant.id },
       attributes: ['status'],
     });
-    if (invitations.some((inv) => inv.status === InvitationStatus.ACCEPTED)) return TenantStatus.SETUP_IN_PROGRESS;
+    if (invitations.some((inv) => inv.status === InvitationStatus.ACCEPTED))
+      return TenantStatus.SETUP_IN_PROGRESS;
     if (invitations.length > 0) return TenantStatus.PENDING_ADMIN_ACTIVATION;
     return TenantStatus.ACTIVE;
   }
@@ -422,7 +637,10 @@ export class PlatformOrganizationsService {
    * the tenant's `tenant_database_configs` row and the `tenants` row itself)
    * once the platform-side transaction has committed cleanly.
    */
-  async deleteOrganization(tenantId: string, confirmName: string): Promise<{ tenantId: string; organizationName: string }> {
+  async deleteOrganization(
+    tenantId: string,
+    confirmName: string,
+  ): Promise<{ tenantId: string; organizationName: string }> {
     const tenant = await this.tenantModel.findByPk(tenantId);
     if (!tenant) {
       throw new NotFoundException(`Organization ${tenantId} not found`);
@@ -439,11 +657,20 @@ export class PlatformOrganizationsService {
     const sequelize = this.tenantModel.sequelize;
 
     await sequelize.transaction(async (t) => {
-      await this.billingEventModel.destroy({ where: { tenantId }, transaction: t });
+      await this.billingEventModel.destroy({
+        where: { tenantId },
+        transaction: t,
+      });
       await this.paymentModel.destroy({ where: { tenantId }, transaction: t });
       await this.invoiceModel.destroy({ where: { tenantId }, transaction: t });
-      await this.subscriptionModel.destroy({ where: { tenantId }, transaction: t });
-      await this.invitationModel.destroy({ where: { tenantId }, transaction: t });
+      await this.subscriptionModel.destroy({
+        where: { tenantId },
+        transaction: t,
+      });
+      await this.invitationModel.destroy({
+        where: { tenantId },
+        transaction: t,
+      });
     });
 
     // Point of no return: drops the tenant's isolated database and its
@@ -467,13 +694,17 @@ export class PlatformOrganizationsService {
 
     const growthFor = (subset: Tenant[]) => {
       const thisMonth = subset.filter((t) => t.createdAt >= monthStart).length;
-      const lastMonth = subset.filter((t) => t.createdAt >= prevMonthStart && t.createdAt < monthStart).length;
+      const lastMonth = subset.filter(
+        (t) => t.createdAt >= prevMonthStart && t.createdAt < monthStart,
+      ).length;
       if (lastMonth === 0) return thisMonth > 0 ? 100 : 0;
       return Math.round(((thisMonth - lastMonth) / lastMonth) * 1000) / 10;
     };
 
     const byCategory = (category: OrganizationStatusFilter) =>
-      tenants.filter((t) => this.deriveStatus(t, subscriptionsMap[t.id]) === category);
+      tenants.filter(
+        (t) => this.deriveStatus(t, subscriptionsMap[t.id]) === category,
+      );
 
     const active = byCategory(OrganizationStatusFilter.ACTIVE);
     const trial = byCategory(OrganizationStatusFilter.TRIAL);
@@ -505,7 +736,11 @@ export class PlatformOrganizationsService {
   async getOverview(months = 6) {
     const span = Math.min(Math.max(Math.trunc(months) || 6, 1), 24);
     const now = new Date();
-    const windowStart = new Date(now.getFullYear(), now.getMonth() - (span - 1), 1);
+    const windowStart = new Date(
+      now.getFullYear(),
+      now.getMonth() - (span - 1),
+      1,
+    );
 
     const tenants = await this.tenantModel.findAll({
       where: { createdAt: { [Op.gte]: windowStart } },
@@ -513,22 +748,47 @@ export class PlatformOrganizationsService {
     const subscriptionsMap = await this.fetchLatestSubscriptions(tenants);
 
     const buckets = Array.from({ length: span }, (_, i) => {
-      const date = new Date(windowStart.getFullYear(), windowStart.getMonth() + i, 1);
-      return { key: `${date.getFullYear()}-${date.getMonth()}`, label: date.toLocaleString('en-US', { month: 'short' }) };
+      const date = new Date(
+        windowStart.getFullYear(),
+        windowStart.getMonth() + i,
+        1,
+      );
+      return {
+        key: `${date.getFullYear()}-${date.getMonth()}`,
+        label: date.toLocaleString('en-US', { month: 'short' }),
+      };
     });
     const indexOf = new Map(buckets.map((b, i) => [b.key, i]));
 
     const categories = [
-      { key: 'active', label: 'Active', status: OrganizationStatusFilter.ACTIVE },
+      {
+        key: 'active',
+        label: 'Active',
+        status: OrganizationStatusFilter.ACTIVE,
+      },
       { key: 'trial', label: 'Trial', status: OrganizationStatusFilter.TRIAL },
-      { key: 'pending', label: 'Pending', status: OrganizationStatusFilter.PENDING },
-      { key: 'deactivated', label: 'Deactivated', status: OrganizationStatusFilter.DEACTIVATED },
+      {
+        key: 'pending',
+        label: 'Pending',
+        status: OrganizationStatusFilter.PENDING,
+      },
+      {
+        key: 'deactivated',
+        label: 'Deactivated',
+        status: OrganizationStatusFilter.DEACTIVATED,
+      },
     ];
-    const series = categories.map((c) => ({ key: c.key, label: c.label, values: new Array<number>(span).fill(0) }));
+    const series = categories.map((c) => ({
+      key: c.key,
+      label: c.label,
+      values: new Array<number>(span).fill(0),
+    }));
 
     for (const tenant of tenants) {
       const created = new Date(tenant.createdAt);
-      const index = indexOf.get(`${created.getFullYear()}-${created.getMonth()}`);
+      const index = indexOf.get(
+        `${created.getFullYear()}-${created.getMonth()}`,
+      );
       if (index === undefined) continue;
       const status = this.deriveStatus(tenant, subscriptionsMap[tenant.id]);
       const target = categories.findIndex((c) => c.status === status);
@@ -545,7 +805,8 @@ export class PlatformOrganizationsService {
 
     const counts = new Map<string, number>();
     for (const tenant of tenants) {
-      const plan = subscriptionsMap[tenant.id]?.plan?.name || tenant.planType || 'No Plan';
+      const plan =
+        subscriptionsMap[tenant.id]?.plan?.name || tenant.planType || 'No Plan';
       counts.set(plan, (counts.get(plan) ?? 0) + 1);
     }
 
@@ -567,16 +828,30 @@ export class PlatformOrganizationsService {
     const subscriptionsMap = await this.fetchLatestSubscriptions(tenants);
     const now = Date.now();
     const weekAhead = now + 7 * 86400000;
-    const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+    const plural = (n: number, one: string, many: string) =>
+      `${n} ${n === 1 ? one : many}`;
     const latest = (dates: (Date | string | null | undefined)[]) => {
-      const times = dates.filter(Boolean).map((d) => new Date(d as Date).getTime());
+      const times = dates
+        .filter(Boolean)
+        .map((d) => new Date(d as Date).getTime());
       return times.length ? new Date(Math.max(...times)).toISOString() : null;
     };
 
-    const rows = tenants.map((tenant) => ({ tenant, subscription: subscriptionsMap[tenant.id] }));
-    const alerts: { id: string; kind: 'warning' | 'document' | 'calendar'; title: string; description: string; at: string | null }[] = [];
+    const rows = tenants.map((tenant) => ({
+      tenant,
+      subscription: subscriptionsMap[tenant.id],
+    }));
+    const alerts: {
+      id: string;
+      kind: 'warning' | 'document' | 'calendar';
+      title: string;
+      description: string;
+      at: string | null;
+    }[] = [];
 
-    const failed = rows.filter((r) => r.tenant.provisioningStatus === TenantProvisioningStatus.FAILED);
+    const failed = rows.filter(
+      (r) => r.tenant.provisioningStatus === TenantProvisioningStatus.FAILED,
+    );
     if (failed.length) {
       alerts.push({
         id: 'provisioning-failed',
@@ -588,7 +863,9 @@ export class PlatformOrganizationsService {
     }
 
     const overdue = rows.filter(
-      (r) => r.subscription && DEACTIVATING_SUBSCRIPTION_STATUSES.includes(r.subscription.status),
+      (r) =>
+        r.subscription &&
+        DEACTIVATING_SUBSCRIPTION_STATUSES.includes(r.subscription.status),
     );
     if (overdue.length) {
       alerts.push({
@@ -596,11 +873,19 @@ export class PlatformOrganizationsService {
         kind: 'warning',
         title: `${plural(overdue.length, 'organization has', 'organizations have')} overdue or suspended subscriptions`,
         description: 'Please review and take action.',
-        at: latest(overdue.map((r) => r.subscription!.pastDueAt || r.subscription!.updatedAt)),
+        at: latest(
+          overdue.map(
+            (r) => r.subscription!.pastDueAt || r.subscription!.updatedAt,
+          ),
+        ),
       });
     }
 
-    const pending = rows.filter((r) => this.deriveStatus(r.tenant, r.subscription) === OrganizationStatusFilter.PENDING);
+    const pending = rows.filter(
+      (r) =>
+        this.deriveStatus(r.tenant, r.subscription) ===
+        OrganizationStatusFilter.PENDING,
+    );
     if (pending.length) {
       alerts.push({
         id: 'organizations-pending',
@@ -613,7 +898,11 @@ export class PlatformOrganizationsService {
 
     const dueSoon = (status: SubscriptionStatus) =>
       rows.filter((r) => {
-        if (r.subscription?.status !== status || !r.subscription.nextBillingDate) return false;
+        if (
+          r.subscription?.status !== status ||
+          !r.subscription.nextBillingDate
+        )
+          return false;
         const due = new Date(r.subscription.nextBillingDate).getTime();
         return due >= now && due <= weekAhead;
       });

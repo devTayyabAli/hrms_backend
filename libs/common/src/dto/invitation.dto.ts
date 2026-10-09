@@ -6,6 +6,7 @@ import {
   IsUUID,
   ValidateNested,
   IsDefined,
+  MaxLength,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
@@ -20,7 +21,17 @@ export class CreateAdminInvitationDto {
   @ApiProperty({ example: 'Alice Smith', required: false })
   @IsString()
   @IsOptional()
+  @MaxLength(120)
   adminName?: string;
+
+  @ApiProperty({
+    example: 'Welcome aboard — your workspace is ready.',
+    required: false,
+  })
+  @IsString()
+  @IsOptional()
+  @MaxLength(1000)
+  customMessage?: string;
 }
 
 export class ActivateAdminDto {
@@ -65,7 +76,10 @@ export class CreateAdminInvitationMessageDto {
   @IsDefined()
   dto: CreateAdminInvitationDto;
 
-  @ApiProperty({ example: 'd4b12f6a-04b3-4f8a-9892-9653d9e21183', required: false })
+  @ApiProperty({
+    example: 'd4b12f6a-04b3-4f8a-9892-9653d9e21183',
+    required: false,
+  })
   @IsString()
   @IsOptional()
   createdBy?: string;

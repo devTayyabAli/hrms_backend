@@ -3,15 +3,34 @@ import { Sequelize } from 'sequelize-typescript';
 import { TenantService } from './tenant.service';
 import { TenantDatabaseConfigService } from './tenant-database-config.service';
 import { OrganizationModuleAccessService } from './organization-module-access.service';
-import { OrganizationAdminInvitationService, AdminInvitationResult } from './organization-admin-invitation.service';
+import {
+  OrganizationAdminInvitationService,
+  AdminInvitationResult,
+} from './organization-admin-invitation.service';
 import { PlatformBillingService } from './platform-billing.service';
 import { DirectoryProjectionService } from './directory-projection.service';
 import { PlatformNotifierService } from './platform-notifier.service';
-import { BaseTenantModelProvider, TenantConnectionManager } from '@app/tenant-context';
+import {
+  BaseTenantModelProvider,
+  TenantConnectionManager,
+} from '@app/tenant-context';
 import { bindModelsToConnection, resolveDbCredentials } from '@app/database';
 import { TENANT_OPERATIONAL_MODELS } from './tenant-model-provider.service';
-import { TenantProvisioningStatus, TenantStatus, TenantSetupStatus } from '../models/tenant.model';
-import { TenantException, TenantErrorCode, CreateOrganizationOnboardingDto, ConfigureModuleAccessDto, BillingCycle, SubscriptionStatus } from '@app/common';
+import {
+  TenantProvisioningStatus,
+  TenantStatus,
+  TenantSetupStatus,
+  TenantSetupRequest,
+} from '../models/tenant.model';
+import { setupStateOf } from './tenant-setup-state';
+import {
+  TenantException,
+  TenantErrorCode,
+  CreateOrganizationOnboardingDto,
+  ConfigureModuleAccessDto,
+  BillingCycle,
+  SubscriptionStatus,
+} from '@app/common';
 
 /** Where a background organization creation has got to. */
 export interface OrganizationCreationStatus {
@@ -58,14 +77,16 @@ export class TenantProvisioningService {
     private billingService: PlatformBillingService,
     private directoryProjection: DirectoryProjectionService,
     @Optional() private platformNotifier?: PlatformNotifierService,
-  ) { }
+  ) {}
 
   /**
    * Safe generator for PostgreSQL database names (Phase E)
    * Pattern: hrms_<sanitized_tenant_identifier>
    */
   public generateDatabaseName(tenantId: string): string {
-    const safeIdentifier = tenantId.replace(/[^a-zA-Z0-9_]/g, '_').toLowerCase();
+    const safeIdentifier = tenantId
+      .replace(/[^a-zA-Z0-9_]/g, '_')
+      .toLowerCase();
     return `hrms_${safeIdentifier}`;
   }
 
@@ -92,7 +113,9 @@ export class TenantProvisioningService {
    * caller got a 504 while the organization was still created, and retrying
    * then failed on "already exists".
    */
-  async startOrganizationCreation(data: any): Promise<OrganizationCreationResult> {
+  async startOrganizationCreation(
+    data: any,
+  ): Promise<OrganizationCreationResult> {
     let started!: (tenant: any) => void;
     const tenantCreated = new Promise<any>((resolve) => (started = resolve));
 
@@ -106,7 +129,11 @@ export class TenantProvisioningService {
     const orgName = tenant.organizationName || tenant.name;
     run.then(
       (result) => {
-        this.finishCreation(tenant.id, { tenantId: tenant.id, state: 'done', result });
+        this.finishCreation(tenant.id, {
+          tenantId: tenant.id,
+          state: 'done',
+          result,
+        });
         this.platformNotifier?.account(
           `Organization created: ${orgName}`,
           result.invitation
@@ -115,7 +142,9 @@ export class TenantProvisioningService {
         );
       },
       (error: any) => {
-        this.logger.error(`Creating organization ${tenant.id} failed: ${error?.message ?? error}`);
+        this.logger.error(
+          `Creating organization ${tenant.id} failed: ${error?.message ?? error}`,
+        );
         this.finishCreation(tenant.id, {
           tenantId: tenant.id,
           state: 'failed',
@@ -146,13 +175,23 @@ export class TenantProvisioningService {
     setTimeout(() => this.creations.delete(tenantId), 60 * 60 * 1000).unref?.();
   }
 
-  async getCreationStatus(tenantId: string): Promise<OrganizationCreationStatus> {
+  async getCreationStatus(
+    tenantId: string,
+  ): Promise<OrganizationCreationStatus> {
     const known = this.creations.get(tenantId);
     if (known) return known;
 
     // Not created by this process (or it restarted): read the tenant row.
     const tenant = await this.tenantService.getTenantById(tenantId);
-    if (tenant.provisioningStatus === TenantProvisioningStatus.READY) {
+    const setup = setupStateOf(tenant, false);
+    if (setup.state === 'failed') {
+      return {
+        tenantId,
+        state: 'failed',
+        error: setup.error || 'Organization setup failed.',
+      };
+    }
+    if (setup.state === 'ready') {
       return {
         tenantId,
         state: 'done',
@@ -167,9 +206,6 @@ export class TenantProvisioningService {
           message: `Organization '${tenant.organizationName || tenant.name}' created.`,
         },
       };
-    }
-    if (tenant.provisioningStatus === TenantProvisioningStatus.FAILED) {
-      return { tenantId, state: 'failed', error: tenant.provisioningError || 'Organization creation failed.' };
     }
     return { tenantId, state: 'running' };
   }
@@ -187,14 +223,30 @@ export class TenantProvisioningService {
 
     const orgName = org.organizationName || data.organizationName || data.name;
     const legalName = org.legalName || data.legalName || orgName;
-    const businessEmail = org.businessEmail || data.businessEmail || data.officialEmail;
-    const adminEmail = admin.adminEmail || data.adminEmail || data.adminDetails?.workEmail || businessEmail;
-    const adminName = admin.adminName || data.adminName || (data.adminDetails ? `${data.adminDetails.firstName} ${data.adminDetails.lastName}`.trim() : 'Admin');
-    const firstName = data.adminDetails?.firstName || (adminName ? adminName.split(' ')[0] : 'Admin');
-    const lastName = data.adminDetails?.lastName || (adminName ? adminName.split(' ').slice(1).join(' ') : '');
-    const fullAdminName = adminName || `${firstName} ${lastName}`.trim() || 'Admin';
+    const businessEmail =
+      org.businessEmail || data.businessEmail || data.officialEmail;
+    const adminEmail =
+      admin.adminEmail ||
+      data.adminEmail ||
+      data.adminDetails?.workEmail ||
+      businessEmail;
+    const adminName =
+      admin.adminName ||
+      data.adminName ||
+      (data.adminDetails
+        ? `${data.adminDetails.firstName} ${data.adminDetails.lastName}`.trim()
+        : 'Admin');
+    const firstName =
+      data.adminDetails?.firstName ||
+      (adminName ? adminName.split(' ')[0] : 'Admin');
+    const lastName =
+      data.adminDetails?.lastName ||
+      (adminName ? adminName.split(' ').slice(1).join(' ') : '');
+    const fullAdminName =
+      adminName || `${firstName} ${lastName}`.trim() || 'Admin';
     const domain = org.domain || data.domain;
-    const industry = org.industry || data.industry || data.adminDetails?.industry;
+    const industry =
+      org.industry || data.industry || data.adminDetails?.industry;
     const phone = org.phone || data.phone || data.adminDetails?.phone;
     const adminPhone = admin.adminPhone || data.adminPhone || phone;
     const country = org.country || data.country;
@@ -207,8 +259,13 @@ export class TenantProvisioningService {
     // wizard collects no job title, so the role itself is the designation.
     const adminDesignation =
       admin.adminDesignation || data.adminDesignation || 'Organization Admin';
-    const sendInvitation = admin.sendInvitation !== false && data.sendInvitation !== false;
-    const customInvitationMessage = admin.customMessage || data.customMessage || data.adminDetails?.customInvitationMessage || data.customInvitationMessage;
+    const sendInvitation =
+      admin.sendInvitation !== false && data.sendInvitation !== false;
+    const customInvitationMessage =
+      admin.customMessage ||
+      data.customMessage ||
+      data.adminDetails?.customInvitationMessage ||
+      data.customInvitationMessage;
     const planId = data.planId;
     const billingCycle = data.billingCycle || BillingCycle.MONTHLY;
 
@@ -232,13 +289,16 @@ export class TenantProvisioningService {
         existing.provisioningStatus === TenantProvisioningStatus.FAILED ||
         (existing.provisioningStatus !== TenantProvisioningStatus.READY &&
           !this.creations.has(existing.id) &&
-          Date.now() - new Date(existing.updatedAt).getTime() > STALE_PROVISIONING_MS);
+          Date.now() - new Date(existing.updatedAt).getTime() >
+            STALE_PROVISIONING_MS);
       if (existing.status === TenantStatus.DRAFT && abandoned) {
         this.logger.warn(
           `Found previously failed draft tenant ${existing.id} with slug '${slug}'. Cleaning up before retrying creation.`,
         );
         const failedDbName = this.generateDatabaseName(existing.id);
-        await this.tenantDbConfigService.deleteTenantDatabaseConfig(existing.id).catch(() => {});
+        await this.tenantDbConfigService
+          .deleteTenantDatabaseConfig(existing.id)
+          .catch(() => {});
         await existing.destroy();
         await this.dropTenantDatabase(failedDbName).catch(() => {});
       } else {
@@ -246,7 +306,7 @@ export class TenantProvisioningService {
           TenantErrorCode.INVALID_TENANT_CONTEXT,
           this.creations.get(existing.id)?.state === 'running'
             ? `Organization '${slug}' is already being created. Please wait for it to finish.`
-            : `Organization with slug or domain '${slug}' already exists.`,
+            : `An organization with the name or domain '${slug}' already exists. If its setup failed, use “Retry setup” on the Organizations page.`,
         );
       }
     }
@@ -280,46 +340,177 @@ export class TenantProvisioningService {
       isActive: true,
     });
 
-    const databaseName = this.generateDatabaseName(tenant.id);
+    // Kept on the tenant so a failed setup can be retried to completion, and so
+    // a first invitation sent later still has the admin's name.
+    const modules: ConfigureModuleAccessDto[] = data.modules || [];
+    const setupRequest: TenantSetupRequest = {
+      modules: modules.map((m) => ({
+        moduleKey: m.moduleKey,
+        enabled: m.enabled,
+        allowedActions: m.allowedActions,
+      })),
+      sendInvitation,
+      adminName: fullAdminName || null,
+      adminPhone: adminPhone || null,
+      customMessage: customInvitationMessage || null,
+      planId: planId || null,
+      billingCycle: billingCycle || null,
+      completedAt: null,
+      lastError: null,
+    };
+    await tenant.update({ setupRequest });
     onTenantCreated?.(tenant);
 
-    // Step 2: Trigger Idempotent DB Provisioning Flow
-    const provisioningResult = await this.provisionTenantDatabase(tenant.id, databaseName, orgName, slug);
+    return this.completeSetup(tenant.id);
+  }
 
-    // Step 3: Configure Organization Module Access
-    const modules: ConfigureModuleAccessDto[] = data.modules || [];
-    await this.moduleAccessService.setOrganizationModules(tenant.id, modules);
+  /**
+   * Runs every setup step that hasn't finished yet: the database, module
+   * access, the admin invitation (if one was asked for and none was sent) and
+   * the subscription. Each step is safe to repeat, so a retry simply picks up
+   * where the last attempt stopped. A failure is recorded on the tenant.
+   */
+  private async completeSetup(
+    tenantId: string,
+  ): Promise<OrganizationCreationResult> {
+    let tenant = await this.tenantService.getTenantById(tenantId);
+    const request: TenantSetupRequest = tenant.setupRequest ?? {
+      modules: [],
+      sendInvitation: false,
+      adminName: null,
+      adminPhone: null,
+      customMessage: null,
+      planId: null,
+      billingCycle: null,
+      completedAt: null,
+      lastError: null,
+    };
+    const orgName = tenant.organizationName || tenant.name;
 
-    // Step 4: Handle Initial Organization Admin Invitation
+    const step = async <T>(
+      label: string,
+      run: () => Promise<T>,
+    ): Promise<T> => {
+      try {
+        return await run();
+      } catch (error: any) {
+        const message = String(
+          error?.message || error || 'Unknown error',
+        ).replace(/^Organization database provisioning failed: /, '');
+        await this.patchSetupRequest(tenantId, {
+          lastError: `${label}: ${message}`,
+        });
+        throw error;
+      }
+    };
+
+    // Step 1: the isolated database (skipped once it is READY).
+    const provisioningResult =
+      tenant.provisioningStatus === TenantProvisioningStatus.READY
+        ? null
+        : await step('Database', () =>
+            this.provisionTenantDatabase(
+              tenant.id,
+              this.generateDatabaseName(tenant.id),
+              orgName,
+              tenant.slug,
+            ),
+          );
+
+    // Step 2: module access.
+    if (request.modules.length) {
+      await step('Module access', () =>
+        this.moduleAccessService.setOrganizationModules(
+          tenant.id,
+          request.modules as ConfigureModuleAccessDto[],
+        ),
+      );
+    }
+
+    // Step 3: the admin invitation — only if asked for and not already sent.
     let invitationResult: AdminInvitationResult | undefined;
-    if (sendInvitation) {
-      invitationResult = await this.invitationService.createAdminInvitation(
-        tenant.id,
-        adminEmail,
-        fullAdminName,
-        'SuperAdmin',
-        adminPhone,
-        customInvitationMessage,
+    if (
+      request.sendInvitation &&
+      !(await this.invitationService.hasInvitation(tenant.id))
+    ) {
+      invitationResult = await step('Admin invitation', () =>
+        this.invitationService.createAdminInvitation(
+          tenant.id,
+          tenant.adminEmail,
+          request.adminName ?? undefined,
+          'SuperAdmin',
+          request.adminPhone ?? undefined,
+          request.customMessage ?? undefined,
+        ),
       );
     }
 
-    // Step 5: Create Initial Subscription if planId was provided
+    // Step 4: the initial subscription, if a plan was chosen and none exists.
     let subscription: any = undefined;
-    if (planId) {
-      subscription = await this.billingService.createSubscription(
-        tenant.id,
-        planId,
-        billingCycle as BillingCycle,
-        SubscriptionStatus.PENDING_PAYMENT,
+    if (
+      request.planId &&
+      !(await this.billingService.getSubscriptionByTenant(tenant.id))
+    ) {
+      subscription = await step('Subscription', () =>
+        this.billingService.createSubscription(
+          tenant.id,
+          request.planId!,
+          (request.billingCycle as BillingCycle) || BillingCycle.MONTHLY,
+          SubscriptionStatus.PENDING_PAYMENT,
+        ),
       );
     }
+
+    await this.patchSetupRequest(tenantId, {
+      completedAt: new Date().toISOString(),
+      lastError: null,
+    });
+    tenant = await this.tenantService.getTenantById(tenantId);
 
     return {
-      ...provisioningResult,
+      tenantId: tenant.id,
+      organizationName: orgName,
+      slug: tenant.slug || tenant.domain,
+      databaseName:
+        provisioningResult?.databaseName ??
+        this.generateDatabaseName(tenant.id),
+      status: tenant.status,
+      provisioningStatus: tenant.provisioningStatus,
+      setupStatus: tenant.setupStatus,
       invitation: invitationResult,
       subscription,
-      message: `Organization '${orgName}' created and database provisioned successfully. Status: PENDING_ADMIN_ACTIVATION.`,
+      message: `Organization '${orgName}' is set up. Status: ${tenant.status}.`,
     };
+  }
+
+  /** Merges into the stored setup request without overwriting the rest of it. */
+  private async patchSetupRequest(
+    tenantId: string,
+    patch: Partial<TenantSetupRequest>,
+  ) {
+    const tenant = await this.tenantService.getTenantById(tenantId);
+    const current = tenant.setupRequest;
+    // Organizations created before this existed have none; record the outcome anyway.
+    await tenant.update({
+      setupRequest: {
+        modules: [],
+        sendInvitation: false,
+        adminName: null,
+        adminPhone: null,
+        customMessage: null,
+        planId: null,
+        billingCycle: null,
+        completedAt: null,
+        lastError: null,
+        ...(current ?? {}),
+        ...patch,
+      },
+    });
+  }
+
+  /** Whether a creation or retry is running in this process right now. */
+  isSetupRunning(tenantId: string): boolean {
+    return this.creations.get(tenantId)?.state === 'running';
   }
 
   /**
@@ -346,7 +537,9 @@ export class TenantProvisioningService {
       if (!dbExists) {
         await this.createTenantDatabase(databaseName);
       } else {
-        this.logger.log(`Database '${databaseName}' already exists. Skipping SQL CREATE DATABASE.`);
+        this.logger.log(
+          `Database '${databaseName}' already exists. Skipping SQL CREATE DATABASE.`,
+        );
       }
 
       // Step B: Initialize Base Schema & Migrations idempotently (Phase I)
@@ -386,8 +579,11 @@ export class TenantProvisioningService {
         message: `Organization database '${databaseName}' provisioned and initialized successfully. Pending Admin Activation.`,
       };
     } catch (error: any) {
-      const safeErrorMessage = error.message || 'Unknown database provisioning error';
-      this.logger.error(`Provisioning failed for tenant ${tenant.id}: ${safeErrorMessage}`);
+      const safeErrorMessage =
+        error.message || 'Unknown database provisioning error';
+      this.logger.error(
+        `Provisioning failed for tenant ${tenant.id}: ${safeErrorMessage}`,
+      );
 
       // Failure Handling (Phase J): Mark FAILED and store safe error metadata
       await tenant.update({
@@ -403,26 +599,57 @@ export class TenantProvisioningService {
   }
 
   /**
-   * Controlled Retry Provisioning Mechanism (Phase K)
+   * Retries a failed (or abandoned) setup in the background and returns at
+   * once; follow it with `getCreationStatus`, like a new creation. Picks up at
+   * the step that failed — the database, module access, the invitation or the
+   * subscription.
    */
-  async retryProvisioning(tenantId: string): Promise<OrganizationCreationResult> {
+  async retryProvisioning(
+    tenantId: string,
+  ): Promise<OrganizationCreationStatus> {
     const tenant = await this.tenantService.getTenantById(tenantId);
-
-    if (tenant.provisioningStatus === TenantProvisioningStatus.READY) {
-      return {
-        tenantId: tenant.id,
-        organizationName: tenant.organizationName || tenant.name,
-        slug: tenant.slug || tenant.domain,
-        databaseName: this.generateDatabaseName(tenant.id),
-        status: tenant.status,
-        provisioningStatus: TenantProvisioningStatus.READY,
-        setupStatus: tenant.setupStatus,
-        message: 'Tenant database is already provisioned and in READY status.',
-      };
+    if (this.isSetupRunning(tenantId)) {
+      throw new TenantException(
+        TenantErrorCode.INVALID_TENANT_CONTEXT,
+        'This organization is already being set up. Please wait for it to finish.',
+      );
+    }
+    if (setupStateOf(tenant, false).state === 'ready') {
+      return { tenantId, state: 'done' };
     }
 
-    this.logger.log(`Retrying database provisioning for tenant ${tenantId}...`);
-    return this.provisionTenantDatabase(tenant.id);
+    this.logger.log(`Retrying setup for tenant ${tenantId}...`);
+    await this.patchSetupRequest(tenantId, { lastError: null });
+    this.creations.set(tenantId, { tenantId, state: 'running' });
+    const orgName = tenant.organizationName || tenant.name;
+
+    this.completeSetup(tenantId).then(
+      (result) => {
+        this.finishCreation(tenantId, { tenantId, state: 'done', result });
+        this.platformNotifier?.account(
+          `Organization setup completed: ${orgName}`,
+          result.invitation
+            ? `An activation invitation was sent to ${result.invitation.adminEmail}.`
+            : 'Every setup step has now finished.',
+        );
+      },
+      (error: any) => {
+        this.logger.error(
+          `Retrying setup of ${tenantId} failed: ${error?.message ?? error}`,
+        );
+        this.finishCreation(tenantId, {
+          tenantId,
+          state: 'failed',
+          error: error?.message || 'Setup failed again.',
+        });
+        this.platformNotifier?.account(
+          `Organization setup failed again: ${orgName}`,
+          error?.message || 'An unknown error stopped it.',
+        );
+      },
+    );
+
+    return { tenantId, state: 'running' };
   }
 
   /**
@@ -486,7 +713,9 @@ export class TenantProvisioningService {
   /**
    * Run Base Tenant Schema Initialization & Migrations (Phase I)
    */
-  private async runMigrationsAndBaseSchema(databaseName: string): Promise<void> {
+  private async runMigrationsAndBaseSchema(
+    databaseName: string,
+  ): Promise<void> {
     const creds = resolveDbCredentials('tenant');
     const sequelize = new Sequelize({
       host: creds.host,
@@ -533,7 +762,9 @@ export class TenantProvisioningService {
         `CREATE UNIQUE INDEX IF NOT EXISTS "unique_designation_code_per_department" ON "designations" ("tenantId", "departmentId", "code");`,
       );
     } catch (error: any) {
-      this.logger.error(`Base schema initialization failed for database ${databaseName}: ${error.message}`);
+      this.logger.error(
+        `Base schema initialization failed for database ${databaseName}: ${error.message}`,
+      );
       throw error;
     } finally {
       await sequelize.close();
@@ -544,7 +775,8 @@ export class TenantProvisioningService {
    * Deprovision tenant safely
    */
   async deprovisionTenant(tenantId: string): Promise<void> {
-    const dbConfig = await this.tenantDbConfigService.getTenantDatabaseConfig(tenantId);
+    const dbConfig =
+      await this.tenantDbConfigService.getTenantDatabaseConfig(tenantId);
     try {
       await this.tenantConnectionManager.closeConnection(tenantId);
       await this.dropTenantDatabase(dbConfig.databaseName);

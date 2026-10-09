@@ -16,6 +16,8 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { TAGS } from '../swagger/swagger-tags';
 import { IpAllowlistGuard } from '../guards/ip-allowlist.guard';
+import { Audited } from '../audit/audited.decorator';
+import { AuditTrailInterceptor } from '../audit/audit-trail.interceptor';
 import { ClientProxy } from '@nestjs/microservices';
 import {
   SERVICES,
@@ -29,14 +31,28 @@ import {
   GenerateTwoFactorDto,
   UpdateNotificationsDto,
 } from '@app/common';
-import { JwtAuthGuard, TenantGuard, RolesGuard, Roles, CurrentUser, SuperAdminGuard } from '@app/tenant-context';
+import {
+  JwtAuthGuard,
+  TenantGuard,
+  RolesGuard,
+  Roles,
+  CurrentUser,
+  SuperAdminGuard,
+} from '@app/tenant-context';
 
 @Controller(['profile', 'superadmin/profile'])
 @PlatformRoute()
 // The Security tab's IP allowlist covers the whole Super Admin portal, this included.
-@UseGuards(JwtAuthGuard, TenantGuard, RolesGuard, SuperAdminGuard, IpAllowlistGuard)
+@UseGuards(
+  JwtAuthGuard,
+  TenantGuard,
+  RolesGuard,
+  SuperAdminGuard,
+  IpAllowlistGuard,
+)
 @Roles('superadmin')
 @ApiBearerAuth()
+@UseInterceptors(AuditTrailInterceptor)
 export class SuperAdminProfileController {
   constructor(
     @Inject(SERVICES.AUTH_SERVICE) private readonly authClient: ClientProxy,
@@ -49,7 +65,10 @@ export class SuperAdminProfileController {
   @ApiTags(TAGS.SA_PROFILE)
   @Get()
   @ApiOperation({ summary: 'Get SuperAdmin Profile Details' })
-  getProfile(@CurrentUser('id') superAdminId: string, @CurrentUser('sid') currentSessionId: string) {
+  getProfile(
+    @CurrentUser('id') superAdminId: string,
+    @CurrentUser('sid') currentSessionId: string,
+  ) {
     return this.authClient.send(MESSAGE_PATTERNS.PROFILE.GET_PROFILE, {
       superAdminId: superAdminId || 'default-superadmin-id',
       currentSessionId,
@@ -59,6 +78,21 @@ export class SuperAdminProfileController {
   @ApiTags(TAGS.SA_PROFILE)
   @Patch()
   @ApiOperation({ summary: 'Update SuperAdmin Profile Information' })
+  @Audited({
+    action: 'PROFILE_UPDATED',
+    module: 'Profile',
+    snapshot: {
+      service: 'auth',
+      pattern: MESSAGE_PATTERNS.PROFILE.GET_PROFILE,
+      payload: ({ req }) => ({ superAdminId: req.user?.id }),
+      pick: (raw) => ({
+        ...raw,
+        ...(raw?.personalInfo ?? {}),
+        ...(raw?.profile ?? {}),
+      }),
+    },
+    diff: true,
+  })
   updateProfile(
     @CurrentUser('id') superAdminId: string,
     @Body() dto: UpdateProfileDto,
@@ -72,7 +106,10 @@ export class SuperAdminProfileController {
   @ApiTags(TAGS.SA_PROFILE)
   @Post('avatar')
   @Patch('avatar')
-  @ApiOperation({ summary: 'Update SuperAdmin Profile Avatar (Supports File Upload or Avatar URL)' })
+  @ApiOperation({
+    summary:
+      'Update SuperAdmin Profile Avatar (Supports File Upload or Avatar URL)',
+  })
   @UseInterceptors(FileInterceptor('file'))
   async updateAvatar(
     @CurrentUser('id') superAdminId: string,
@@ -126,7 +163,10 @@ export class SuperAdminProfileController {
   @ApiTags(TAGS.SA_PROFILE)
   @Get('security/login-activity')
   @ApiOperation({ summary: 'Get SuperAdmin Recent Login Activity History' })
-  getLoginActivity(@CurrentUser('id') superAdminId: string, @CurrentUser('sid') currentSessionId: string) {
+  getLoginActivity(
+    @CurrentUser('id') superAdminId: string,
+    @CurrentUser('sid') currentSessionId: string,
+  ) {
     return this.authClient.send(MESSAGE_PATTERNS.PROFILE.GET_LOGIN_ACTIVITY, {
       superAdminId: superAdminId || 'default-superadmin-id',
       // Marks this request's own session, instead of guessing the newest row.
@@ -147,6 +187,7 @@ export class SuperAdminProfileController {
   @Patch('security/recovery-info')
   @Patch('recovery')
   @ApiOperation({ summary: 'Update Account Recovery Email and Phone' })
+  @Audited({ action: 'RECOVERY_INFO_UPDATED', module: 'Security' })
   updateRecovery(
     @CurrentUser('id') superAdminId: string,
     @Body() dto: UpdateRecoveryDto,
@@ -162,6 +203,7 @@ export class SuperAdminProfileController {
   @Patch('security/change-password')
   @Patch('password')
   @ApiOperation({ summary: 'Change SuperAdmin Password' })
+  @Audited({ action: 'PASSWORD_CHANGED', module: 'Security' })
   changePassword(
     @CurrentUser('id') superAdminId: string,
     @Body() dto: ChangePasswordDto,
@@ -192,6 +234,7 @@ export class SuperAdminProfileController {
   @ApiTags(TAGS.SA_PROFILE)
   @Post('2fa/enable')
   @ApiOperation({ summary: 'Verify OTP & Enable Two-Factor Authentication' })
+  @Audited({ action: 'TWO_FACTOR_ENABLED', module: 'Security' })
   enableTwoFactor(
     @CurrentUser('id') superAdminId: string,
     @Body() dto: ToggleTwoFactorDto,
@@ -205,6 +248,7 @@ export class SuperAdminProfileController {
   @ApiTags(TAGS.SA_PROFILE)
   @Post('2fa/disable')
   @ApiOperation({ summary: 'Disable Two-Factor Authentication' })
+  @Audited({ action: 'TWO_FACTOR_DISABLED', module: 'Security' })
   disableTwoFactor(
     @CurrentUser('id') superAdminId: string,
     @Body() dto: ToggleTwoFactorDto,
@@ -221,7 +265,9 @@ export class SuperAdminProfileController {
 
   @ApiTags(TAGS.SA_PROFILE)
   @Get('notifications')
-  @ApiOperation({ summary: 'Get SuperAdmin Notification Preferences & Quiet Hours' })
+  @ApiOperation({
+    summary: 'Get SuperAdmin Notification Preferences & Quiet Hours',
+  })
   getNotificationPreferences(@CurrentUser('id') superAdminId: string) {
     return this.authClient.send(MESSAGE_PATTERNS.PROFILE.GET_NOTIFICATIONS, {
       superAdminId: superAdminId || 'default-superadmin-id',
@@ -230,7 +276,9 @@ export class SuperAdminProfileController {
 
   @ApiTags(TAGS.SA_PROFILE)
   @Patch('notifications')
-  @ApiOperation({ summary: 'Update SuperAdmin Notification Preferences & Quiet Hours' })
+  @ApiOperation({
+    summary: 'Update SuperAdmin Notification Preferences & Quiet Hours',
+  })
   updateNotificationPreferences(
     @CurrentUser('id') superAdminId: string,
     @Body() dto: UpdateNotificationsDto,
@@ -248,7 +296,10 @@ export class SuperAdminProfileController {
   @ApiTags(TAGS.SA_PROFILE)
   @Get('sessions')
   @ApiOperation({ summary: 'Get Active & Logged-out User Sessions' })
-  getActiveSessions(@CurrentUser('id') superAdminId: string, @CurrentUser('sid') currentSessionId: string) {
+  getActiveSessions(
+    @CurrentUser('id') superAdminId: string,
+    @CurrentUser('sid') currentSessionId: string,
+  ) {
     return this.authClient.send(MESSAGE_PATTERNS.PROFILE.GET_SESSIONS, {
       superAdminId: superAdminId || 'default-superadmin-id',
       // From the access token, so the caller's own row renders as "Current".
@@ -259,7 +310,11 @@ export class SuperAdminProfileController {
   @ApiTags(TAGS.SA_PROFILE)
   @Delete(['sessions/revoke-others', 'sessions/others'])
   @ApiOperation({ summary: 'Revoke All Other Active Sessions' })
-  async revokeAllOtherSessions(@CurrentUser('id') superAdminId: string, @CurrentUser('sid') currentSessionId: string) {
+  @Audited({ action: 'OTHER_SESSIONS_ENDED', module: 'Security' })
+  async revokeAllOtherSessions(
+    @CurrentUser('id') superAdminId: string,
+    @CurrentUser('sid') currentSessionId: string,
+  ) {
     const result = await firstValueFrom(
       this.authClient.send(MESSAGE_PATTERNS.PROFILE.REVOKE_OTHER_SESSIONS, {
         superAdminId: superAdminId || 'default-superadmin-id',
@@ -275,6 +330,7 @@ export class SuperAdminProfileController {
   @ApiTags(TAGS.SA_PROFILE)
   @Delete('sessions/:sessionId')
   @ApiOperation({ summary: 'Revoke a Specific Active Session' })
+  @Audited({ action: 'SESSION_ENDED', module: 'Security' })
   async revokeSession(
     @CurrentUser('id') superAdminId: string,
     @Param('sessionId') sessionId: string,

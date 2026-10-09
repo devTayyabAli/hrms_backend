@@ -15,6 +15,7 @@ import { SuperAdminController } from './controllers/superadmin.controller';
 import { SuperAdminProfileController } from './controllers/superadmin-profile.controller';
 import { SuperAdminNotificationsController } from './controllers/superadmin-notifications.controller';
 import { SessionActivityController } from './controllers/session-activity.controller';
+import { OrganizationHelpController } from './controllers/organization-help.controller';
 import { SuperAdminAiController } from './controllers/superadmin-ai.controller';
 import { AiAssistantService } from './ai-assistant/ai-assistant.service';
 import { FilesController } from './controllers/files.controller';
@@ -35,8 +36,14 @@ import { PerformanceController } from './controllers/performance.controller';
 import { PayrollController } from './controllers/payroll.controller';
 import { PayrollComplianceController } from './controllers/payroll-compliance.controller';
 import { PayrollCompensationController } from './controllers/payroll-compensation.controller';
-import { EmployeePortalController, EmployeePortalReviewController } from './controllers/employee-portal.controller';
-import { WorkspaceController, WorkspaceSelfController } from './controllers/workspace.controller';
+import {
+  EmployeePortalController,
+  EmployeePortalReviewController,
+} from './controllers/employee-portal.controller';
+import {
+  WorkspaceController,
+  WorkspaceSelfController,
+} from './controllers/workspace.controller';
 import { CompanyDocumentsController } from './controllers/company-documents.controller';
 import {
   HrPortalController,
@@ -51,7 +58,10 @@ import { ExportPolicyGuard } from './guards/export-policy.guard';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true, envFilePath: ['.env.development', '.env'] }),
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: ['.env.development', '.env'],
+    }),
     ThrottlerModule.forRoot([
       {
         name: 'default',
@@ -110,6 +120,7 @@ import { ExportPolicyGuard } from './guards/export-policy.guard';
     SuperAdminProfileController,
     SuperAdminNotificationsController,
     SessionActivityController,
+    OrganizationHelpController,
     FilesController,
     OrganizationAdminActivationController,
     // Declared before OrganizationSetupController so the admin Departments
@@ -150,7 +161,11 @@ import { ExportPolicyGuard } from './guards/export-policy.guard';
     },
     {
       provide: SERVICES.AUTH_SERVICE,
-      inject: ['AUTH_SERVICE_RAW', TenantContextService, MicroserviceSigningService],
+      inject: [
+        'AUTH_SERVICE_RAW',
+        TenantContextService,
+        MicroserviceSigningService,
+      ],
       useFactory: (
         client: ClientProxy,
         tenantContext: TenantContextService,
@@ -167,7 +182,11 @@ import { ExportPolicyGuard } from './guards/export-policy.guard';
     },
     {
       provide: SERVICES.TENANT_SERVICE,
-      inject: ['TENANT_SERVICE_RAW', TenantContextService, MicroserviceSigningService],
+      inject: [
+        'TENANT_SERVICE_RAW',
+        TenantContextService,
+        MicroserviceSigningService,
+      ],
       useFactory: (
         client: ClientProxy,
         tenantContext: TenantContextService,
@@ -185,7 +204,11 @@ import { ExportPolicyGuard } from './guards/export-policy.guard';
     },
     {
       provide: SERVICES.USER_SERVICE,
-      inject: ['USER_SERVICE_RAW', TenantContextService, MicroserviceSigningService],
+      inject: [
+        'USER_SERVICE_RAW',
+        TenantContextService,
+        MicroserviceSigningService,
+      ],
       useFactory: (
         client: ClientProxy,
         tenantContext: TenantContextService,

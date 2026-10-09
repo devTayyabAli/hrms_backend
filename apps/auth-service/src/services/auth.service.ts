@@ -80,14 +80,25 @@ export class AuthService implements OnModuleInit {
     private accountLockoutService: AccountLockoutService,
     @Optional() private platformNotifications?: PlatformNotificationService,
     @Optional() private maintenanceSettings?: MaintenanceSettingsService,
-  ) { }
+  ) {}
 
   /** "Chrome 154 on Windows 10/11 · 18.143.151.88 · Lahore, PK" — what a security alert tells the admin. */
-  private describeAccess(ipAddress?: string, userAgent?: string, location?: string): string {
+  private describeAccess(
+    ipAddress?: string,
+    userAgent?: string,
+    location?: string,
+  ): string {
     const { browser, operatingSystem } = parseUserAgent(userAgent);
-    const device = [browser, operatingSystem].filter((p) => p && !/^unknown/i.test(p)).join(' on ');
-    const ip = ipAddress && ipAddress !== 'unknown' ? ipAddress.replace(/^::ffff:/i, '') : null;
-    return [device || 'Unknown device', ip, location].filter(Boolean).join(' · ');
+    const device = [browser, operatingSystem]
+      .filter((p) => p && !/^unknown/i.test(p))
+      .join(' on ');
+    const ip =
+      ipAddress && ipAddress !== 'unknown'
+        ? ipAddress.replace(/^::ffff:/i, '')
+        : null;
+    return [device || 'Unknown device', ip, location]
+      .filter(Boolean)
+      .join(' · ');
   }
 
   /**
@@ -108,8 +119,14 @@ export class AuthService implements OnModuleInit {
     // Seed default SuperAdmin if none exists
     const count = await this.superAdminModel.count();
     if (count === 0) {
-      const email = this.configService.get<string>('SUPERADMIN_EMAIL', 'superadmin@system.com');
-      const password = this.configService.get<string>('SUPERADMIN_PASSWORD', 'SuperAdmin@SecurePass2026!');
+      const email = this.configService.get<string>(
+        'SUPERADMIN_EMAIL',
+        'superadmin@system.com',
+      );
+      const password = this.configService.get<string>(
+        'SUPERADMIN_PASSWORD',
+        'SuperAdmin@SecurePass2026!',
+      );
       // Allow the built-in seed credentials only in environments explicitly
       // named as local ones. The previous check keyed off `NODE_ENV ===
       // 'production'`, so every other value — 'staging', 'uat', 'demo', or
@@ -119,14 +136,19 @@ export class AuthService implements OnModuleInit {
       const env = this.configService.get<string>('NODE_ENV');
       const isLocalEnv = env === 'development' || env === 'test';
 
-      if (!isLocalEnv && (!process.env.SUPERADMIN_EMAIL || !process.env.SUPERADMIN_PASSWORD)) {
+      if (
+        !isLocalEnv &&
+        (!process.env.SUPERADMIN_EMAIL || !process.env.SUPERADMIN_PASSWORD)
+      ) {
         throw new Error(
           `SECURITY CONFIGURATION ERROR: SUPERADMIN_EMAIL and SUPERADMIN_PASSWORD environment variables are required when NODE_ENV is '${env ?? 'unset'}'. The built-in seed credentials are only permitted when NODE_ENV is 'development' or 'test'.`,
         );
       }
 
       if (!STRONG_PASSWORD_REGEX.test(password)) {
-        throw new Error(`SECURITY CONFIGURATION ERROR: SuperAdmin seed password ${STRONG_PASSWORD_MESSAGE}`);
+        throw new Error(
+          `SECURITY CONFIGURATION ERROR: SuperAdmin seed password ${STRONG_PASSWORD_MESSAGE}`,
+        );
       }
 
       const passwordHash = await bcrypt.hash(password, BCRYPT_SALT_ROUNDS);
@@ -147,7 +169,9 @@ export class AuthService implements OnModuleInit {
    *
    * Single source of truth for both login and token refresh.
    */
-  private async resolveEffectiveAuthorization(cred: AuthCredential): Promise<EffectiveAuthorization> {
+  private async resolveEffectiveAuthorization(
+    cred: AuthCredential,
+  ): Promise<EffectiveAuthorization> {
     if (!cred.tenantId) {
       return {
         userId: null,
@@ -218,7 +242,10 @@ export class AuthService implements OnModuleInit {
     }
   }
 
-  private appendPasswordHistory(history: string[] | null | undefined, newHash: string): string[] {
+  private appendPasswordHistory(
+    history: string[] | null | undefined,
+    newHash: string,
+  ): string[] {
     return [...(history || []), newHash].slice(-PASSWORD_HISTORY_LIMIT);
   }
 
@@ -227,21 +254,35 @@ export class AuthService implements OnModuleInit {
    * 0 days means passwords never expire. The browser makes the person set a
    * new one before continuing when this is true.
    */
-  private async isPasswordExpired(passwordLastChangedAt: Date | null | undefined, createdAt: Date): Promise<boolean> {
-    const { passwordExpiryDays } = await this.securitySettingsService.getOrCreate();
+  private async isPasswordExpired(
+    passwordLastChangedAt: Date | null | undefined,
+    createdAt: Date,
+  ): Promise<boolean> {
+    const { passwordExpiryDays } =
+      await this.securitySettingsService.getOrCreate();
     if (!passwordExpiryDays) return false;
     const referenceDate = passwordLastChangedAt || createdAt;
     if (!referenceDate) return false;
-    return Date.now() - new Date(referenceDate).getTime() > passwordExpiryDays * 24 * 60 * 60 * 1000;
+    return (
+      Date.now() - new Date(referenceDate).getTime() >
+      passwordExpiryDays * 24 * 60 * 60 * 1000
+    );
   }
 
   /** Idle past the configured timeout (0 = never). Sessions older than this column start from `lastActiveAt`. */
-  private async idleTimedOut(session: { lastInteractionAt?: Date | null; lastActiveAt?: Date | null }) {
-    const { sessionIdleTimeoutMinutes } = await this.securitySettingsService.getOrCreate();
+  private async idleTimedOut(session: {
+    lastInteractionAt?: Date | null;
+    lastActiveAt?: Date | null;
+  }) {
+    const { sessionIdleTimeoutMinutes } =
+      await this.securitySettingsService.getOrCreate();
     if (!sessionIdleTimeoutMinutes) return null;
     const last = session.lastInteractionAt ?? session.lastActiveAt;
     if (!last) return null;
-    return Date.now() - new Date(last).getTime() > sessionIdleTimeoutMinutes * 60_000 ? sessionIdleTimeoutMinutes : null;
+    return Date.now() - new Date(last).getTime() >
+      sessionIdleTimeoutMinutes * 60_000
+      ? sessionIdleTimeoutMinutes
+      : null;
   }
 
   /**
@@ -250,11 +291,24 @@ export class AuthService implements OnModuleInit {
    */
   async touchSession(
     sessionId: string,
-  ): Promise<{ active: boolean; idleTimeoutMinutes: number; passwordExpired: boolean }> {
-    const { sessionIdleTimeoutMinutes } = await this.securitySettingsService.getOrCreate();
+  ): Promise<{
+    active: boolean;
+    idleTimeoutMinutes: number;
+    passwordExpired: boolean;
+  }> {
+    const { sessionIdleTimeoutMinutes } =
+      await this.securitySettingsService.getOrCreate();
     const state = await this.getSessionState(sessionId);
-    if (!state.active) return { active: false, idleTimeoutMinutes: sessionIdleTimeoutMinutes, passwordExpired: false };
-    await this.userSessionModel.update({ lastInteractionAt: new Date() }, { where: { id: sessionId, status: 'active' } });
+    if (!state.active)
+      return {
+        active: false,
+        idleTimeoutMinutes: sessionIdleTimeoutMinutes,
+        passwordExpired: false,
+      };
+    await this.userSessionModel.update(
+      { lastInteractionAt: new Date() },
+      { where: { id: sessionId, status: 'active' } },
+    );
     return {
       active: true,
       idleTimeoutMinutes: sessionIdleTimeoutMinutes,
@@ -264,14 +318,22 @@ export class AuthService implements OnModuleInit {
   }
 
   private async sessionPasswordExpired(sessionId: string): Promise<boolean> {
-    const session = await this.userSessionModel.findByPk(sessionId, { attributes: ['superAdminId', 'authCredentialId'] });
+    const session = await this.userSessionModel.findByPk(sessionId, {
+      attributes: ['superAdminId', 'authCredentialId'],
+    });
     if (!session) return false;
     const owner = session.superAdminId
-      ? await this.superAdminModel.findByPk(session.superAdminId, { attributes: ['passwordLastChangedAt', 'createdAt'] })
+      ? await this.superAdminModel.findByPk(session.superAdminId, {
+          attributes: ['passwordLastChangedAt', 'createdAt'],
+        })
       : session.authCredentialId
-        ? await this.credentialModel.findByPk(session.authCredentialId, { attributes: ['passwordLastChangedAt', 'createdAt'] })
+        ? await this.credentialModel.findByPk(session.authCredentialId, {
+            attributes: ['passwordLastChangedAt', 'createdAt'],
+          })
         : null;
-    return owner ? this.isPasswordExpired(owner.passwordLastChangedAt, owner.createdAt) : false;
+    return owner
+      ? this.isPasswordExpired(owner.passwordLastChangedAt, owner.createdAt)
+      : false;
   }
 
   /**
@@ -289,13 +351,20 @@ export class AuthService implements OnModuleInit {
     // `sid` rides on the access token too, so the Sessions screen can mark
     // which row is the caller's own session ("Current") without a second
     // lookup — the refresh token alone isn't presented on normal requests.
-    const accessToken = this.jwtService.sign({ ...accessPayload, sid: sessionId, type: 'access' });
+    const accessToken = this.jwtService.sign({
+      ...accessPayload,
+      sid: sessionId,
+      type: 'access',
+    });
     const refreshToken = this.jwtService.sign(
       { sub: accessPayload.sub, sid: sessionId, type: 'refresh' },
       { expiresIn: refreshExpiry as any },
     );
 
-    const refreshTokenHash = await bcrypt.hash(refreshToken, BCRYPT_SALT_ROUNDS);
+    const refreshTokenHash = await bcrypt.hash(
+      refreshToken,
+      BCRYPT_SALT_ROUNDS,
+    );
     const now = new Date();
     const expiresAt = new Date(now.getTime() + parseDurationMs(refreshExpiry));
 
@@ -341,15 +410,28 @@ export class AuthService implements OnModuleInit {
    * here. A login in this same tenant is fine (re-activation). Compared
    * case-insensitively, so 'Ayesha@x.com' and 'ayesha@x.com' are one person.
    */
-  async checkEmailAvailable(email: string, tenantId: string): Promise<{ available: boolean; reason: 'OTHER_ORGANIZATION' | 'PLATFORM_ADMIN' | null }> {
-    const normalized = String(email ?? '').trim().toLowerCase();
-    const sameEmail = (column = 'email') => where(fn('lower', col(column)), normalized);
+  async checkEmailAvailable(
+    email: string,
+    tenantId: string,
+  ): Promise<{
+    available: boolean;
+    reason: 'OTHER_ORGANIZATION' | 'PLATFORM_ADMIN' | null;
+  }> {
+    const normalized = String(email ?? '')
+      .trim()
+      .toLowerCase();
+    const sameEmail = (column = 'email') =>
+      where(fn('lower', col(column)), normalized);
     const [credential, superAdmin] = await Promise.all([
-      this.credentialModel.findOne({ where: sameEmail(), attributes: ['id', 'tenantId'] }),
+      this.credentialModel.findOne({
+        where: sameEmail(),
+        attributes: ['id', 'tenantId'],
+      }),
       this.superAdminModel.findOne({ where: sameEmail(), attributes: ['id'] }),
     ]);
     if (superAdmin) return { available: false, reason: 'PLATFORM_ADMIN' };
-    if (credential?.tenantId && credential.tenantId !== tenantId) return { available: false, reason: 'OTHER_ORGANIZATION' };
+    if (credential?.tenantId && credential.tenantId !== tenantId)
+      return { available: false, reason: 'OTHER_ORGANIZATION' };
     return { available: true, reason: null };
   }
 
@@ -362,18 +444,28 @@ export class AuthService implements OnModuleInit {
     firstName?: string;
     lastName?: string;
   }) {
-    const existing = await this.credentialModel.findOne({ where: { email: data.email } });
+    const existing = await this.credentialModel.findOne({
+      where: { email: data.email },
+    });
     await this.passwordPolicyService.validate(data.password);
 
     if (existing) {
       // Never hijack a credential that already belongs to a different tenant.
       // Same-tenant retries (idempotent re-activation) are allowed through.
-      if (existing.tenantId && data.tenantId && existing.tenantId !== data.tenantId) {
+      if (
+        existing.tenantId &&
+        data.tenantId &&
+        existing.tenantId !== data.tenantId
+      ) {
         throw new ForbiddenException(
           'This email is already registered under a different organization and cannot be re-activated here.',
         );
       }
-      await this.assertPasswordNotReused(data.password, existing.passwordHash, existing.passwordHistory);
+      await this.assertPasswordNotReused(
+        data.password,
+        existing.passwordHash,
+        existing.passwordHistory,
+      );
       const passwordHash = await bcrypt.hash(data.password, BCRYPT_SALT_ROUNDS);
       await existing.update({
         passwordHash,
@@ -386,10 +478,16 @@ export class AuthService implements OnModuleInit {
         // of a credential created before this field existed.
         firstName: existing.firstName || data.firstName || existing.firstName,
         lastName: existing.lastName || data.lastName || existing.lastName,
-        passwordHistory: this.appendPasswordHistory(existing.passwordHistory, passwordHash),
+        passwordHistory: this.appendPasswordHistory(
+          existing.passwordHistory,
+          passwordHash,
+        ),
         passwordLastChangedAt: new Date(),
       });
-      return { message: 'Admin credential updated successfully', credentialId: existing.id };
+      return {
+        message: 'Admin credential updated successfully',
+        credentialId: existing.id,
+      };
     }
 
     const passwordHash = await bcrypt.hash(data.password, BCRYPT_SALT_ROUNDS);
@@ -406,7 +504,10 @@ export class AuthService implements OnModuleInit {
       passwordLastChangedAt: new Date(),
     });
 
-    return { message: 'Admin credential created successfully', credentialId: credential.id };
+    return {
+      message: 'Admin credential created successfully',
+      credentialId: credential.id,
+    };
   }
 
   /**
@@ -423,24 +524,47 @@ export class AuthService implements OnModuleInit {
    * credential can't sign in, and its refresh is refused because the user
    * record is suspended alongside it.
    */
-  async deactivateTenantCredential(email: string, tenantId: string, isActive = false) {
-    const credential = await this.credentialModel.findOne({ where: { email, tenantId } });
+  async deactivateTenantCredential(
+    email: string,
+    tenantId: string,
+    isActive = false,
+  ) {
+    const credential = await this.credentialModel.findOne({
+      where: { email, tenantId },
+    });
     if (!credential) {
-      return { message: 'No credential found for this tenant — nothing to change.' };
+      return {
+        message: 'No credential found for this tenant — nothing to change.',
+      };
     }
     await credential.update({ isActive });
     if (!isActive) {
       // Blocked now, not when the current access token next tries to refresh.
       await this.userSessionModel.update(
-        { status: 'revoked', revokedAt: new Date(), revokedReason: 'Account deactivated' },
+        {
+          status: 'revoked',
+          revokedAt: new Date(),
+          revokedReason: 'Account deactivated',
+        },
         { where: { authCredentialId: credential.id, status: 'active' } },
       );
     }
-    return { message: isActive ? 'Credential reactivated successfully' : 'Credential deactivated successfully' };
+    return {
+      message: isActive
+        ? 'Credential reactivated successfully'
+        : 'Credential deactivated successfully',
+    };
   }
 
-  async superAdminLogin(dto: SuperAdminLoginDto, ipAddress?: string, userAgent?: string, location?: string) {
-    const admin = await this.superAdminModel.findOne({ where: { email: dto.email } });
+  async superAdminLogin(
+    dto: SuperAdminLoginDto,
+    ipAddress?: string,
+    userAgent?: string,
+    location?: string,
+  ) {
+    const admin = await this.superAdminModel.findOne({
+      where: { email: dto.email },
+    });
 
     // Checked before the password comparison so a locked account can't be
     // probed, and only for a known account so this can't be used to tell
@@ -452,10 +576,14 @@ export class AuthService implements OnModuleInit {
     if (!admin || !(await bcrypt.compare(dto.password, admin.passwordHash))) {
       if (admin) {
         await this.accountLockoutService.registerFailedAttempt(admin);
-        const lockedNow = admin.lockedUntil && new Date(admin.lockedUntil).getTime() > Date.now();
+        const lockedNow =
+          admin.lockedUntil &&
+          new Date(admin.lockedUntil).getTime() > Date.now();
         this.alertSuperAdmin(
           admin.id,
-          lockedNow ? 'Account locked after failed sign-ins' : 'Failed sign-in attempt',
+          lockedNow
+            ? 'Account locked after failed sign-ins'
+            : 'Failed sign-in attempt',
           lockedNow
             ? `Too many wrong passwords. Sign-in is blocked for ${Math.max(1, Math.ceil((new Date(admin.lockedUntil).getTime() - Date.now()) / 60000))} minutes. Last attempt: ${this.describeAccess(ipAddress, userAgent, location)}.`
             : `A wrong password was entered for your account from ${this.describeAccess(ipAddress, userAgent, location)}.`,
@@ -547,13 +675,20 @@ export class AuthService implements OnModuleInit {
       ipAddress,
       userAgent,
     });
-    this.alertSuperAdmin(admin.id, 'New sign-in to your account', this.describeAccess(ipAddress, userAgent, location));
+    this.alertSuperAdmin(
+      admin.id,
+      'New sign-in to your account',
+      this.describeAccess(ipAddress, userAgent, location),
+    );
 
     return {
       message: 'SuperAdmin login successful',
       accessToken,
       refreshToken,
-      passwordExpired: await this.isPasswordExpired(admin.passwordLastChangedAt, admin.createdAt),
+      passwordExpired: await this.isPasswordExpired(
+        admin.passwordLastChangedAt,
+        admin.createdAt,
+      ),
       user: {
         id: admin.id,
         email: admin.email,
@@ -566,7 +701,12 @@ export class AuthService implements OnModuleInit {
   /**
    * Verify 2FA Login Challenge Code
    */
-  async verifyTwoFactorLogin(dto: VerifyTwoFactorChallengeDto, ipAddress?: string, userAgent?: string, location?: string) {
+  async verifyTwoFactorLogin(
+    dto: VerifyTwoFactorChallengeDto,
+    ipAddress?: string,
+    userAgent?: string,
+    location?: string,
+  ) {
     let payload: any;
     try {
       payload = this.jwtService.verify(dto.challengeToken);
@@ -578,7 +718,9 @@ export class AuthService implements OnModuleInit {
         userAgent,
         reason: 'invalid_or_expired_challenge_token',
       });
-      throw new UnauthorizedException('2FA challenge token is invalid or expired.');
+      throw new UnauthorizedException(
+        '2FA challenge token is invalid or expired.',
+      );
     }
 
     // Require the challenge tag as well as the pending flag, so an access or
@@ -612,7 +754,9 @@ export class AuthService implements OnModuleInit {
         userAgent,
         reason: 'two_factor_not_configured',
       });
-      throw new BadRequestException('2FA is not enabled or secret is missing for this account.');
+      throw new BadRequestException(
+        '2FA is not enabled or secret is missing for this account.',
+      );
     }
 
     const isValid = TotpUtil.verify(dto.code, admin.twoFactorSecret);
@@ -661,13 +805,20 @@ export class AuthService implements OnModuleInit {
       userAgent,
       reason: 'via_2fa',
     });
-    this.alertSuperAdmin(admin.id, 'New sign-in to your account', `${this.describeAccess(ipAddress, userAgent, location)} · verified with 2FA`);
+    this.alertSuperAdmin(
+      admin.id,
+      'New sign-in to your account',
+      `${this.describeAccess(ipAddress, userAgent, location)} · verified with 2FA`,
+    );
 
     return {
       message: 'SuperAdmin 2FA login successful',
       accessToken,
       refreshToken,
-      passwordExpired: await this.isPasswordExpired(admin.passwordLastChangedAt, admin.createdAt),
+      passwordExpired: await this.isPasswordExpired(
+        admin.passwordLastChangedAt,
+        admin.createdAt,
+      ),
       user: {
         id: admin.id,
         email: admin.email,
@@ -678,7 +829,9 @@ export class AuthService implements OnModuleInit {
   }
 
   async onboardOrganization(dto: OnboardOrganizationDto) {
-    const existingCred = await this.credentialModel.findOne({ where: { email: dto.adminEmail } });
+    const existingCred = await this.credentialModel.findOne({
+      where: { email: dto.adminEmail },
+    });
     if (existingCred) {
       throw new BadRequestException('Admin user email already registered.');
     }
@@ -731,8 +884,12 @@ export class AuthService implements OnModuleInit {
     'If an account exists, OTP reset instructions have been sent.';
 
   async forgotPassword(dto: ForgotPasswordDto) {
-    const cred = await this.credentialModel.findOne({ where: { email: dto.email } });
-    const superAdmin = await this.superAdminModel.findOne({ where: { email: dto.email } });
+    const cred = await this.credentialModel.findOne({
+      where: { email: dto.email },
+    });
+    const superAdmin = await this.superAdminModel.findOne({
+      where: { email: dto.email },
+    });
 
     if (!cred && !superAdmin) {
       return { message: AuthService.RESET_REQUESTED_MESSAGE };
@@ -782,8 +939,12 @@ export class AuthService implements OnModuleInit {
   }
 
   async verifyOtp(dto: VerifyOtpDto) {
-    const cred = await this.credentialModel.findOne({ where: { email: dto.email } });
-    const superAdmin = await this.superAdminModel.findOne({ where: { email: dto.email } });
+    const cred = await this.credentialModel.findOne({
+      where: { email: dto.email },
+    });
+    const superAdmin = await this.superAdminModel.findOne({
+      where: { email: dto.email },
+    });
 
     const target = cred || superAdmin;
     // Delegated to OtpService so the stored bcrypt hash is compared with
@@ -835,8 +996,12 @@ export class AuthService implements OnModuleInit {
       throw new BadRequestException('Passwords do not match.');
     }
 
-    const cred = await this.credentialModel.findOne({ where: { email: dto.email } });
-    const superAdmin = await this.superAdminModel.findOne({ where: { email: dto.email } });
+    const cred = await this.credentialModel.findOne({
+      where: { email: dto.email },
+    });
+    const superAdmin = await this.superAdminModel.findOne({
+      where: { email: dto.email },
+    });
 
     const target = cred || superAdmin;
     if (!target) {
@@ -844,7 +1009,11 @@ export class AuthService implements OnModuleInit {
     }
     await this.assertOtpValid(target, dto.otp);
 
-    await this.assertPasswordNotReused(dto.newPassword, target.passwordHash, target.passwordHistory);
+    await this.assertPasswordNotReused(
+      dto.newPassword,
+      target.passwordHash,
+      target.passwordHistory,
+    );
     await this.passwordPolicyService.validate(dto.newPassword);
 
     const passwordHash = await bcrypt.hash(dto.newPassword, BCRYPT_SALT_ROUNDS);
@@ -853,7 +1022,10 @@ export class AuthService implements OnModuleInit {
       passwordHash,
       resetOtp: null,
       resetOtpExpiresAt: null,
-      passwordHistory: this.appendPasswordHistory(target.passwordHistory, passwordHash),
+      passwordHistory: this.appendPasswordHistory(
+        target.passwordHistory,
+        passwordHash,
+      ),
       passwordLastChangedAt: new Date(),
     });
 
@@ -861,7 +1033,9 @@ export class AuthService implements OnModuleInit {
   }
 
   async registerTenant(dto: RegisterTenantDto) {
-    const existing = await this.credentialModel.findOne({ where: { email: dto.adminEmail } });
+    const existing = await this.credentialModel.findOne({
+      where: { email: dto.adminEmail },
+    });
     if (existing) {
       throw new BadRequestException('Email already registered');
     }
@@ -898,8 +1072,15 @@ export class AuthService implements OnModuleInit {
     };
   }
 
-  async login(dto: LoginDto, ipAddress?: string, userAgent?: string, location?: string) {
-    const cred = await this.credentialModel.findOne({ where: { email: dto.email } });
+  async login(
+    dto: LoginDto,
+    ipAddress?: string,
+    userAgent?: string,
+    location?: string,
+  ) {
+    const cred = await this.credentialModel.findOne({
+      where: { email: dto.email },
+    });
 
     if (cred) {
       this.accountLockoutService.assertNotLocked(cred);
@@ -939,7 +1120,9 @@ export class AuthService implements OnModuleInit {
       const maintenance = await this.maintenanceSettings.getMaintenanceState();
       const isAdmin =
         effectiveAuth.isFullAccess === true ||
-        [effectiveRole, ...(effectiveAuth.roles ?? [])].some((role) => /admin/i.test(String(role ?? '')));
+        [effectiveRole, ...(effectiveAuth.roles ?? [])].some((role) =>
+          /admin/i.test(String(role ?? '')),
+        );
       if (maintenance.enabled && !isAdmin) {
         throw new ServiceUnavailableException(maintenance.message);
       }
@@ -953,7 +1136,10 @@ export class AuthService implements OnModuleInit {
         email: cred.email,
         tenantId: cred.tenantId,
         role: effectiveRole,
-        roles: effectiveAuth.roles.length > 0 ? effectiveAuth.roles : [effectiveRole],
+        roles:
+          effectiveAuth.roles.length > 0
+            ? effectiveAuth.roles
+            : [effectiveRole],
         permissions: effectiveAuth.permissions,
         isFullAccess: effectiveAuth.isFullAccess,
         dataScope: effectiveAuth.dataScope,
@@ -965,7 +1151,9 @@ export class AuthService implements OnModuleInit {
       cred.update({
         lastLoginAt: new Date(),
         lastLoginIp: ipAddress || 'unknown',
-        ...(effectiveRole && cred.role !== effectiveRole ? { role: effectiveRole } : {}),
+        ...(effectiveRole && cred.role !== effectiveRole
+          ? { role: effectiveRole }
+          : {}),
       }),
       this.auditService.log({
         action: 'LOGIN_SUCCESS',
@@ -982,14 +1170,20 @@ export class AuthService implements OnModuleInit {
       message: 'Login successful',
       accessToken,
       refreshToken,
-      passwordExpired: await this.isPasswordExpired(cred.passwordLastChangedAt, cred.createdAt),
+      passwordExpired: await this.isPasswordExpired(
+        cred.passwordLastChangedAt,
+        cred.createdAt,
+      ),
       user: {
         id: cred.id,
         tenantUserId: effectiveAuth.userId,
         email: cred.email,
         tenantId: cred.tenantId,
         role: effectiveRole,
-        roles: effectiveAuth.roles.length > 0 ? effectiveAuth.roles : [effectiveRole],
+        roles:
+          effectiveAuth.roles.length > 0
+            ? effectiveAuth.roles
+            : [effectiveRole],
         permissions: effectiveAuth.permissions,
         isFullAccess: effectiveAuth.isFullAccess,
         dataScope: effectiveAuth.dataScope,
@@ -1004,16 +1198,24 @@ export class AuthService implements OnModuleInit {
    * account has a row here today; HR/Employee tenant users have no login
    * path implemented anywhere in this codebase yet.
    */
-  async getLastLogins(tenantIds: string[]): Promise<Record<string, { email: string; lastLoginAt: Date | null }[]>> {
+  async getLastLogins(
+    tenantIds: string[],
+  ): Promise<Record<string, { email: string; lastLoginAt: Date | null }[]>> {
     const credentials = await this.credentialModel.findAll({
       where: { tenantId: { [Op.in]: tenantIds } },
       attributes: ['tenantId', 'email', 'lastLoginAt'],
     });
 
-    const result: Record<string, { email: string; lastLoginAt: Date | null }[]> = {};
+    const result: Record<
+      string,
+      { email: string; lastLoginAt: Date | null }[]
+    > = {};
     for (const cred of credentials) {
       if (!result[cred.tenantId]) result[cred.tenantId] = [];
-      result[cred.tenantId].push({ email: cred.email, lastLoginAt: cred.lastLoginAt });
+      result[cred.tenantId].push({
+        email: cred.email,
+        lastLoginAt: cred.lastLoginAt,
+      });
     }
     return result;
   }
@@ -1024,7 +1226,11 @@ export class AuthService implements OnModuleInit {
    * invalidating the old refresh token. A hash mismatch means the presented token
    * was already rotated out (stolen/replayed), so the whole session is revoked.
    */
-  async refreshToken(dto: RefreshTokenDto, ipAddress?: string, userAgent?: string) {
+  async refreshToken(
+    dto: RefreshTokenDto,
+    ipAddress?: string,
+    userAgent?: string,
+  ) {
     let payload: any;
     try {
       payload = this.jwtService.verify(dto.refreshToken);
@@ -1052,10 +1258,22 @@ export class AuthService implements OnModuleInit {
     }
 
     const session = await this.userSessionModel.findByPk(payload.sid);
-    if (session && session.status === 'active' && (await this.idleTimedOut(session))) {
-      await session.update({ status: 'expired', revokedAt: new Date(), revokedReason: 'Signed out after inactivity' });
+    if (
+      session &&
+      session.status === 'active' &&
+      (await this.idleTimedOut(session))
+    ) {
+      await session.update({
+        status: 'expired',
+        revokedAt: new Date(),
+        revokedReason: 'Signed out after inactivity',
+      });
     }
-    if (!session || session.status !== 'active' || new Date() > session.expiresAt) {
+    if (
+      !session ||
+      session.status !== 'active' ||
+      new Date() > session.expiresAt
+    ) {
       await this.auditService.log({
         action: 'TOKEN_REFRESH_FAILED',
         actorType: 'unknown',
@@ -1064,10 +1282,15 @@ export class AuthService implements OnModuleInit {
         userAgent,
         reason: 'session_invalid_or_expired',
       });
-      throw new UnauthorizedException('Session is no longer valid. Please log in again.');
+      throw new UnauthorizedException(
+        'Session is no longer valid. Please log in again.',
+      );
     }
 
-    const isValidToken = await bcrypt.compare(dto.refreshToken, session.refreshTokenHash);
+    const isValidToken = await bcrypt.compare(
+      dto.refreshToken,
+      session.refreshTokenHash,
+    );
     if (!isValidToken) {
       await session.update({
         status: 'revoked',
@@ -1082,16 +1305,24 @@ export class AuthService implements OnModuleInit {
         userAgent,
         reason: 'reuse_detected_session_revoked',
       });
-      throw new UnauthorizedException('Refresh token has already been used. Please log in again.');
+      throw new UnauthorizedException(
+        'Refresh token has already been used. Please log in again.',
+      );
     }
 
     let accessPayload: Record<string, any>;
-    const actorType: 'superadmin' | 'tenant' = session.superAdminId ? 'superadmin' : 'tenant';
+    const actorType: 'superadmin' | 'tenant' = session.superAdminId
+      ? 'superadmin'
+      : 'tenant';
 
     if (session.superAdminId) {
       const admin = await this.superAdminModel.findByPk(session.superAdminId);
       if (!admin || admin.status !== 'active') {
-        await session.update({ status: 'revoked', revokedAt: new Date(), revokedReason: 'Account inactive' });
+        await session.update({
+          status: 'revoked',
+          revokedAt: new Date(),
+          revokedReason: 'Account inactive',
+        });
         await this.auditService.log({
           action: 'TOKEN_REFRESH_FAILED',
           actorType: 'superadmin',
@@ -1111,9 +1342,15 @@ export class AuthService implements OnModuleInit {
         roles: ['superadmin'],
       };
     } else if (session.authCredentialId) {
-      const cred = await this.credentialModel.findByPk(session.authCredentialId);
+      const cred = await this.credentialModel.findByPk(
+        session.authCredentialId,
+      );
       if (!cred || !cred.isActive) {
-        await session.update({ status: 'revoked', revokedAt: new Date(), revokedReason: 'Account inactive' });
+        await session.update({
+          status: 'revoked',
+          revokedAt: new Date(),
+          revokedReason: 'Account inactive',
+        });
         await this.auditService.log({
           action: 'TOKEN_REFRESH_FAILED',
           actorType: 'tenant',
@@ -1127,7 +1364,11 @@ export class AuthService implements OnModuleInit {
 
       const effectiveAuth = await this.resolveEffectiveAuthorization(cred);
       if (effectiveAuth.isActive === false) {
-        await session.update({ status: 'revoked', revokedAt: new Date(), revokedReason: 'Account inactive' });
+        await session.update({
+          status: 'revoked',
+          revokedAt: new Date(),
+          revokedReason: 'Account inactive',
+        });
         await this.auditService.log({
           action: 'TOKEN_REFRESH_FAILED',
           actorType: 'tenant',
@@ -1148,7 +1389,10 @@ export class AuthService implements OnModuleInit {
         email: cred.email,
         tenantId: cred.tenantId,
         role: effectiveRole,
-        roles: effectiveAuth.roles.length > 0 ? effectiveAuth.roles : [effectiveRole],
+        roles:
+          effectiveAuth.roles.length > 0
+            ? effectiveAuth.roles
+            : [effectiveRole],
         // Re-resolved on every rotation, so a change in user_roles or
         // permissions reaches the user on their next refresh.
         permissions: effectiveAuth.permissions,
@@ -1156,22 +1400,14 @@ export class AuthService implements OnModuleInit {
         dataScope: effectiveAuth.dataScope,
       };
     } else {
-      throw new UnauthorizedException('Session is not linked to a valid account.');
+      throw new UnauthorizedException(
+        'Session is not linked to a valid account.',
+      );
     }
 
-    const tokens = await this.issueTokenPair(accessPayload, { sessionId: session.id });
-
-    await this.auditService.log({
-      action: 'TOKEN_REFRESH',
-      actorType,
-      userId: accessPayload.sub,
-      email: accessPayload.email,
-      tenantId: accessPayload.tenantId,
-      ipAddress,
-      userAgent,
-    });
-
-    return tokens;
+    // A successful renewal isn't written to the audit trail: it happens every
+    // few minutes for every signed-in user and buried what people actually did.
+    return this.issueTokenPair(accessPayload, { sessionId: session.id });
   }
 
   /**
@@ -1179,11 +1415,23 @@ export class AuthService implements OnModuleInit {
    * asks this (cached) on authenticated requests, so a logout or revocation
    * ends the session's access tokens too, not just its refresh token.
    */
-  async getSessionState(sessionId: string): Promise<{ active: boolean; reason?: string }> {
+  async getSessionState(
+    sessionId: string,
+  ): Promise<{ active: boolean; reason?: string }> {
     const session = await this.userSessionModel.findByPk(sessionId, {
-      attributes: ['id', 'status', 'expiresAt', 'lastActiveAt', 'lastInteractionAt'],
+      attributes: [
+        'id',
+        'status',
+        'expiresAt',
+        'lastActiveAt',
+        'lastInteractionAt',
+      ],
     });
-    if (!session) return { active: false, reason: 'Your session has ended. Please sign in again.' };
+    if (!session)
+      return {
+        active: false,
+        reason: 'Your session has ended. Please sign in again.',
+      };
     if (session.status !== 'active') {
       return {
         active: false,
@@ -1193,12 +1441,22 @@ export class AuthService implements OnModuleInit {
             : 'This session was ended. Please sign in again.',
       };
     }
-    if (session.expiresAt && new Date(session.expiresAt).getTime() < Date.now()) {
-      return { active: false, reason: 'Your session has expired. Please sign in again.' };
+    if (
+      session.expiresAt &&
+      new Date(session.expiresAt).getTime() < Date.now()
+    ) {
+      return {
+        active: false,
+        reason: 'Your session has expired. Please sign in again.',
+      };
     }
     const idleMinutes = await this.idleTimedOut(session);
     if (idleMinutes) {
-      await session.update({ status: 'expired', revokedAt: new Date(), revokedReason: 'Signed out after inactivity' });
+      await session.update({
+        status: 'expired',
+        revokedAt: new Date(),
+        revokedReason: 'Signed out after inactivity',
+      });
       return {
         active: false,
         reason: `You were signed out after ${idleMinutes >= 60 ? `${idleMinutes / 60} hour${idleMinutes === 60 ? '' : 's'}` : `${idleMinutes} minutes`} of inactivity. Please sign in again.`,

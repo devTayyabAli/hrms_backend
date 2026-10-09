@@ -1,4 +1,5 @@
 import {
+  IsBoolean,
   IsDefined,
   IsEnum,
   IsInt,
@@ -56,7 +57,9 @@ export class CreateSupportTicketDto {
   @MaxLength(200)
   subject: string;
 
-  @ApiProperty({ example: 'Exporting the organizations report returns an empty file.' })
+  @ApiProperty({
+    example: 'Exporting the organizations report returns an empty file.',
+  })
   @IsString()
   @IsNotEmpty()
   @MaxLength(4000)
@@ -67,7 +70,10 @@ export class CreateSupportTicketDto {
   @IsEnum(HelpCategory)
   category?: HelpCategory;
 
-  @ApiPropertyOptional({ enum: SupportTicketPriority, default: SupportTicketPriority.MEDIUM })
+  @ApiPropertyOptional({
+    enum: SupportTicketPriority,
+    default: SupportTicketPriority.MEDIUM,
+  })
   @IsOptional()
   @IsEnum(SupportTicketPriority)
   priority?: SupportTicketPriority;
@@ -112,10 +118,18 @@ export class GetSupportTicketsQueryDto {
   @IsEnum(SupportTicketStatus)
   status?: SupportTicketStatus;
 
-  @ApiPropertyOptional({ description: 'Search ticket number or subject' })
+  @ApiPropertyOptional({
+    description: 'Search ticket number, subject or organization',
+  })
   @IsOptional()
   @IsString()
   search?: string;
+
+  /** Only this person's tickets — the gateway sets it for organization users. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  createdBy?: string;
 }
 
 // ==========================================
@@ -190,7 +204,11 @@ export class GetArticlesQueryDto {
   @IsEnum(HelpCategory)
   category?: HelpCategory;
 
-  @ApiPropertyOptional({ enum: ArticleFilter, default: ArticleFilter.ALL, description: 'Maps to the All Topics / Trending / New Articles tabs.' })
+  @ApiPropertyOptional({
+    enum: ArticleFilter,
+    default: ArticleFilter.ALL,
+    description: 'Maps to the All Topics / Trending / New Articles tabs.',
+  })
   @IsOptional()
   @IsEnum(ArticleFilter)
   filter?: ArticleFilter = ArticleFilter.ALL;
@@ -226,16 +244,22 @@ export class CreateVideoTutorialDto {
   @IsUrl()
   videoUrl: string;
 
-  @ApiPropertyOptional({ example: 'https://videos.fuutura.com/thumbs/add-organization.jpg' })
+  @ApiPropertyOptional({
+    example: 'https://videos.fuutura.com/thumbs/add-organization.jpg',
+  })
   @IsOptional()
   @IsUrl()
   thumbnailUrl?: string;
 
-  @ApiProperty({ example: 275, description: 'Duration in seconds (rendered as mm:ss).' })
+  @ApiPropertyOptional({
+    example: 275,
+    description: 'Duration in seconds (rendered as mm:ss).',
+  })
+  @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  durationSeconds: number;
+  durationSeconds?: number;
 }
 
 export class UpdateVideoTutorialDto {
@@ -310,6 +334,12 @@ export class HelpIdDto {
   @IsString()
   @IsNotEmpty()
   id: string;
+
+  /** False when opening for editing, so it doesn't count as a read. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  countView?: boolean;
 }
 
 // Every nested `dto` below needs real validation metadata: the microservice's
@@ -333,6 +363,22 @@ export class CreateSupportTicketMessageDto {
   @IsOptional()
   @IsString()
   createdByName?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  createdByEmail?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  createdByRole?: string;
+
+  /** Set by the gateway from the caller's token — never from the request body. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  tenantId?: string;
 }
 
 export class UpdateSupportTicketMessageDto {

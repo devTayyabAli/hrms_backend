@@ -17,6 +17,20 @@ import { Subscription } from './subscription.model';
 import { Payment } from './payment.model';
 import { Invoice } from './invoice.model';
 
+export interface TenantSetupRequest {
+  modules: { moduleKey: string; enabled: boolean; allowedActions?: string[] }[];
+  sendInvitation: boolean;
+  adminName: string | null;
+  adminPhone: string | null;
+  customMessage: string | null;
+  planId: string | null;
+  billingCycle: string | null;
+  /** Set when every setup step has finished. */
+  completedAt: string | null;
+  /** The step that last failed and why, cleared on success. */
+  lastError: string | null;
+}
+
 export enum TenantStatus {
   DRAFT = 'DRAFT',
   PENDING_SUBSCRIPTION = 'PENDING_SUBSCRIPTION',
@@ -153,6 +167,15 @@ export class Tenant extends Model {
 
   @Column({ type: DataType.TEXT, allowNull: true })
   declare provisioningError: string;
+
+  /**
+   * What the Super Admin asked for when creating the organization — modules,
+   * whether to invite the admin and who they are — so a failed setup can be
+   * retried to completion, and a first invitation sent later still knows the
+   * admin's name. `completedAt` is set once every step has run.
+   */
+  @Column({ type: DataType.JSONB, allowNull: true })
+  declare setupRequest: TenantSetupRequest | null;
 
   @HasOne(() => TenantDatabaseConfig)
   declare databaseConfig: TenantDatabaseConfig;

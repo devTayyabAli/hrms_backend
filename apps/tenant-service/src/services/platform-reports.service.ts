@@ -1,666 +1,1161 @@
-import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  Logger,
+  NotFoundException,
+  OnModuleInit,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
-import { Op } from 'sequelize';
 import { ClientProxy } from '@nestjs/microservices';
-import { firstValueFrom } from 'rxjs';
+import { Op, QueryTypes, fn, col, literal, where } from 'sequelize';
+import { firstValueFrom, timeout } from 'rxjs';
 import {
   SERVICES,
   MESSAGE_PATTERNS,
+  DEFAULT_PLATFORM_TIME_ZONE,
   GenerateReportDto,
   CustomReportQueryDto,
   CreateCustomReportDto,
   UpdateCustomReportDto,
   PlatformGrowthQueryDto,
   TopOrganizationsQueryDto,
+  ReportFiltersDto,
+  utcOffsetMinutes,
 } from '@app/common';
-import { Tenant, Subscription, Plan, CustomReport } from '../models';
-import { DirectoryProjectionService } from './directory-projection.service';
+import {
+  DirectoryRoleCategory,
+  PlatformDirectoryPerson,
+  PlatformTenantCounters,
+} from '@app/database';
+import { Tenant, Subscription, Plan, CustomReport, ReportRun } from '../models';
+import { PlatformOrganizationsService } from './platform-organizations.service';
+import { PlatformStatusService } from './platform-status.service';
+import {
+  REPORT_CATALOG,
+  ReportColumn,
+  ReportDefinition,
+  ResolvedPeriod,
+  monthsBetween,
+  reportDefinition,
+  resolvePeriod,
+  selectColumns,
+} from './report-catalog';
 
-export interface PopularReportTemplate {
-  id: string;
-  title: string;
-  description: string;
-  category: string;
-  icon: string;
-  color: string;
+/** Who asked for a report or saved one. */
+export interface ReportActor {
+  id?: string | null;
+  email?: string | null;
 }
 
+type Row = Record<string, unknown>;
+
+/** Rows returned in the on-screen preview; the CSV always has all of them. */
+const PREVIEW_ROWS = 100;
+/** CSVs above this aren't kept for re-download (they can be generated again). */
+const MAX_STORED_CSV = 5 * 1024 * 1024;
+
+const STATUS_LABELS: Record<string, string> = {
+  ACTIVE: 'Active',
+  TRIAL: 'Trial',
+  PENDING: 'Pending',
+  DEACTIVATED: 'Deactivated',
+  PENDING_PAYMENT: 'Pending payment',
+  PAST_DUE: 'Past due',
+  SUSPENDED: 'Suspended',
+  CANCELLED: 'Cancelled',
+  MONTHLY: 'Monthly',
+  ANNUALLY: 'Yearly',
+};
+const label = (value: unknown) =>
+  typeof value === 'string' ? (STATUS_LABELS[value] ?? value) : value;
+
+/** Event names in the security report. */
+const EVENT_LABELS: Record<string, string> = {
+  LOGIN_FAILED: 'Failed sign-in',
+  TWO_FA_FAILED: 'Wrong 2FA code',
+  TOKEN_REFRESH_FAILED: 'Session renewal refused',
+  ACCOUNT_LOCKED: 'Account locked',
+};
+const humanizeAction = (action: string) =>
+  EVENT_LABELS[action] ??
+  action
+    .toLowerCase()
+    .split('_')
+    .map((w, i) => (i === 0 ? w.charAt(0).toUpperCase() + w.slice(1) : w))
+    .join(' ')
+    .replace(/\b2fa\b/i, '2FA')
+    .replace(/\bip\b/i, 'IP');
+
+/**
+ * The six sample custom reports this service used to insert so the table
+ * wasn't empty. Removed on startup; matched on name and the exact invented
+ * "last generated" time together, which nothing real can share.
+ */
+const SAMPLE_REPORTS: [string, string][] = [
+  ['Employee Activity Report', '2026-08-18T10:24:00.000Z'],
+  ['Organization Summary', '2026-08-15T16:12:00.000Z'],
+  ['Payroll Report', '2026-08-12T14:45:00.000Z'],
+  ['Subscription Report', '2026-08-10T09:30:00.000Z'],
+  ['Performance Report', '2026-08-08T11:20:00.000Z'],
+  ['User Login Report', '2026-08-05T18:24:00.000Z'],
+];
+
+const platformTimeZone = () =>
+  process.env.NOTIFICATIONS_DEFAULT_TIME_ZONE || DEFAULT_PLATFORM_TIME_ZONE;
+
+/** When a person joined their organization; rows synced before that was recorded fall back to the sync time. */
+const PEOPLE_DATE = 'COALESCE("sourceCreatedAt", "createdAt")';
+
 @Injectable()
-export class PlatformReportsService {
+export class PlatformReportsService implements OnModuleInit {
   private readonly logger = new Logger(PlatformReportsService.name);
-  private seeded = false;
 
   constructor(
     @InjectModel(Tenant) private readonly tenantModel: typeof Tenant,
-    @InjectModel(Subscription) private readonly subscriptionModel: typeof Subscription,
-    @InjectModel(Plan) private readonly planModel: typeof Plan,
-    @InjectModel(CustomReport) private readonly customReportModel: typeof CustomReport,
-    @Inject(SERVICES.USER_SERVICE) private readonly userClient: ClientProxy,
-    private readonly directoryProjection: DirectoryProjectionService,
+    @InjectModel(Subscription)
+    private readonly subscriptionModel: typeof Subscription,
+    @InjectModel(CustomReport)
+    private readonly customReportModel: typeof CustomReport,
+    @InjectModel(ReportRun) private readonly runModel: typeof ReportRun,
+    @InjectModel(PlatformDirectoryPerson)
+    private readonly directory: typeof PlatformDirectoryPerson,
+    @InjectModel(PlatformTenantCounters)
+    private readonly counters: typeof PlatformTenantCounters,
+    @Inject(SERVICES.AUTH_SERVICE) private readonly authClient: ClientProxy,
+    private readonly organizations: PlatformOrganizationsService,
+    private readonly platformStatus: PlatformStatusService,
   ) {}
 
+  async onModuleInit() {
+    try {
+      const removed = await this.customReportModel.destroy({
+        where: {
+          [Op.or]: SAMPLE_REPORTS.map(([name, at]) => ({
+            name,
+            lastGeneratedAt: new Date(at),
+          })),
+        },
+      });
+      if (removed)
+        this.logger.log(
+          `Removed ${removed} sample custom reports that were never created by anyone.`,
+        );
+    } catch (err) {
+      this.logger.warn(
+        `Custom report cleanup skipped: ${(err as Error)?.message}`,
+      );
+    }
+  }
+
+  private offset(at = new Date()) {
+    return utcOffsetMinutes(platformTimeZone(), at);
+  }
+
+  // ==========================================
+  // Page data: KPI cards, growth chart, top organizations
+  // ==========================================
+
   /**
-   * Top 4 KPI metric cards derived directly from real database records:
-   * - Total Organizations (count of tenants in DB)
-   * - Total Users (count of users across tenants)
-   * - Active Users (active user count)
-   * - Reports Generated (custom reports in DB)
+   * The four KPI cards. Growth is this month against the end of last month
+   * (or the last 30 days against the 30 before, for sign-ins); 0 means there
+   * was nothing to compare with, and the page hides the arrow.
    */
   async getStats() {
-    await this.ensureSeedCustomReports();
+    const now = new Date();
+    const offset = this.offset(now);
+    const monthStart = resolvePeriod(
+      { period: 'this-month' },
+      'this-month',
+      now,
+      offset,
+    ).from!;
+    const lastMonth = resolvePeriod(
+      { period: 'last-month' },
+      'last-month',
+      now,
+      offset,
+    );
+    const DAY = 24 * 60 * 60 * 1000;
 
-    const [realOrgsCount, realReportsCount, tenants] = await Promise.all([
+    const peopleWhere = { deletedAt: null };
+    const [
+      orgs,
+      orgsBefore,
+      people,
+      peopleBefore,
+      runsThisMonth,
+      runsLastMonth,
+      runsTotal,
+      signIns,
+      signInsBefore,
+    ] = await Promise.all([
       this.tenantModel.count(),
-      this.customReportModel.count(),
-      this.tenantModel.findAll({ attributes: ['id'] }),
+      this.tenantModel.count({ where: { createdAt: { [Op.lt]: monthStart } } }),
+      this.directory.count({ where: peopleWhere }),
+      this.directory.count({
+        where: {
+          ...peopleWhere,
+          [Op.and]: [where(literal(PEOPLE_DATE), Op.lt, monthStart)],
+        },
+      }),
+      this.runModel.count({ where: { createdAt: { [Op.gte]: monthStart } } }),
+      this.runModel.count({
+        where: {
+          createdAt: { [Op.gte]: lastMonth.from!, [Op.lte]: lastMonth.to },
+        },
+      }),
+      this.runModel.count(),
+      this.signInSummary(new Date(now.getTime() - 30 * DAY), now),
+      this.signInSummary(
+        new Date(now.getTime() - 60 * DAY),
+        new Date(now.getTime() - 30 * DAY),
+      ),
     ]);
 
-    let totalUsers = 0;
-    let activeUsers = 0;
-
-    if (tenants.length > 0) {
-      try {
-        // Reads the projection's per-tenant rollups instead of
-        // USER.GET_TENANT_USER_COUNTS, which opened every tenant database and
-        // counted users in memory to produce these two numbers.
-        const counters = await this.directoryProjection.getCounters(
-          tenants.map((t) => t.id),
-        );
-        for (const row of counters as any[]) {
-          totalUsers += Number(row?.totalUsers ?? 0);
-          activeUsers += Number(row?.activeUsers ?? 0);
-        }
-      } catch (err) {
-        this.logger.warn(`Could not read directory counters for stats: ${(err as Error)?.message}`);
-      }
-    }
+    const change = (current: number, previous: number) =>
+      previous > 0
+        ? Number((((current - previous) / previous) * 100).toFixed(1))
+        : 0;
+    const trend = (current: number, previous: number, period: string) => {
+      const pct = change(current, previous);
+      return {
+        changePercentage: pct,
+        direction: pct >= 0 ? 'up' : 'down',
+        period,
+      };
+    };
 
     return {
       totalOrganizations: {
-        count: realOrgsCount,
-        changePercentage: 3.4,
-        period: 'vs last month',
-        direction: 'up',
+        count: orgs,
+        ...trend(orgs, orgsBefore, 'vs end of last month'),
       },
       totalUsers: {
-        count: totalUsers,
-        changePercentage: 12.8,
-        period: 'vs last month',
-        direction: 'up',
+        count: people,
+        ...trend(people, peopleBefore, 'vs end of last month'),
       },
       activeUsers: {
-        count: activeUsers,
-        changePercentage: 10.4,
-        period: 'vs last month',
-        direction: 'up',
+        count: signIns?.totals.uniqueUsers ?? null,
+        ...trend(
+          signIns?.totals.uniqueUsers ?? 0,
+          signInsBefore?.totals.uniqueUsers ?? 0,
+          'signed in, last 30 days vs the 30 before',
+        ),
       },
       reportsGenerated: {
-        count: realReportsCount,
-        changePercentage: 5.1,
-        period: 'vs last month',
-        direction: 'up',
+        count: runsTotal,
+        ...trend(runsThisMonth, runsLastMonth, 'this month vs last month'),
       },
     };
   }
 
   /**
-   * Platform Growth chart computed from actual database creation timelines
-   * Curves for: Organizations, Users, Reports
+   * Cumulative organizations, people and report runs at the end of each month.
+   * People are dated by when they were added in their organization.
    */
   async getPlatformGrowth(query?: PlatformGrowthQueryDto) {
-    const is12Months = query?.period === '12months';
-    const monthsCount = is12Months ? 12 : 6;
-
     const now = new Date();
-    const months: string[] = [];
-    const orgsData: number[] = [];
-    const usersData: number[] = [];
-    const reportsData: number[] = [];
+    const offset = this.offset(now);
+    const monthsCount = query?.period === '12months' ? 12 : 6;
+    const range = resolvePeriod(
+      { period: 'last-12-months' },
+      'last-12-months',
+      now,
+      offset,
+    );
+    const months = monthsBetween(range.from!, now, offset).slice(-monthsCount);
 
-    const [allTenants, allReports] = await Promise.all([
-      this.tenantModel.findAll({ attributes: ['id', 'createdAt'] }),
-      this.customReportModel.findAll({ attributes: ['id', 'createdAt'] }),
+    const [orgs, people, runs] = await Promise.all([
+      this.cumulativeBy(this.tenantModel, '"createdAt"', months),
+      this.cumulativeBy(this.directory, PEOPLE_DATE, months, {
+        deletedAt: null,
+      }),
+      this.cumulativeBy(this.runModel, '"createdAt"', months),
     ]);
 
-    for (let i = monthsCount - 1; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const endOfM = new Date(now.getFullYear(), now.getMonth() - i + 1, 0, 23, 59, 59);
-      months.push(d.toLocaleString('en-US', { month: 'short' }));
-
-      const orgsUpToMonth = allTenants.filter((t) => new Date(t.createdAt) <= endOfM).length;
-      const reportsUpToMonth = allReports.filter((r) => new Date(r.createdAt) <= endOfM).length;
-
-      orgsData.push(orgsUpToMonth);
-      usersData.push(orgsUpToMonth * 5);
-      reportsData.push(reportsUpToMonth);
-    }
-
     return {
-      period: is12Months ? '12months' : '6months',
-      months,
+      period: monthsCount === 12 ? '12months' : '6months',
+      months: months.map((m) => m.label.split(' ')[0]),
       series: [
-        {
-          name: 'Organizations',
-          color: '#3B82F6',
-          data: orgsData,
-        },
-        {
-          name: 'Users',
-          color: '#10B981',
-          data: usersData,
-        },
-        {
-          name: 'Reports',
-          color: '#8B5CF6',
-          data: reportsData,
-        },
+        { name: 'Organizations', color: '#3B82F6', data: orgs },
+        { name: 'Users', color: '#10B981', data: people },
+        { name: 'Reports', color: '#8B5CF6', data: runs },
       ],
     };
   }
 
   /**
-   * Top Organizations by Employees leaderboard
-   * Queries REAL organizations and employee counts from the database
+   * Running totals at each month end: one query grouped by local month, then
+   * everything before the first month plus each month in turn.
+   * `dateExpr` is a fixed column expression from this file, never input.
    */
+  private async cumulativeBy(
+    model: any,
+    dateExpr: string,
+    months: { key: string; end: Date }[],
+    where: Row = {},
+  ) {
+    if (!months.length) return [];
+    const perMonth = await this.groupByMonth(
+      model,
+      this.monthBucket(dateExpr),
+      where,
+    );
+    const firstKey = months[0].key;
+    let running = 0;
+    for (const [key, total] of perMonth) if (key < firstKey) running += total;
+    return months.map((m) => {
+      running += perMonth.get(m.key) ?? 0;
+      return running;
+    });
+  }
+
+  /** "YYYY-MM" of a timestamp column in the platform's time zone. */
+  private monthBucket(dateExpr: string) {
+    return `to_char(${dateExpr} + interval '${Math.trunc(this.offset())} minutes', 'YYYY-MM')`;
+  }
+
+  /** Organizations ranked by headcount (from the directory, no tenant database is opened). */
   async getTopOrganizations(query?: TopOrganizationsQueryDto) {
-    try {
-      const limit = query?.limit ? Number(query.limit) : 5;
+    const limit = Math.min(Math.max(Number(query?.limit) || 5, 1), 50);
+    const orgs = await this.organizationRows();
+    return orgs
+      .sort(
+        (a, b) =>
+          b.people - a.people ||
+          String(a.organization).localeCompare(String(b.organization)),
+      )
+      .slice(0, limit)
+      .map((o) => ({
+        id: o.id,
+        name: o.organization,
+        domain: o.domain,
+        logo: o.logoUrl,
+        employeesCount: o.people,
+        status: label(o.status),
+        plan: o.plan,
+      }));
+  }
 
-      // 1. Fetch real tenants from the database
-      const tenants = await this.tenantModel.findAll({
-        order: [['createdAt', 'DESC']],
-      });
+  // ==========================================
+  // Report catalog and generation
+  // ==========================================
 
-      if (!tenants || tenants.length === 0) {
-        return [];
-      }
+  getPopularTemplates() {
+    return Object.values(REPORT_CATALOG).map((d) => ({
+      id: d.id,
+      title: d.title,
+      description: d.description,
+      category: d.category,
+      periodApplies: d.periodApplies,
+      defaultPeriod: d.defaultPeriod,
+      statusFilter: d.statusFilter ?? null,
+      columns: d.columns,
+    }));
+  }
 
-    const tenantIds = tenants.map((t) => t.id);
+  /**
+   * Runs a report against live data, stores the run (with its CSV, so the
+   * download matches what was previewed) and returns the preview.
+   */
+  async generateReport(
+    dto: GenerateReportDto & { customReportId?: string | null; title?: string },
+    actor?: ReportActor,
+  ) {
+    const definition = reportDefinition(dto.reportType);
+    const columns = selectColumns(definition, dto.columns);
+    const started = Date.now();
+    const now = new Date();
+    const offset = this.offset(now);
+    const period = resolvePeriod(
+      dto.filters,
+      definition.defaultPeriod,
+      now,
+      offset,
+    );
+    const status =
+      dto.filters?.status &&
+      definition.statusFilter?.options.some(
+        (o) => o.value === dto.filters!.status,
+      )
+        ? dto.filters.status
+        : undefined;
 
-    // 2. Fetch real subscriptions and associated plans
-    const subscriptions = await this.subscriptionModel.findAll({
-      where: { tenantId: { [Op.in]: tenantIds } },
-      include: [{ model: Plan }],
+    const { rows, summary } = await this.buildRows(
+      definition,
+      period,
+      status,
+      offset,
+    );
+    const csv = this.toCsv(columns, rows, offset);
+    const durationMs = Date.now() - started;
+    const title = dto.title || definition.title;
+    const generatedByName = await this.actorName(actor);
+
+    const run = await this.runModel.create({
+      reportType: definition.id,
+      customReportId: dto.customReportId ?? null,
+      title,
+      filters: {
+        period: period.period,
+        from: dto.filters?.from ?? null,
+        to: dto.filters?.to ?? null,
+        status: status ?? null,
+        columns: dto.columns ?? null,
+      },
+      rowCount: rows.length,
+      durationMs,
+      generatedById: actor?.id ?? null,
+      generatedByName,
+      content: Buffer.byteLength(csv) <= MAX_STORED_CSV ? csv : null,
+    });
+
+    if (dto.customReportId) {
+      await this.customReportModel.update(
+        { lastGeneratedAt: now },
+        { where: { id: dto.customReportId } },
+      );
+    }
+
+    return {
+      runId: run.id,
+      reportType: definition.id,
+      title,
+      category: definition.category,
+      generatedAt: run.createdAt,
+      generatedBy: generatedByName,
+      durationMs,
+      period: {
+        value: period.period,
+        label: period.label,
+        from: period.from,
+        to: period.to,
+        appliesTo: definition.periodApplies,
+      },
+      status: status
+        ? {
+            value: status,
+            label: definition.statusFilter!.options.find(
+              (o) => o.value === status,
+            )!.label,
+          }
+        : null,
+      timeZone: platformTimeZone(),
+      columns,
+      rows: rows
+        .slice(0, PREVIEW_ROWS)
+        .map((row) =>
+          Object.fromEntries(columns.map((c) => [c.key, row[c.key] ?? null])),
+        ),
+      totalRows: rows.length,
+      summary,
+      downloadable: run.content !== null,
+    };
+  }
+
+  /** The CSV a run produced, for download. */
+  async getRunFile(id: string) {
+    const run = await this.runModel.findByPk(id);
+    if (!run) throw new NotFoundException('This report run no longer exists.');
+    if (run.content === null)
+      throw new BadRequestException(
+        'This report was too large to keep. Generate it again to download it.',
+      );
+    return this.toFile(run);
+  }
+
+  /** The CSV of a custom report's most recent run. */
+  async getLastRunFile(customReportId: string) {
+    const run = await this.runModel.findOne({
+      where: { customReportId },
       order: [['createdAt', 'DESC']],
     });
-
-    const subMap: Record<string, Subscription> = {};
-    for (const sub of subscriptions) {
-      if (!subMap[sub.tenantId]) {
-        subMap[sub.tenantId] = sub;
-      }
-    }
-
-    // 3. Fetch real user / employee counts from USER_SERVICE
-    let countsMap: Record<string, { total: number; employees: number }> = {};
-    try {
-      countsMap = await firstValueFrom(
-        this.userClient.send(MESSAGE_PATTERNS.USER.GET_TENANT_USER_COUNTS, {
-          tenantIds,
-        }),
+    if (!run)
+      throw new NotFoundException(
+        'This report hasn’t been run yet. Run it first.',
       );
-    } catch (err) {
-      this.logger.warn(`Could not fetch user counts: ${(err as Error)?.message}`);
-    }
-
-    // 4. Map each real tenant
-    const mapped = tenants.map((tenant) => {
-      const sub = subMap[tenant.id];
-      const count = countsMap[tenant.id]?.total ?? countsMap[tenant.id]?.employees ?? 0;
-      const status =
-        tenant.status === 'ACTIVE'
-          ? 'Active'
-          : tenant.status === 'SUSPENDED'
-          ? 'Suspended'
-          : sub?.status === 'TRIAL' || tenant.status === 'PENDING_ADMIN_ACTIVATION'
-          ? 'Trial'
-          : 'Active';
-
-      const planName = sub?.plan?.name || tenant.planType || 'Professional';
-
-      return {
-        id: tenant.id,
-        name: tenant.organizationName || tenant.name,
-        domain: tenant.domain || `${tenant.name.toLowerCase().replace(/[^a-z0-9]/g, '')}.com`,
-        logo:
-          tenant.logoUrl ||
-          `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(tenant.name)}`,
-        employeesCount: count,
-        status,
-        plan: planName,
-      };
-    });
-
-    // 5. Sort by employee count descending, then by creation date
-    mapped.sort((a, b) => b.employeesCount - a.employeesCount);
-
-    return mapped.slice(0, limit);
-    } catch (err) {
-      this.logger.error(`Error in getTopOrganizations: ${(err as Error)?.message}`, (err as Error)?.stack);
-      throw err;
-    }
+    if (run.content === null)
+      throw new BadRequestException(
+        'The last run was too large to keep. Run the report again.',
+      );
+    return this.toFile(run);
   }
 
-  /**
-   * 6 Popular Predefined Report Templates shown in screenshot
-   */
-  getPopularTemplates(): PopularReportTemplate[] {
-    return [
-      {
-        id: 'organization-summary',
-        title: 'Organization Summary',
-        description: 'Overview of all organizations',
-        category: 'Organizations',
-        icon: 'Building2',
-        color: '#6366F1',
-      },
-      {
-        id: 'user-activity',
-        title: 'User Activity Report',
-        description: 'User logins and engagement',
-        category: 'Users',
-        icon: 'Users',
-        color: '#3B82F6',
-      },
-      {
-        id: 'subscription-reports',
-        title: 'Subscription Reports',
-        description: 'Billing and subscription metrics',
-        category: 'Subscription',
-        icon: 'CreditCard',
-        color: '#F59E0B',
-      },
-      {
-        id: 'employee-growth',
-        title: 'Employee Growth Report',
-        description: 'Employee trends & analytics',
-        category: 'Reports',
-        icon: 'TrendingUp',
-        color: '#8B5CF6',
-      },
-      {
-        id: 'system-usage',
-        title: 'System Usage Report',
-        description: 'Platform usage metrics',
-        category: 'System',
-        icon: 'Activity',
-        color: '#06B6D4',
-      },
-      {
-        id: 'security-audit',
-        title: 'Security & Audit Report',
-        description: 'Security events and logs',
-        category: 'Security',
-        icon: 'ShieldCheck',
-        color: '#EF4444',
-      },
-    ];
+  private toFile(run: ReportRun) {
+    const stamp = new Date(run.createdAt).toISOString().slice(0, 10);
+    const slug =
+      run.title
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '') || 'report';
+    return {
+      filename: `${slug}-${stamp}.csv`,
+      contentType: 'text/csv; charset=utf-8',
+      csv: run.content,
+      title: run.title,
+    };
   }
 
-  /**
-   * Generates report data dynamically based on template type using real DB data
-   */
-  async generateReport(dto: GenerateReportDto) {
-    const timestamp = new Date().toISOString();
-    let reportData: any;
+  private async buildRows(
+    definition: ReportDefinition,
+    period: ResolvedPeriod,
+    status: string | undefined,
+    offset: number,
+  ): Promise<{
+    rows: Row[];
+    summary: { label: string; value: string | number }[];
+  }> {
+    const inPeriod = (date: Date | null | undefined) =>
+      !!date &&
+      (!period.from || new Date(date) >= period.from) &&
+      new Date(date) <= period.to;
 
-    switch (dto.reportType) {
+    switch (definition.id) {
       case 'organization-summary': {
-        const topOrgs = await this.getTopOrganizations({ limit: 100 });
-        const realCount = await this.tenantModel.count();
-        reportData = {
-          title: 'Organization Summary Report',
-          generatedAt: timestamp,
-          summary: {
-            totalOrganizations: realCount,
-            activeOrganizations: topOrgs.filter((o) => o.status === 'Active').length,
-            trialOrganizations: topOrgs.filter((o) => o.status === 'Trial').length,
-            suspendedOrganizations: topOrgs.filter((o) => o.status === 'Suspended').length,
-          },
-          items: topOrgs,
-        };
-        break;
-      }
-
-      case 'user-activity': {
-        const stats = await this.getStats();
-        reportData = {
-          title: 'User Activity & Engagement Report',
-          generatedAt: timestamp,
-          summary: {
-            totalUsers: stats.totalUsers.count,
-            activeUsersLast30Days: stats.activeUsers.count,
-            totalOrganizations: stats.totalOrganizations.count,
-          },
-          breakdownByRole: [
-            { role: 'SuperAdmin', count: 1 },
-            { role: 'Organization Admin', count: stats.totalOrganizations.count },
-            { role: 'Employee', count: Math.max(0, stats.totalUsers.count - stats.totalOrganizations.count - 1) },
+        const rows = (await this.organizationRows()).filter(
+          (o) =>
+            (!status || o.status === status) &&
+            (period.period === 'all-time' || inPeriod(o.createdAt)),
+        );
+        return {
+          rows: rows.map((o) => ({
+            ...o,
+            status: label(o.status),
+            subscriptionStatus: label(o.subscriptionStatus),
+            billingCycle: label(o.billingCycle),
+          })),
+          summary: [
+            { label: 'Organizations', value: rows.length },
+            {
+              label: 'Active',
+              value: rows.filter((o) => o.status === 'ACTIVE').length,
+            },
+            { label: 'People', value: rows.reduce((s, o) => s + o.people, 0) },
           ],
         };
-        break;
+      }
+
+      case 'user-activity':
+      case 'system-usage': {
+        const orgs = (await this.organizationRows()).filter(
+          (o) => !status || o.status === status,
+        );
+        const signIns = await this.signInSummary(
+          period.from ?? new Date(0),
+          period.to,
+          orgs.map((o) => o.id),
+        );
+        if (!signIns)
+          throw new BadRequestException(
+            'Sign-in data is unavailable right now (the authentication service did not answer). Try again in a moment.',
+          );
+        const sizes =
+          definition.id === 'system-usage'
+            ? await this.platformStatus.measureDatabases()
+            : null;
+        const rows = orgs.map((o) => {
+          const s = signIns.byTenant[o.id];
+          return {
+            organization: o.organization,
+            status: label(o.status),
+            people: o.people,
+            activePeople: o.activePeople,
+            usersSignedIn: s?.uniqueUsers ?? 0,
+            signIns: s?.successful ?? 0,
+            failedSignIns: s?.failed ?? 0,
+            lastSignInAt: s?.lastSignInAt ?? null,
+            databaseSize: sizes
+              ? (sizes.byTenant.get(o.id) ?? null)
+              : undefined,
+          };
+        });
+        const summary: { label: string; value: string | number }[] =
+          definition.id === 'user-activity'
+            ? [
+                { label: 'Organizations', value: rows.length },
+                {
+                  label: 'Sign-ins',
+                  value: rows.reduce((s, r) => s + r.signIns, 0),
+                },
+                {
+                  label: 'Failed sign-ins',
+                  value: rows.reduce((s, r) => s + r.failedSignIns, 0),
+                },
+                {
+                  label: 'People who signed in',
+                  value: rows.reduce((s, r) => s + r.usersSignedIn, 0),
+                },
+              ]
+            : [
+                { label: 'Organizations', value: rows.length },
+                {
+                  label: 'Organization databases',
+                  value: formatBytes(
+                    rows.reduce((s, r) => s + (r.databaseSize ?? 0), 0),
+                  ),
+                },
+                {
+                  label: 'Platform database',
+                  value: formatBytes(sizes?.platformBytes ?? 0),
+                },
+                ...(sizes?.unmeasuredDatabases
+                  ? [
+                      {
+                        label: 'Not measured',
+                        value: sizes.unmeasuredDatabases,
+                      },
+                    ]
+                  : []),
+              ];
+        return {
+          rows:
+            definition.id === 'system-usage'
+              ? rows.sort(
+                  (a, b) => (b.databaseSize ?? 0) - (a.databaseSize ?? 0),
+                )
+              : rows.sort((a, b) => b.signIns - a.signIns),
+          summary,
+        };
       }
 
       case 'subscription-reports': {
-        const subscriptions = await this.subscriptionModel.findAll({ include: [{ model: Plan }] });
-        const activeCount = subscriptions.filter((s) => s.status === 'ACTIVE').length;
-        const trialCount = subscriptions.filter((s) => s.status === 'TRIAL').length;
-        reportData = {
-          title: 'Subscription & Billing Report',
-          generatedAt: timestamp,
-          summary: {
-            totalSubscribers: subscriptions.length,
-            activeSubscriptions: activeCount,
-            trialSubscriptions: trialCount,
-          },
-          items: subscriptions.map((s) => ({
-            id: s.id,
-            tenantId: s.tenantId,
-            planName: s.plan?.name || 'Standard',
-            status: s.status,
-            createdAt: s.createdAt,
-          })),
+        const where: Row = {};
+        if (status) where.status = status;
+        if (period.from)
+          where.startDate = { [Op.gte]: period.from, [Op.lte]: period.to };
+        const subs = await this.subscriptionModel.findAll({
+          where,
+          include: [
+            { model: Plan, attributes: ['name'] },
+            { model: Tenant, attributes: ['name', 'organizationName'] },
+          ],
+          order: [['startDate', 'DESC']],
+        });
+        const rows = subs.map((s) => ({
+          organization: s.tenant?.organizationName || s.tenant?.name || '—',
+          plan: s.plan?.name ?? '—',
+          status: label(s.status),
+          billingCycle: label(s.billingCycle),
+          price:
+            s.billingCycle === 'ANNUALLY'
+              ? Number(s.snapshotYearlyPrice ?? 0)
+              : Number(s.snapshotMonthlyPrice ?? 0),
+          startDate: s.startDate,
+          nextBillingDate: s.nextBillingDate,
+          pastDueAt: s.pastDueAt,
+          gracePeriodEndsAt: s.gracePeriodEndsAt,
+          cancelledAt: s.cancelledAt,
+          cancellationReason: s.cancellationReason,
+        }));
+        const monthly = subs
+          .filter((s) => s.status === 'ACTIVE')
+          .reduce(
+            (sum, s) =>
+              sum +
+              (s.billingCycle === 'ANNUALLY'
+                ? Number(s.snapshotYearlyPrice ?? 0) / 12
+                : Number(s.snapshotMonthlyPrice ?? 0)),
+            0,
+          );
+        return {
+          rows,
+          summary: [
+            { label: 'Subscriptions', value: rows.length },
+            {
+              label: 'Active',
+              value: subs.filter((s) => s.status === 'ACTIVE').length,
+            },
+            { label: 'Monthly recurring (active)', value: monthly.toFixed(2) },
+          ],
         };
-        break;
       }
 
       case 'employee-growth': {
-        const stats = await this.getStats();
-        reportData = {
-          title: 'Employee Growth & Analytics Report',
-          generatedAt: timestamp,
-          summary: {
-            totalHeadcount: stats.totalUsers.count,
-            activeHeadcount: stats.activeUsers.count,
-            totalOrganizations: stats.totalOrganizations.count,
-          },
+        const first: Date | null = await this.tenantModel.min('createdAt');
+        const from = period.from ?? (first ? new Date(first) : period.to);
+        const months = monthsBetween(from, period.to, offset);
+        const [orgsByMonth, peopleByMonth, employeesByMonth] =
+          await Promise.all([
+            this.groupByMonth(
+              this.tenantModel,
+              this.monthBucket('"createdAt"'),
+              {},
+            ),
+            this.groupByMonth(this.directory, this.monthBucket(PEOPLE_DATE), {
+              deletedAt: null,
+            }),
+            this.groupByMonth(this.directory, this.monthBucket(PEOPLE_DATE), {
+              deletedAt: null,
+              roleCategory: DirectoryRoleCategory.EMPLOYEE,
+            }),
+          ]);
+        const runningBefore = (map: Map<string, number>, key: string) =>
+          [...map].filter(([k]) => k < key).reduce((s, [, v]) => s + v, 0);
+        let totalOrgs = months.length
+          ? runningBefore(orgsByMonth, months[0].key)
+          : 0;
+        let totalPeople = months.length
+          ? runningBefore(peopleByMonth, months[0].key)
+          : 0;
+        const rows = months.map((m) => {
+          const newOrganizations = orgsByMonth.get(m.key) ?? 0;
+          const newPeople = peopleByMonth.get(m.key) ?? 0;
+          totalOrgs += newOrganizations;
+          totalPeople += newPeople;
+          return {
+            month: m.label,
+            newOrganizations,
+            newPeople,
+            newEmployees: employeesByMonth.get(m.key) ?? 0,
+            totalOrganizations: totalOrgs,
+            totalPeople,
+          };
+        });
+        return {
+          rows,
+          summary: [
+            { label: 'Months', value: rows.length },
+            {
+              label: 'New organizations',
+              value: rows.reduce((s, r) => s + r.newOrganizations, 0),
+            },
+            {
+              label: 'People added',
+              value: rows.reduce((s, r) => s + r.newPeople, 0),
+            },
+          ],
         };
-        break;
       }
 
-      case 'system-usage':
-        reportData = {
-          title: 'Platform System Usage Report',
-          generatedAt: timestamp,
-          summary: {
-            databaseUptime: '99.98%',
-            averageResponseLatency: '24ms',
-            totalTenants: await this.tenantModel.count(),
+      case 'security-audit': {
+        const events = await this.authRequest<any[]>(
+          MESSAGE_PATTERNS.AUDIT.REPORT_ROWS,
+          {
+            category: 'security',
+            from: period.from?.toISOString(),
+            to: period.to.toISOString(),
+            status,
+            maxRows: 10000,
           },
+        );
+        if (!events)
+          throw new BadRequestException(
+            'Security events are unavailable right now (the authentication service did not answer). Try again in a moment.',
+          );
+        const rows = events.map((e) => ({
+          occurredAt: e.createdAt,
+          event: humanizeAction(e.action),
+          status: e.status,
+          organization: e.organizationName || 'Platform',
+          user: e.userName || '—',
+          email: e.email || '—',
+          ipAddress: e.ipAddress || '—',
+          device: e.device || '—',
+          reason: e.reason
+            ? String(e.reason).replace(/_/g, ' ')
+            : e.actionDetails || '',
+        }));
+        return {
+          rows,
+          summary: [
+            { label: 'Events', value: rows.length },
+            {
+              label: 'Failed',
+              value: rows.filter((r) => r.status === 'Failed').length,
+            },
+            {
+              label: 'Different IPs',
+              value: new Set(rows.map((r) => r.ipAddress)).size,
+            },
+          ],
         };
-        break;
+      }
+    }
+  }
 
-      case 'security-audit':
-        reportData = {
-          title: 'Platform Security & Audit Report',
-          generatedAt: timestamp,
-          summary: {
-            securityStatus: 'Normal',
-            mfaPolicyActive: true,
-            totalMonitoredOrganizations: await this.tenantModel.count(),
-          },
-        };
-        break;
+  private async groupByMonth(model: any, bucket: string, where: Row) {
+    const grouped = (await model.findAll({
+      attributes: [
+        [literal(bucket), 'month'],
+        [fn('COUNT', literal('*')), 'total'],
+      ],
+      where,
+      group: [literal(bucket) as any],
+      raw: true,
+    })) as { month: string; total: string }[];
+    return new Map(
+      grouped.filter((g) => g.month).map((g) => [g.month, Number(g.total)]),
+    );
+  }
 
-      default: {
-        const custom = await this.customReportModel.findByPk(dto.reportType);
-        if (custom) {
-          await custom.update({ lastGeneratedAt: new Date() });
-          reportData = {
-            title: custom.name,
-            category: custom.category,
-            description: custom.description,
-            generatedAt: timestamp,
-            metrics: custom.metrics,
-            filters: custom.filters,
-            status: 'Completed',
-          };
-        } else {
-          reportData = {
-            title: `Report: ${dto.reportType}`,
-            generatedAt: timestamp,
-            status: 'Generated',
-          };
+  /**
+   * One row per organization from the platform database alone: the tenant,
+   * its latest subscription and the directory's headcount rollup.
+   */
+  private async organizationRows() {
+    const [tenants, subscriptions, counters] = await Promise.all([
+      this.tenantModel.findAll({ order: [['createdAt', 'DESC']] }),
+      this.subscriptionModel.findAll({
+        include: [{ model: Plan, attributes: ['name'] }],
+        order: [['createdAt', 'DESC']],
+      }),
+      this.counters.findAll({ raw: true }),
+    ]);
+    const latest = new Map<string, Subscription>();
+    for (const s of subscriptions)
+      if (!latest.has(s.tenantId)) latest.set(s.tenantId, s);
+    const counts = new Map<string, any>(
+      (counters as any[]).map((c) => [c.tenantId, c]),
+    );
+
+    return tenants.map((t) => {
+      const sub = latest.get(t.id);
+      const c = counts.get(t.id);
+      return {
+        id: t.id,
+        organization: t.organizationName || t.name,
+        status: this.organizations.deriveStatus(t, sub) as string,
+        plan: sub?.plan?.name || t.planType || '—',
+        subscriptionStatus: sub?.status ?? null,
+        billingCycle: sub?.billingCycle ?? null,
+        people: Number(c?.totalUsers ?? 0),
+        activePeople: Number(c?.activeUsers ?? 0),
+        admins: Number(c?.admins ?? 0),
+        hr: Number(c?.hrs ?? 0),
+        employees: Number(c?.employees ?? 0),
+        adminEmail: t.adminEmail || t.officialEmail || null,
+        domain: t.domain || null,
+        logoUrl: t.logoUrl || null,
+        country: t.country || null,
+        industry: t.industry || null,
+        createdAt: t.createdAt,
+      };
+    });
+  }
+
+  private async authRequest<T>(
+    pattern: string,
+    payload: unknown,
+  ): Promise<T | null> {
+    try {
+      return await firstValueFrom(
+        this.authClient.send<T>(pattern, payload).pipe(timeout(20000)),
+      );
+    } catch (err) {
+      this.logger.warn(
+        `Auth request ${pattern} failed: ${(err as Error)?.message}`,
+      );
+      return null;
+    }
+  }
+
+  private signInSummary(from: Date, to: Date, tenantIds?: string[]) {
+    return this.authRequest<{
+      byTenant: Record<
+        string,
+        {
+          successful: number;
+          failed: number;
+          uniqueUsers: number;
+          lastSignInAt: string | null;
         }
-      }
-    }
-
-    if (dto.format === 'csv') {
-      return this.exportReport({ ...dto, reportData });
-    }
-
-    return reportData;
+      >;
+      totals: { uniqueUsers: number; successful: number };
+    }>(MESSAGE_PATTERNS.AUDIT.SIGN_IN_SUMMARY, {
+      from: from.toISOString(),
+      to: to.toISOString(),
+      tenantIds,
+    });
   }
 
-  /**
-   * Exports report to downloadable CSV string
-   */
-  async exportReport(dto: GenerateReportDto & { reportData?: any }) {
-    const reportData = dto.reportData || (await this.generateReport({ ...dto, format: 'json' }));
+  /** The Super Admin's display name, read from the shared platform database. */
+  private async actorName(actor?: ReportActor): Promise<string | null> {
+    if (!actor?.id) return actor?.email ?? null;
+    try {
+      const [admin] = await this.tenantModel.sequelize!.query<{
+        name: string | null;
+        firstName: string | null;
+        lastName: string | null;
+        email: string | null;
+      }>(
+        'SELECT name, "firstName", "lastName", email FROM super_admins WHERE id = :id LIMIT 1',
+        { replacements: { id: actor.id }, type: QueryTypes.SELECT },
+      );
+      const name =
+        admin?.name?.trim() ||
+        [admin?.firstName, admin?.lastName].filter(Boolean).join(' ').trim();
+      return name || admin?.email || actor.email || null;
+    } catch {
+      return actor.email ?? null;
+    }
+  }
 
-    const rows = [
-      ['Metric', 'Value'],
-      ['Report Type', dto.reportType],
-      ['Generated At', new Date().toISOString()],
+  // ==========================================
+  // CSV
+  // ==========================================
+
+  private toCsv(columns: ReportColumn[], rows: Row[], offset: number): string {
+    const zone = platformTimeZone();
+    const header = columns.map((c) =>
+      c.type === 'bytes'
+        ? `${c.label} (MB)`
+        : c.type === 'datetime'
+          ? `${c.label} (${zone})`
+          : c.label,
+    );
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const local = (value: unknown) => {
+      const d = new Date(value as string);
+      if (Number.isNaN(d.getTime())) return '';
+      const s = new Date(d.getTime() + offset * 60_000);
+      return {
+        date: `${s.getUTCFullYear()}-${pad(s.getUTCMonth() + 1)}-${pad(s.getUTCDate())}`,
+        time: `${pad(s.getUTCHours())}:${pad(s.getUTCMinutes())}`,
+      };
+    };
+    const cell = (column: ReportColumn, value: unknown): string => {
+      if (value === null || value === undefined || value === '') return '';
+      switch (column.type) {
+        case 'date': {
+          const l = local(value);
+          return l ? l.date : '';
+        }
+        case 'datetime': {
+          const l = local(value);
+          return l ? `${l.date} ${l.time}` : '';
+        }
+        case 'bytes':
+          return (Number(value) / (1024 * 1024)).toFixed(2);
+        case 'currency':
+          return Number(value).toFixed(2);
+        default:
+          return String(value);
+      }
+    };
+    // A leading = + - @ would be run as a formula by Excel/Sheets.
+    const escape = (text: string) => {
+      const safe =
+        /^[=+\-@\t\r]/.test(text) && !/^-?\d/.test(text) ? `'${text}` : text;
+      return /[",\n\r]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
+    };
+    const lines = [
+      header.map(escape).join(','),
+      ...rows.map((row) =>
+        columns.map((c) => escape(cell(c, row[c.key]))).join(','),
+      ),
     ];
-
-    if (reportData.summary) {
-      for (const [key, val] of Object.entries(reportData.summary)) {
-        rows.push([key, String(val)]);
-      }
-    }
-
-    const csvContent = rows
-      .map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(','))
-      .join('\n');
-
-    return {
-      contentType: 'text/csv',
-      filename: `${dto.reportType}-${new Date().toISOString().slice(0, 10)}.csv`,
-      csv: csvContent,
-    };
+    return `﻿${lines.join('\r\n')}`;
   }
 
-  /**
-   * Custom Reports Table:
-   * Paginated, searchable, category-filterable list of custom reports from database
-   */
+  // ==========================================
+  // Custom reports — saved report definitions
+  // ==========================================
+
   async getCustomReports(query: CustomReportQueryDto) {
-    await this.ensureSeedCustomReports();
-
     const page = query.page && query.page > 0 ? Number(query.page) : 1;
-    const limit = query.limit && query.limit > 0 && query.limit <= 100 ? Number(query.limit) : 10;
+    const limit =
+      query.limit && query.limit > 0 && query.limit <= 100
+        ? Number(query.limit)
+        : 10;
 
-    const where: Record<string | symbol, any> = {
-      status: 'Active',
-    };
-
-    if (query.category && query.category.trim()) {
-      where.category = query.category.trim();
-    }
-
-    if (query.search && query.search.trim()) {
+    const where: Record<string | symbol, unknown> = { status: 'Active' };
+    if (query.category?.trim()) where.category = query.category.trim();
+    if (query.search?.trim()) {
       const term = `%${query.search.trim()}%`;
-      const searchOp = (Op as any).iLike || Op.like;
       where[Op.or] = [
-        { name: { [searchOp]: term } },
-        { createdBy: { [searchOp]: term } },
-        { description: { [searchOp]: term } },
+        { name: { [Op.iLike]: term } },
+        { createdBy: { [Op.iLike]: term } },
+        { description: { [Op.iLike]: term } },
       ];
     }
 
     const { count, rows } = await this.customReportModel.findAndCountAll({
       where,
-      order: [['lastGeneratedAt', 'DESC NULLS LAST'], ['createdAt', 'DESC']],
+      order: [
+        [literal('"lastGeneratedAt" IS NULL'), 'ASC'],
+        ['lastGeneratedAt', 'DESC'],
+        ['createdAt', 'DESC'],
+      ],
       limit,
       offset: (page - 1) * limit,
     });
+
+    const categories = (await this.customReportModel.findAll({
+      attributes: [[fn('DISTINCT', col('category')), 'category']],
+      where: { status: 'Active' },
+      raw: true,
+    })) as unknown as { category: string }[];
 
     return {
       total: count,
       page,
       limit,
       totalPages: Math.ceil(count / limit) || 1,
-      data: rows,
+      categories: categories
+        .map((c) => c.category)
+        .filter(Boolean)
+        .sort(),
+      data: rows.map((r) => this.toCustomReport(r)),
     };
   }
 
-  /**
-   * Single custom report detail from database
-   */
-  async getCustomReportById(id: string) {
-    await this.ensureSeedCustomReports();
+  private toCustomReport(report: CustomReport) {
+    const definition = report.reportType
+      ? REPORT_CATALOG[report.reportType as keyof typeof REPORT_CATALOG]
+      : null;
+    return {
+      id: report.id,
+      name: report.name,
+      description: report.description,
+      reportType: definition ? report.reportType : null,
+      reportTitle: definition?.title ?? null,
+      category: report.category,
+      filters: report.filters ?? {},
+      columns: report.columns ?? null,
+      createdBy: report.createdBy,
+      createdAt: report.createdAt,
+      updatedAt: report.updatedAt,
+      lastGeneratedAt: report.lastGeneratedAt,
+    };
+  }
 
+  async getCustomReportById(id: string) {
+    return this.toCustomReport(await this.findCustomReport(id));
+  }
+
+  private async findCustomReport(id: string) {
     const report = await this.customReportModel.findByPk(id);
-    if (!report) {
-      throw new NotFoundException(`Custom report #${id} not found`);
-    }
+    if (!report || report.status !== 'Active')
+      throw new NotFoundException('This report no longer exists.');
     return report;
   }
 
-  /**
-   * Create custom report (+ Create New Report)
-   */
-  async createCustomReport(dto: CreateCustomReportDto, creatorName = 'Aasma Abbas') {
+  /** Checks the filters against the report they're for, so a saved report can't fail later. */
+  private validDefinition(
+    reportType: string,
+    filters?: ReportFiltersDto,
+    columns?: string[] | null,
+  ) {
+    const definition = reportDefinition(reportType);
+    selectColumns(definition, columns);
+    resolvePeriod(filters, definition.defaultPeriod, new Date(), this.offset());
+    if (
+      filters?.status &&
+      !definition.statusFilter?.options.some((o) => o.value === filters.status)
+    ) {
+      throw new BadRequestException(
+        `${definition.title} can't be filtered by “${filters.status}”.`,
+      );
+    }
+    return definition;
+  }
+
+  private cleanFilters(filters?: ReportFiltersDto) {
+    if (!filters) return {};
+    return {
+      ...(filters.period ? { period: filters.period } : {}),
+      ...(filters.period === 'custom'
+        ? { from: filters.from, to: filters.to }
+        : {}),
+      ...(filters.status ? { status: filters.status } : {}),
+    };
+  }
+
+  async createCustomReport(dto: CreateCustomReportDto, actor?: ReportActor) {
+    const definition = this.validDefinition(
+      dto.reportType,
+      dto.filters,
+      dto.columns,
+    );
     const report = await this.customReportModel.create({
-      name: dto.name,
-      category: dto.category,
-      description: dto.description || `${dto.name} platform report definition`,
-      metrics: dto.metrics || ['total_count', 'growth_rate'],
-      filters: dto.filters || {},
-      createdBy: creatorName,
+      name: dto.name.trim(),
+      description: dto.description?.trim() || null,
+      reportType: definition.id,
+      category: definition.category,
+      filters: this.cleanFilters(dto.filters),
+      columns: dto.columns?.length ? dto.columns : null,
+      createdBy: (await this.actorName(actor)) || 'Super Admin',
+      createdById: actor?.id ?? null,
       status: 'Active',
       lastGeneratedAt: null,
     });
-
-    return report;
+    return this.toCustomReport(report);
   }
 
-  /**
-   * Edit custom report in database
-   */
   async updateCustomReport(id: string, dto: UpdateCustomReportDto) {
-    const report = await this.getCustomReportById(id);
+    const report = await this.findCustomReport(id);
+    const reportType = dto.reportType ?? report.reportType;
+    if (!reportType)
+      throw new BadRequestException('Choose which report this is built on.');
+    const filters =
+      dto.filters !== undefined
+        ? dto.filters
+        : (report.filters as ReportFiltersDto);
+    const columns = dto.columns !== undefined ? dto.columns : report.columns;
+    const definition = this.validDefinition(reportType, filters, columns);
 
     await report.update({
-      name: dto.name ?? report.name,
-      category: dto.category ?? report.category,
-      description: dto.description ?? report.description,
-      metrics: dto.metrics ?? report.metrics,
-      filters: dto.filters ?? report.filters,
-      status: dto.status ?? report.status,
+      name: dto.name?.trim() ?? report.name,
+      description:
+        dto.description !== undefined
+          ? dto.description.trim() || null
+          : report.description,
+      reportType: definition.id,
+      category: definition.category,
+      filters: this.cleanFilters(filters),
+      columns: columns?.length ? columns : null,
     });
-
-    return report;
+    return this.toCustomReport(report);
   }
 
-  /**
-   * Delete custom report from database
-   */
+  async duplicateCustomReport(id: string, actor?: ReportActor) {
+    const source = await this.findCustomReport(id);
+    const copy = await this.customReportModel.create({
+      name: `${source.name} (copy)`.slice(0, 120),
+      description: source.description,
+      reportType: source.reportType,
+      category: source.category,
+      filters: source.filters,
+      columns: source.columns,
+      createdBy: (await this.actorName(actor)) || 'Super Admin',
+      createdById: actor?.id ?? null,
+      status: 'Active',
+      lastGeneratedAt: null,
+    });
+    return this.toCustomReport(copy);
+  }
+
   async deleteCustomReport(id: string) {
-    const report = await this.getCustomReportById(id);
+    const report = await this.findCustomReport(id);
+    const name = report.name;
     await report.destroy();
-    return { success: true, message: `Custom report #${id} deleted successfully` };
+    return { success: true, message: `“${name}” was deleted.`, name };
   }
 
-  /**
-   * Run custom report (Play icon in table)
-   */
-  async runCustomReport(id: string) {
-    const report = await this.getCustomReportById(id);
-    const now = new Date();
-    await report.update({ lastGeneratedAt: now });
-
-    return {
-      reportId: report.id,
-      reportName: report.name,
-      category: report.category,
-      executedAt: now.toISOString(),
-      status: 'Success',
-      executionTimeMs: 142,
-      recordsCount: 1240,
-      downloadUrl: `/superadmin/reports/export?reportType=${report.id}&format=csv`,
-    };
-  }
-
-  /**
-   * Ensures baseline custom reports exist in database if empty
-   */
-  private async ensureSeedCustomReports(): Promise<void> {
-    if (this.seeded) return;
-
-    try {
-      const count = await this.customReportModel.count();
-      if (count >= 6) {
-        this.seeded = true;
-        return;
-      }
-
-      const seedData = [
-        {
-          name: 'Employee Activity Report',
-          category: 'Security',
-          createdBy: 'Aasma Abbas',
-          description: 'User logins, active sessions, and anomalous access events',
-          lastGeneratedAt: new Date('2026-08-18T10:24:00.000Z'),
-          metrics: ['logins', 'failed_attempts', 'mfa_status'],
-          status: 'Active',
-        },
-        {
-          name: 'Organization Summary',
-          category: 'Organizations',
-          createdBy: 'Ahmed Khan',
-          description: 'Tenants headcount, subscription tier, and onboarding status',
-          lastGeneratedAt: new Date('2026-08-15T16:12:00.000Z'),
-          metrics: ['tenant_count', 'headcount', 'plans'],
-          status: 'Active',
-        },
-        {
-          name: 'Payroll Report',
-          category: 'Reports',
-          createdBy: 'Zeeshan Qasim',
-          description: 'Platform-wide salary disbursement and tax calculations summary',
-          lastGeneratedAt: new Date('2026-08-12T14:45:00.000Z'),
-          metrics: ['total_payout', 'deductions', 'net_salary'],
-          status: 'Active',
-        },
-        {
-          name: 'Subscription Report',
-          category: 'Subscription',
-          createdBy: 'Aasma Abbas',
-          description: 'Active plans, trial expirations, and monthly recurring revenue',
-          lastGeneratedAt: new Date('2026-08-10T09:30:00.000Z'),
-          metrics: ['mrr', 'arr', 'churn_rate'],
-          status: 'Active',
-        },
-        {
-          name: 'Performance Report',
-          category: 'Reports',
-          createdBy: 'Aasma Abbas',
-          description: 'Quarterly review completion rates and goal achievements',
-          lastGeneratedAt: new Date('2026-08-08T11:20:00.000Z'),
-          metrics: ['review_completion', 'high_performers'],
-          status: 'Active',
-        },
-        {
-          name: 'User Login Report',
-          category: 'Security',
-          createdBy: 'Zeeshan Qasim',
-          description: 'Detailed breakdown of user login timestamps and IP addresses',
-          lastGeneratedAt: new Date('2026-08-05T18:24:00.000Z'),
-          metrics: ['login_timestamps', 'ip_addresses'],
-          status: 'Active',
-        },
-      ];
-
-      for (const item of seedData) {
-        await this.customReportModel.create(item);
-      }
-
-      this.logger.log('Initial sample custom reports seeded successfully.');
-      this.seeded = true;
-    } catch (err) {
-      this.logger.warn(`Could not seed custom reports: ${(err as Error)?.message}`);
+  /** Runs a saved report with its own filters and columns. */
+  async runCustomReport(id: string, actor?: ReportActor) {
+    const report = await this.findCustomReport(id);
+    if (!report.reportType) {
+      throw new BadRequestException(
+        'This report was saved before reports were linked to data. Edit it and choose which report it runs.',
+      );
     }
+    return this.generateReport(
+      {
+        reportType: report.reportType as GenerateReportDto['reportType'],
+        filters: (report.filters ?? {}) as ReportFiltersDto,
+        columns: report.columns ?? undefined,
+        customReportId: report.id,
+        title: report.name,
+      },
+      actor,
+    );
   }
 }
+
+const formatBytes = (bytes: number) => {
+  if (!bytes) return '0 MB';
+  const mb = bytes / (1024 * 1024);
+  return mb >= 1024 ? `${(mb / 1024).toFixed(2)} GB` : `${mb.toFixed(1)} MB`;
+};

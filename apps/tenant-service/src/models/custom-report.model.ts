@@ -11,6 +11,7 @@ import {
   Index,
 } from 'sequelize-typescript';
 
+/** A saved report: which platform report to run, with which filters and columns. */
 @Table({
   tableName: 'custom_reports',
   timestamps: true,
@@ -29,21 +30,30 @@ export class CustomReport extends Model {
 
   @Index
   @Column({ type: DataType.STRING, allowNull: false })
-  declare name: string; // e.g. 'Employee Activity Report'
+  declare name: string;
 
   @Index
   @Column({ type: DataType.STRING, allowNull: false })
-  declare category: string; // 'Security', 'Organizations', 'Reports', 'Subscription'
+  declare category: string; // the category of the report it runs, kept for filtering
 
   @Column({ type: DataType.STRING, allowNull: false })
-  declare createdBy: string; // e.g. 'Aasma Abbas', 'Ahmed Khan', 'Zeeshan Qasim'
+  declare createdBy: string; // display name of the Super Admin who saved it
 
   @Column({ type: DataType.UUID, allowNull: true })
-  declare createdById: string;
+  declare createdById: string | null;
 
   @Column({ type: DataType.TEXT, allowNull: true })
-  declare description: string;
+  declare description: string | null;
 
+  /** Which platform report this runs (REPORT_TYPES). Null on reports saved before it existed. */
+  @Column({ type: DataType.STRING(60), allowNull: true })
+  declare reportType: string | null;
+
+  /** Column keys to include, in order; null means every column. */
+  @Column({ type: DataType.JSONB, allowNull: true })
+  declare columns: string[] | null;
+
+  /** Unused since reportType and columns; kept so older rows still load. */
   @Column({ type: DataType.JSONB, allowNull: true })
   declare metrics: string[];
 
@@ -51,7 +61,7 @@ export class CustomReport extends Model {
   declare filters: Record<string, any>;
 
   @Column({ type: DataType.DATE, allowNull: true })
-  declare lastGeneratedAt: Date;
+  declare lastGeneratedAt: Date | null;
 
   @Default('Active')
   @Column({ type: DataType.STRING, allowNull: false })

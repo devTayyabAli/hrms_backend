@@ -1,4 +1,9 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  Optional,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
 import { ConfigService } from '@nestjs/config';
 import { Op } from 'sequelize';
@@ -16,10 +21,22 @@ import {
   UpdateSupportTicketDto,
   UpdateVideoTutorialDto,
 } from '@app/common';
-import { KnowledgeBaseArticle, SupportTicket, VideoTutorial } from '../models';
+import { fn, col, QueryTypes } from 'sequelize';
+import { PlatformNotificationCategory } from '../models';
+import { PlatformNotificationService } from './platform-notification.service';
+import { MailService } from './mail.service';
+import {
+  KnowledgeBaseArticle,
+  PlatformSettings,
+  SupportTicket,
+  VideoTutorial,
+} from '../models';
 
 /** Display labels for the category tiles; the enum is the storage form. */
-const CATEGORY_LABELS: Record<HelpCategory, { label: string; description: string }> = {
+const CATEGORY_LABELS: Record<
+  HelpCategory,
+  { label: string; description: string }
+> = {
   [HelpCategory.GETTING_STARTED]: {
     label: 'Getting Started',
     description: 'Learn the basics of the HRMS platform',
@@ -50,10 +67,19 @@ export class HelpSupportService {
   private readonly logger = new Logger(HelpSupportService.name);
 
   constructor(
-    @InjectModel(SupportTicket) private readonly ticketModel: typeof SupportTicket,
-    @InjectModel(KnowledgeBaseArticle) private readonly articleModel: typeof KnowledgeBaseArticle,
-    @InjectModel(VideoTutorial) private readonly videoModel: typeof VideoTutorial,
+    @InjectModel(SupportTicket)
+    private readonly ticketModel: typeof SupportTicket,
+    @InjectModel(KnowledgeBaseArticle)
+    private readonly articleModel: typeof KnowledgeBaseArticle,
+    @InjectModel(VideoTutorial)
+    private readonly videoModel: typeof VideoTutorial,
     private readonly configService: ConfigService,
+    @Optional()
+    @InjectModel(PlatformSettings)
+    private readonly platformSettings?: typeof PlatformSettings,
+    @Optional()
+    private readonly platformNotifications?: PlatformNotificationService,
+    @Optional() private readonly mailService?: MailService,
   ) {}
 
   // ==========================================
@@ -71,7 +97,8 @@ export class HelpSupportService {
   private formatViews(views?: number | null): string {
     const count = views || 0;
     if (count < 1000) return `${count}`;
-    if (count < 1_000_000) return `${(count / 1000).toFixed(1).replace(/\.0$/, '')}K`;
+    if (count < 1_000_000)
+      return `${(count / 1000).toFixed(1).replace(/\.0$/, '')}K`;
     return `${(count / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
   }
 
@@ -91,7 +118,7 @@ export class HelpSupportService {
   }
 
   private categoryLabel(category?: HelpCategory | null): string | null {
-    return category ? CATEGORY_LABELS[category]?.label ?? category : null;
+    return category ? (CATEGORY_LABELS[category]?.label ?? category) : null;
   }
 
   private toArticleRow(article: KnowledgeBaseArticle) {
@@ -139,11 +166,53 @@ export class HelpSupportService {
       priority: ticket.priority,
       createdBy: ticket.createdBy,
       createdByName: ticket.createdByName,
+      createdByEmail: ticket.createdByEmail,
+      createdByRole: ticket.createdByRole,
+      tenantId: ticket.tenantId,
+      organizationName: ticket.organizationName,
       resolutionNote: ticket.resolutionNote,
       resolvedAt: ticket.resolvedAt,
       createdAt: ticket.createdAt,
+      updatedAt: ticket.updatedAt,
       timeAgo: this.formatTimeAgo(ticket.createdAt),
+      updatedAgo: this.formatTimeAgo(ticket.updatedAt),
     };
+  }
+
+  /** A person's display name from their account (organization user or Super Admin). */
+  private async accountName(
+    id: string,
+    isTenantUser: boolean,
+  ): Promise<string | null> {
+    try {
+      const sql = isTenantUser
+        ? 'SELECT TRIM(CONCAT_WS(\' \', "firstName", "lastName")) AS name FROM auth_credentials WHERE id = :id LIMIT 1'
+        : 'SELECT COALESCE(NULLIF(name, \'\'), TRIM(CONCAT_WS(\' \', "firstName", "lastName"))) AS name FROM super_admins WHERE id = :id LIMIT 1';
+      const [row] = await this.ticketModel.sequelize!.query<{
+        name: string | null;
+      }>(sql, {
+        replacements: { id },
+        type: QueryTypes.SELECT,
+      });
+      return row?.name?.trim() || null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** The organization's current display name, from the shared platform database. */
+  private async organizationName(tenantId: string): Promise<string | null> {
+    try {
+      const [row] = await this.ticketModel.sequelize!.query<{
+        name: string | null;
+      }>(
+        'SELECT COALESCE(NULLIF("organizationName", \'\'), name) AS name FROM tenants WHERE id = :id LIMIT 1',
+        { replacements: { id: tenantId }, type: QueryTypes.SELECT },
+      );
+      return row?.name ?? null;
+    } catch {
+      return null;
+    }
   }
 
   // ==========================================
@@ -179,22 +248,56 @@ export class HelpSupportService {
   getResourceLinks() {
     const get = (key: string) => this.configService.get<string>(key) || null;
     return [
-      { key: 'systemStatus', label: 'System Status', description: 'View platform status', url: get('HELP_SYSTEM_STATUS_URL') },
-      { key: 'releaseNotes', label: 'Release Notes', description: 'See latest updates', url: get('HELP_RELEASE_NOTES_URL') },
-      { key: 'community', label: 'Community', description: 'Join our community', url: get('HELP_COMMUNITY_URL') },
-      { key: 'featureRequests', label: 'Feature Requests', description: 'Suggest new features', url: get('HELP_FEATURE_REQUESTS_URL') },
+      // The platform's own live health check, unless an external status page is configured.
+      {
+        key: 'systemStatus',
+        label: 'System Status',
+        description: 'Live health of every service',
+        url: get('HELP_SYSTEM_STATUS_URL') || '/system-management',
+      },
+      {
+        key: 'releaseNotes',
+        label: 'Release Notes',
+        description: 'See latest updates',
+        url: get('HELP_RELEASE_NOTES_URL'),
+      },
+      {
+        key: 'community',
+        label: 'Community',
+        description: 'Join our community',
+        url: get('HELP_COMMUNITY_URL'),
+      },
+      {
+        key: 'featureRequests',
+        label: 'Feature Requests',
+        description: 'Suggest new features',
+        url: get('HELP_FEATURE_REQUESTS_URL'),
+      },
     ];
   }
 
   /** Everything the Help & Support landing page renders, in one call. */
   async getOverview() {
-    const [categories, trending, recentArticles, videos, tickets] = await Promise.all([
-      this.getCategories(),
-      this.articleModel.findAll({ where: { isPublished: true }, order: [['views', 'DESC']], limit: 5 }),
-      this.articleModel.findAll({ where: { isPublished: true }, order: [['createdAt', 'DESC']], limit: 5 }),
-      this.videoModel.findAll({ where: { isPublished: true }, order: [['createdAt', 'DESC']], limit: 5 }),
-      this.ticketModel.findAll({ order: [['createdAt', 'DESC']], limit: 5 }),
-    ]);
+    const [categories, trending, recentArticles, videos, tickets] =
+      await Promise.all([
+        this.getCategories(),
+        this.articleModel.findAll({
+          where: { isPublished: true },
+          order: [['views', 'DESC']],
+          limit: 5,
+        }),
+        this.articleModel.findAll({
+          where: { isPublished: true },
+          order: [['createdAt', 'DESC']],
+          limit: 5,
+        }),
+        this.videoModel.findAll({
+          where: { isPublished: true },
+          order: [['createdAt', 'DESC']],
+          limit: 5,
+        }),
+        this.ticketModel.findAll({ order: [['createdAt', 'DESC']], limit: 5 }),
+      ]);
 
     return {
       categories,
@@ -203,8 +306,21 @@ export class HelpSupportService {
       videoTutorials: videos.map((v) => this.toVideoRow(v)),
       recentTickets: tickets.map((t) => this.toTicketRow(t)),
       resourceLinks: this.getResourceLinks(),
-      supportEmail: this.configService.get<string>('MAIL_REPLY_TO') || null,
+      supportEmail: await this.supportEmail(),
     };
+  }
+
+  /** System Management → General's support email, else the mail reply-to address. */
+  private async supportEmail(): Promise<string | null> {
+    try {
+      const settings = await this.platformSettings?.findOne({
+        attributes: ['supportEmail'],
+      });
+      if (settings?.supportEmail) return settings.supportEmail;
+    } catch {
+      // Falls back below.
+    }
+    return this.configService.get<string>('MAIL_REPLY_TO') || null;
   }
 
   // ==========================================
@@ -225,7 +341,9 @@ export class HelpSupportService {
     const base = this.slugify(title) || 'article';
     let candidate = base;
     for (let i = 2; i < 100; i++) {
-      const clash = await this.articleModel.findOne({ where: { slug: candidate } });
+      const clash = await this.articleModel.findOne({
+        where: { slug: candidate },
+      });
       if (!clash) return candidate;
       candidate = `${base}-${i}`;
     }
@@ -251,7 +369,9 @@ export class HelpSupportService {
     if (query?.filter === ArticleFilter.TRENDING) {
       order = [['views', 'DESC']];
     } else if (query?.filter === ArticleFilter.NEW) {
-      where.createdAt = { [Op.gte]: new Date(Date.now() - NEW_ARTICLE_WINDOW_DAYS * 86400000) };
+      where.createdAt = {
+        [Op.gte]: new Date(Date.now() - NEW_ARTICLE_WINDOW_DAYS * 86400000),
+      };
     }
 
     const { rows, count } = await this.articleModel.findAndCountAll({
@@ -271,13 +391,15 @@ export class HelpSupportService {
   }
 
   /** Reading an article counts a view — that's what feeds the Trending tab. */
-  async getArticle(id: string) {
+  async getArticle(id: string, countView = true) {
     const article = await this.articleModel.findByPk(id);
     if (!article) {
-      throw new NotFoundException(`Article ${id} not found.`);
+      throw new NotFoundException('This article no longer exists.');
     }
-    await article.increment('views');
-    await article.reload();
+    if (countView) {
+      await article.increment('views');
+      await article.reload();
+    }
 
     return { ...this.toArticleRow(article), content: article.content };
   }
@@ -341,13 +463,15 @@ export class HelpSupportService {
     };
   }
 
-  async getVideo(id: string) {
+  async getVideo(id: string, countView = true) {
     const video = await this.videoModel.findByPk(id);
     if (!video) {
-      throw new NotFoundException(`Video ${id} not found.`);
+      throw new NotFoundException('This video no longer exists.');
     }
-    await video.increment('views');
-    await video.reload();
+    if (countView) {
+      await video.increment('views');
+      await video.reload();
+    }
     return this.toVideoRow(video);
   }
 
@@ -395,24 +519,63 @@ export class HelpSupportService {
     return `TKT-${year}-${String(countThisYear + 1).padStart(4, '0')}`;
   }
 
-  async createTicket(dto: CreateSupportTicketDto, createdBy?: string, createdByName?: string) {
+  /**
+   * Opens a ticket. One raised by an organization user is stamped with their
+   * organization and email (so they hear back) and every Super Admin is told.
+   */
+  async createTicket(
+    dto: CreateSupportTicketDto,
+    meta: {
+      createdBy?: string;
+      createdByName?: string;
+      createdByEmail?: string;
+      createdByRole?: string;
+      tenantId?: string;
+    } = {},
+  ) {
+    const organizationName = meta.tenantId
+      ? await this.organizationName(meta.tenantId)
+      : null;
+    // The token carries an id and email only; the name is on the account.
+    if (!meta.createdByName && meta.createdBy) {
+      meta = {
+        ...meta,
+        createdByName:
+          (await this.accountName(meta.createdBy, Boolean(meta.tenantId))) ??
+          meta.createdByEmail,
+      };
+    }
     for (let attempt = 0; attempt < 5; attempt++) {
       try {
         const ticket = await this.ticketModel.create({
           ticketNumber: await this.nextTicketNumber(),
-          subject: dto.subject,
-          description: dto.description,
+          subject: dto.subject.trim(),
+          description: dto.description.trim(),
           category: dto.category,
           priority: dto.priority,
           status: SupportTicketStatus.OPEN,
-          createdBy,
-          createdByName,
+          createdBy: meta.createdBy,
+          createdByName: meta.createdByName,
+          createdByEmail: meta.createdByEmail ?? null,
+          createdByRole: meta.createdByRole ?? null,
+          tenantId: meta.tenantId ?? null,
+          organizationName,
         });
+        if (meta.tenantId) {
+          void this.platformNotifications?.notify({
+            category: PlatformNotificationCategory.SYSTEM,
+            title: `New support ticket ${ticket.ticketNumber}`,
+            body: `${meta.createdByName || meta.createdByEmail || 'Someone'}${organizationName ? ` (${organizationName})` : ''}: ${ticket.subject}`,
+            url: '/help-support',
+          });
+        }
         return this.toTicketRow(ticket);
       } catch (err: any) {
         const isDuplicate = err?.name === 'SequelizeUniqueConstraintError';
         if (!isDuplicate || attempt === 4) throw err;
-        this.logger.warn(`Ticket number collision, retrying (attempt ${attempt + 1}).`);
+        this.logger.warn(
+          `Ticket number collision, retrying (attempt ${attempt + 1}).`,
+        );
       }
     }
     // Unreachable: the loop either returns or rethrows.
@@ -423,12 +586,17 @@ export class HelpSupportService {
     const page = query?.page && query.page > 0 ? query.page : 1;
     const limit = query?.limit && query.limit > 0 ? query.limit : 10;
 
-    const where: any = {};
+    // Organization users only ever see their own; the tallies follow the same scope.
+    const scope: any = query?.createdBy ? { createdBy: query.createdBy } : {};
+    const where: any = { ...scope };
     if (query?.status) where.status = query.status;
     if (query?.search) {
+      const term = `%${query.search.trim()}%`;
       where[Op.or] = [
-        { ticketNumber: { [Op.iLike]: `%${query.search}%` } },
-        { subject: { [Op.iLike]: `%${query.search}%` } },
+        { ticketNumber: { [Op.iLike]: term } },
+        { subject: { [Op.iLike]: term } },
+        { organizationName: { [Op.iLike]: term } },
+        { createdByName: { [Op.iLike]: term } },
       ];
     }
 
@@ -439,12 +607,19 @@ export class HelpSupportService {
       limit,
     });
 
-    // Status tallies drive the filter chips above the tickets table.
-    const all = await this.ticketModel.findAll({ attributes: ['status'] });
-    const countsByStatus = Object.values(SupportTicketStatus).reduce(
-      (acc, status) => ({ ...acc, [status]: all.filter((t) => t.status === status).length }),
-      {} as Record<string, number>,
-    );
+    // Status tallies drive the filter chips above the tickets list.
+    const grouped = (await this.ticketModel.findAll({
+      where: scope,
+      attributes: ['status', [fn('COUNT', col('id')), 'total']],
+      group: ['status'],
+      raw: true,
+    })) as unknown as { status: string; total: string }[];
+    const countsByStatus = Object.fromEntries(
+      Object.values(SupportTicketStatus).map((status) => [
+        status,
+        Number(grouped.find((g) => g.status === status)?.total ?? 0),
+      ]),
+    ) as Record<string, number>;
 
     return {
       data: rows.map((t) => this.toTicketRow(t)),
@@ -459,27 +634,73 @@ export class HelpSupportService {
   async getTicket(id: string) {
     const ticket = await this.ticketModel.findByPk(id);
     if (!ticket) {
-      throw new NotFoundException(`Ticket ${id} not found.`);
+      throw new NotFoundException('This ticket no longer exists.');
     }
     return this.toTicketRow(ticket);
   }
 
+  /**
+   * Super Admin's update: status, priority, the reply. When the status moves,
+   * the person who raised it is emailed, with the reply if there is one.
+   */
   async updateTicket(id: string, dto: UpdateSupportTicketDto) {
     const ticket = await this.ticketModel.findByPk(id);
     if (!ticket) {
-      throw new NotFoundException(`Ticket ${id} not found.`);
+      throw new NotFoundException('This ticket no longer exists.');
     }
 
+    const previousStatus = ticket.status;
+    const closed = [SupportTicketStatus.RESOLVED, SupportTicketStatus.CLOSED];
     const movingToResolved =
       dto.status &&
-      [SupportTicketStatus.RESOLVED, SupportTicketStatus.CLOSED].includes(dto.status) &&
-      ![SupportTicketStatus.RESOLVED, SupportTicketStatus.CLOSED].includes(ticket.status);
+      closed.includes(dto.status) &&
+      !closed.includes(ticket.status);
+    const reopening =
+      dto.status &&
+      !closed.includes(dto.status) &&
+      closed.includes(ticket.status);
 
     await ticket.update({
       ...dto,
+      ...(dto.resolutionNote !== undefined
+        ? { resolutionNote: dto.resolutionNote.trim() || null }
+        : {}),
       ...(movingToResolved ? { resolvedAt: new Date() } : {}),
+      ...(reopening ? { resolvedAt: null } : {}),
     });
 
+    if (dto.status && dto.status !== previousStatus)
+      void this.emailTicketUpdate(ticket);
     return this.toTicketRow(ticket);
+  }
+
+  private async emailTicketUpdate(ticket: SupportTicket) {
+    if (!this.mailService || !ticket.createdByEmail) return;
+    const STATUS: Record<string, string> = {
+      [SupportTicketStatus.OPEN]: 'reopened',
+      [SupportTicketStatus.IN_PROGRESS]: 'being worked on',
+      [SupportTicketStatus.RESOLVED]: 'resolved',
+      [SupportTicketStatus.CLOSED]: 'closed',
+    };
+    const subject = `Your support ticket ${ticket.ticketNumber} is ${STATUS[ticket.status] ?? 'updated'}`;
+    const message = [
+      `“${ticket.subject}” is now ${STATUS[ticket.status] ?? ticket.status.toLowerCase()}.`,
+      ticket.resolutionNote ? `\nOur reply:\n${ticket.resolutionNote}` : '',
+      '\nYou can follow it under Help → My Tickets.',
+    ]
+      .filter(Boolean)
+      .join('\n');
+    try {
+      await this.mailService.sendTemplateEmail({
+        to: ticket.createdByEmail,
+        subject,
+        templateName: 'notice',
+        variables: { title: subject, message },
+      });
+    } catch (err: any) {
+      this.logger.warn(
+        `Ticket update email to ${ticket.createdByEmail} failed: ${err?.message}`,
+      );
+    }
   }
 }

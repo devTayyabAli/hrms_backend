@@ -553,6 +553,8 @@ export const MESSAGE_PATTERNS = {
     UPDATE_STATUS: 'platform_organizations.update_status',
     DELETE: 'platform_organizations.delete',
     GET_CLIENT_CONTACTS: 'platform_organizations.get_client_contacts',
+    /** Every organization matching the list filters, as CSV. */
+    EXPORT: 'platform_organizations.export',
   },
   PLATFORM_STATUS: {
     GET_STATUS: 'platform_status.get_status',
@@ -628,11 +630,15 @@ export const MESSAGE_PATTERNS = {
     SUBSCRIPTION_HISTORY: 'billing.subscription_history',
     BILLING_SUMMARY: 'billing.billing_summary',
     SUPERADMIN_GET_SUBSCRIPTIONS: 'billing.superadmin_get_subscriptions',
-    SUPERADMIN_GET_SUBSCRIPTION_BY_ID: 'billing.superadmin_get_subscription_by_id',
-    SUPERADMIN_GET_SUBSCRIPTION_INVOICES: 'billing.superadmin_get_subscription_invoices',
-    SUPERADMIN_GET_SUBSCRIPTION_PAYMENTS: 'billing.superadmin_get_subscription_payments',
+    SUPERADMIN_GET_SUBSCRIPTION_BY_ID:
+      'billing.superadmin_get_subscription_by_id',
+    SUPERADMIN_GET_SUBSCRIPTION_INVOICES:
+      'billing.superadmin_get_subscription_invoices',
+    SUPERADMIN_GET_SUBSCRIPTION_PAYMENTS:
+      'billing.superadmin_get_subscription_payments',
     SUPERADMIN_SUSPEND_SUBSCRIPTION: 'billing.superadmin_suspend_subscription',
-    SUPERADMIN_REACTIVATE_SUBSCRIPTION: 'billing.superadmin_reactivate_subscription',
+    SUPERADMIN_REACTIVATE_SUBSCRIPTION:
+      'billing.superadmin_reactivate_subscription',
     BILLING_STATUS: 'billing.status',
     BILLING_USAGE: 'billing.usage',
     BILLING_EVENTS: 'billing.events',
@@ -760,6 +766,12 @@ export const MESSAGE_PATTERNS = {
     EXPORT_LOGS: 'audit.export_logs',
     QUERY_ENTITY_LOGS: 'audit.query_entity_logs',
     GET_RECENT_ACTIVITY: 'audit.get_recent_activity',
+    /** Gateway → auth-service: write one platform audit entry. */
+    RECORD: 'audit.record',
+    /** Organization users' sign-ins per organization in a window (Reports). */
+    SIGN_IN_SUMMARY: 'audit.sign_in_summary',
+    /** Plain audit rows for a report. */
+    REPORT_ROWS: 'audit.report_rows',
   },
   REPORTS: {
     GET_STATS: 'reports.get_stats',
@@ -774,5 +786,10 @@ export const MESSAGE_PATTERNS = {
     UPDATE_CUSTOM_REPORT: 'reports.update_custom_report',
     DELETE_CUSTOM_REPORT: 'reports.delete_custom_report',
     RUN_CUSTOM_REPORT: 'reports.run_custom_report',
+    DUPLICATE_CUSTOM_REPORT: 'reports.duplicate_custom_report',
+    /** The stored CSV of one run. */
+    GET_RUN_FILE: 'reports.get_run_file',
+    /** The stored CSV of a custom report's most recent run. */
+    GET_LAST_RUN_FILE: 'reports.get_last_run_file',
   },
 };

@@ -75,7 +75,7 @@ import { ProfileService } from '../services/profile.service';
 import { TenantProfileService } from '../services/tenant-profile.service';
 import { MailService } from '../services/mail.service';
 import { FileStorageService } from '../services/file-storage.service';
-import { AuditService } from '../services/audit.service';
+import { AuditService, type AuditLogEntry } from '../services/audit.service';
 import { PlatformSettingsService } from '../services/platform-settings.service';
 import { GeneralSettingsService } from '../services/general-settings.service';
 import { SecuritySettingsService } from '../services/security-settings.service';
@@ -104,7 +104,7 @@ export class AuthMicroserviceController {
     private readonly aiConversationService: AiConversationService,
     private readonly platformNotificationService: PlatformNotificationService,
     private readonly passwordPolicyService: PasswordPolicyService,
-  ) { }
+  ) {}
 
   // The former `wrapRpcError` helper lived here and re-implemented, per call
   // site, exactly what HttpToRpcExceptionFilter already does for every
@@ -144,27 +144,51 @@ export class AuthMicroserviceController {
 
   @MessagePattern(MESSAGE_PATTERNS.AUTH.DEACTIVATE_TENANT_CREDENTIAL)
   deactivateTenantCredential(@Payload() data: DeactivateTenantCredentialDto) {
-    return this.authService.deactivateTenantCredential(data.email, data.tenantId, data.isActive ?? false);
+    return this.authService.deactivateTenantCredential(
+      data.email,
+      data.tenantId,
+      data.isActive ?? false,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.AUTH.SUPERADMIN_LOGIN)
   async superAdminLogin(@Payload() payload: SuperAdminLoginPayloadDto) {
-    return await this.authService.superAdminLogin(payload.dto, payload.ipAddress, payload.userAgent, payload.location);
+    return await this.authService.superAdminLogin(
+      payload.dto,
+      payload.ipAddress,
+      payload.userAgent,
+      payload.location,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.AUTH.VERIFY_2FA)
-  async verifyTwoFactorLogin(@Payload() payload: VerifyTwoFactorChallengePayloadDto) {
-    return await this.authService.verifyTwoFactorLogin(payload.dto, payload.ipAddress, payload.userAgent, payload.location);
+  async verifyTwoFactorLogin(
+    @Payload() payload: VerifyTwoFactorChallengePayloadDto,
+  ) {
+    return await this.authService.verifyTwoFactorLogin(
+      payload.dto,
+      payload.ipAddress,
+      payload.userAgent,
+      payload.location,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.AUTH.REFRESH_TOKEN)
   async refreshToken(@Payload() payload: RefreshTokenPayloadDto) {
-    return await this.authService.refreshToken(payload.dto, payload.ipAddress, payload.userAgent);
+    return await this.authService.refreshToken(
+      payload.dto,
+      payload.ipAddress,
+      payload.userAgent,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.AUTH.LOGOUT)
   async logout(@Payload() payload: LogoutPayloadDto) {
-    return await this.authService.logout(payload.dto, payload.ipAddress, payload.userAgent);
+    return await this.authService.logout(
+      payload.dto,
+      payload.ipAddress,
+      payload.userAgent,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.AUTH.GET_SESSION_STATE)
@@ -179,9 +203,18 @@ export class AuthMicroserviceController {
 
   @MessagePattern(MESSAGE_PATTERNS.PLATFORM_SETTINGS.UPDATE)
   updatePlatformSettings(
-    @Payload() payload: { category: string; values: Record<string, any>; updatedBy?: string },
+    @Payload()
+    payload: {
+      category: string;
+      values: Record<string, any>;
+      updatedBy?: string;
+    },
   ) {
-    return this.platformSettingsService.update(payload.category, payload.values, payload.updatedBy);
+    return this.platformSettingsService.update(
+      payload.category,
+      payload.values,
+      payload.updatedBy,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.AUDIT.QUERY_LOGS)
@@ -203,6 +236,34 @@ export class AuthMicroserviceController {
   @MessagePattern(MESSAGE_PATTERNS.AUDIT.EXPORT_LOGS)
   exportAuditLogs(@Payload() filter: AuditLogQueryDto) {
     return this.auditService.exportLogs(filter);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.AUDIT.SIGN_IN_SUMMARY)
+  signInSummary(
+    @Payload() query: { from?: string; to?: string; tenantIds?: string[] },
+  ) {
+    return this.auditService.signInSummary(query ?? {});
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.AUDIT.REPORT_ROWS)
+  auditReportRows(
+    @Payload()
+    filter: {
+      category?: string;
+      from?: string;
+      to?: string;
+      maxRows?: number;
+    },
+  ) {
+    return this.auditService.reportRows(filter ?? {});
+  }
+
+  /** A Super Admin action the gateway's audit interceptor saw. */
+  @MessagePattern(MESSAGE_PATTERNS.AUDIT.RECORD)
+  async recordAudit(@Payload() entry: AuditLogEntry) {
+    if (!entry?.action) return { recorded: false };
+    await this.auditService.log(entry);
+    return { recorded: true };
   }
 
   @MessagePattern(MESSAGE_PATTERNS.AUTH.ONBOARD_ORGANIZATION)
@@ -232,7 +293,12 @@ export class AuthMicroserviceController {
 
   @MessagePattern(MESSAGE_PATTERNS.AUTH.LOGIN)
   async login(@Payload() payload: LoginPayloadDto) {
-    return await this.authService.login(payload.dto, payload.ipAddress, payload.userAgent, payload.location);
+    return await this.authService.login(
+      payload.dto,
+      payload.ipAddress,
+      payload.userAgent,
+      payload.location,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.AUTH.GET_LAST_LOGINS)
@@ -248,7 +314,10 @@ export class AuthMicroserviceController {
   getProfile(@Payload() payload: GetSessionsPayloadDto) {
     // Same shape as the sessions list: the caller's own session id lets the
     // profile tell this sign-in apart from the previous one.
-    return this.profileService.getProfile(payload.superAdminId, payload.currentSessionId);
+    return this.profileService.getProfile(
+      payload.superAdminId,
+      payload.currentSessionId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PROFILE.UPDATE_PROFILE)
@@ -258,7 +327,10 @@ export class AuthMicroserviceController {
 
   @MessagePattern(MESSAGE_PATTERNS.PROFILE.UPDATE_AVATAR)
   updateAvatar(@Payload() payload: UpdateAvatarPayloadDto) {
-    return this.profileService.updateAvatar(payload.superAdminId, payload.avatarUrl);
+    return this.profileService.updateAvatar(
+      payload.superAdminId,
+      payload.avatarUrl,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PROFILE.GET_SECURITY)
@@ -268,7 +340,10 @@ export class AuthMicroserviceController {
 
   @MessagePattern(MESSAGE_PATTERNS.PROFILE.GET_LOGIN_ACTIVITY)
   getLoginActivity(@Payload() payload: GetSessionsPayloadDto) {
-    return this.profileService.getLoginActivity(payload.superAdminId, payload.currentSessionId);
+    return this.profileService.getLoginActivity(
+      payload.superAdminId,
+      payload.currentSessionId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PROFILE.GET_RECOVERY)
@@ -278,27 +353,42 @@ export class AuthMicroserviceController {
 
   @MessagePattern(MESSAGE_PATTERNS.PROFILE.CHANGE_PASSWORD)
   async changePassword(@Payload() payload: ChangePasswordPayloadDto) {
-    return await this.profileService.changePassword(payload.superAdminId, payload.dto);
+    return await this.profileService.changePassword(
+      payload.superAdminId,
+      payload.dto,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PROFILE.UPDATE_RECOVERY)
   async updateRecoveryDetails(@Payload() payload: UpdateRecoveryPayloadDto) {
-    return await this.profileService.updateRecoveryDetails(payload.superAdminId, payload.dto);
+    return await this.profileService.updateRecoveryDetails(
+      payload.superAdminId,
+      payload.dto,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PROFILE.GENERATE_2FA)
   generateTwoFactor(@Payload() payload: GenerateTwoFactorPayloadDto) {
-    return this.profileService.generateTwoFactor(payload.superAdminId, payload.code);
+    return this.profileService.generateTwoFactor(
+      payload.superAdminId,
+      payload.code,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PROFILE.ENABLE_2FA)
   async enableTwoFactor(@Payload() payload: ToggleTwoFactorPayloadDto) {
-    return await this.profileService.enableTwoFactor(payload.superAdminId, payload.dto);
+    return await this.profileService.enableTwoFactor(
+      payload.superAdminId,
+      payload.dto,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PROFILE.DISABLE_2FA)
   async disableTwoFactor(@Payload() payload: ToggleTwoFactorPayloadDto) {
-    return await this.profileService.disableTwoFactor(payload.superAdminId, payload.dto);
+    return await this.profileService.disableTwoFactor(
+      payload.superAdminId,
+      payload.dto,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PROFILE.GET_NOTIFICATIONS)
@@ -307,8 +397,13 @@ export class AuthMicroserviceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PROFILE.UPDATE_NOTIFICATIONS)
-  updateNotificationPreferences(@Payload() payload: UpdateNotificationsPayloadDto) {
-    return this.profileService.updateNotificationPreferences(payload.superAdminId, payload.dto);
+  updateNotificationPreferences(
+    @Payload() payload: UpdateNotificationsPayloadDto,
+  ) {
+    return this.profileService.updateNotificationPreferences(
+      payload.superAdminId,
+      payload.dto,
+    );
   }
 
   // ==========================================
@@ -316,13 +411,23 @@ export class AuthMicroserviceController {
   // ==========================================
 
   @MessagePattern(MESSAGE_PATTERNS.PLATFORM_NOTIFICATIONS.LIST)
-  listPlatformNotifications(@Payload() payload: PlatformNotificationListPayloadDto) {
-    return this.platformNotificationService.list(payload.superAdminId, payload.limit);
+  listPlatformNotifications(
+    @Payload() payload: PlatformNotificationListPayloadDto,
+  ) {
+    return this.platformNotificationService.list(
+      payload.superAdminId,
+      payload.limit,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PLATFORM_NOTIFICATIONS.MARK_READ)
-  markPlatformNotificationRead(@Payload() payload: PlatformNotificationReadPayloadDto) {
-    return this.platformNotificationService.markRead(payload.superAdminId, payload.id);
+  markPlatformNotificationRead(
+    @Payload() payload: PlatformNotificationReadPayloadDto,
+  ) {
+    return this.platformNotificationService.markRead(
+      payload.superAdminId,
+      payload.id,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PLATFORM_NOTIFICATIONS.MARK_ALL_READ)
@@ -333,7 +438,10 @@ export class AuthMicroserviceController {
   /** Other services (organizations, billing) reporting events for Super Admins. */
   @MessagePattern(MESSAGE_PATTERNS.PLATFORM_NOTIFICATIONS.NOTIFY)
   async notifyPlatform(@Payload() payload: PlatformNotifyPayloadDto) {
-    return { success: true, created: await this.platformNotificationService.notify(payload) };
+    return {
+      success: true,
+      created: await this.platformNotificationService.notify(payload),
+    };
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PLATFORM_NOTIFICATIONS.PUSH_CONFIG)
@@ -343,12 +451,19 @@ export class AuthMicroserviceController {
 
   @MessagePattern(MESSAGE_PATTERNS.PLATFORM_NOTIFICATIONS.PUSH_SUBSCRIBE)
   subscribePush(@Payload() payload: PushSubscribePayloadDto) {
-    return this.platformNotificationService.subscribe(payload.superAdminId, payload.subscription, payload.userAgent);
+    return this.platformNotificationService.subscribe(
+      payload.superAdminId,
+      payload.subscription,
+      payload.userAgent,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PLATFORM_NOTIFICATIONS.PUSH_UNSUBSCRIBE)
   unsubscribePush(@Payload() payload: PushUnsubscribePayloadDto) {
-    return this.platformNotificationService.unsubscribe(payload.superAdminId, payload.endpoint);
+    return this.platformNotificationService.unsubscribe(
+      payload.superAdminId,
+      payload.endpoint,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PLATFORM_NOTIFICATIONS.PUSH_TEST)
@@ -358,17 +473,26 @@ export class AuthMicroserviceController {
 
   @MessagePattern(MESSAGE_PATTERNS.PROFILE.GET_SESSIONS)
   getActiveSessions(@Payload() payload: GetSessionsPayloadDto) {
-    return this.profileService.getActiveSessions(payload.superAdminId, payload.currentSessionId);
+    return this.profileService.getActiveSessions(
+      payload.superAdminId,
+      payload.currentSessionId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PROFILE.REVOKE_SESSION)
   revokeSession(@Payload() payload: RevokeSessionPayloadDto) {
-    return this.profileService.revokeSession(payload.superAdminId, payload.sessionId);
+    return this.profileService.revokeSession(
+      payload.superAdminId,
+      payload.sessionId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PROFILE.REVOKE_OTHER_SESSIONS)
   revokeAllOtherSessions(@Payload() payload: RevokeOtherSessionsPayloadDto) {
-    return this.profileService.revokeAllOtherSessions(payload.superAdminId, payload.currentSessionId);
+    return this.profileService.revokeAllOtherSessions(
+      payload.superAdminId,
+      payload.currentSessionId,
+    );
   }
 
   // ==========================================
@@ -378,16 +502,25 @@ export class AuthMicroserviceController {
 
   @MessagePattern(MESSAGE_PATTERNS.TENANT_PROFILE.GET_PROFILE)
   getTenantProfile(@Payload() payload: TenantProfileActorDto) {
-    return this.tenantProfileService.getProfile(payload.authCredentialId, payload.tenantId);
+    return this.tenantProfileService.getProfile(
+      payload.authCredentialId,
+      payload.tenantId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.TENANT_PROFILE.UPDATE_PROFILE)
   updateTenantProfile(@Payload() payload: UpdateTenantProfilePayloadDto) {
-    return this.tenantProfileService.updateProfile(payload.authCredentialId, payload.tenantId, payload.dto);
+    return this.tenantProfileService.updateProfile(
+      payload.authCredentialId,
+      payload.tenantId,
+      payload.dto,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.TENANT_PROFILE.CHANGE_PASSWORD)
-  async changeTenantPassword(@Payload() payload: ChangeTenantPasswordPayloadDto) {
+  async changeTenantPassword(
+    @Payload() payload: ChangeTenantPasswordPayloadDto,
+  ) {
     return await this.tenantProfileService.changePassword(
       payload.authCredentialId,
       payload.tenantId,
@@ -432,12 +565,18 @@ export class AuthMicroserviceController {
 
   @MessagePattern(MESSAGE_PATTERNS.FILE.GET_METADATA)
   getFileMetadata(@Payload() payload: FileIdPayloadDto) {
-    return this.fileStorageService.getFileMetadata(payload.fileId, payload.userTenantId);
+    return this.fileStorageService.getFileMetadata(
+      payload.fileId,
+      payload.userTenantId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.FILE.DOWNLOAD_FILE)
   downloadFile(@Payload() payload: FileIdPayloadDto) {
-    return this.fileStorageService.downloadFile(payload.fileId, payload.userTenantId);
+    return this.fileStorageService.downloadFile(
+      payload.fileId,
+      payload.userTenantId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.FILE.DOWNLOAD_PUBLIC_FILE)
@@ -447,12 +586,18 @@ export class AuthMicroserviceController {
 
   @MessagePattern(MESSAGE_PATTERNS.FILE.DELETE_FILE)
   deleteFile(@Payload() payload: FileIdPayloadDto) {
-    return this.fileStorageService.deleteFile(payload.fileId, payload.userTenantId);
+    return this.fileStorageService.deleteFile(
+      payload.fileId,
+      payload.userTenantId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.FILE.GET_ACCESS_URL)
   getFileAccessUrl(@Payload() payload: FileIdPayloadDto) {
-    return this.fileStorageService.getFileAccessUrl(payload.fileId, payload.userTenantId);
+    return this.fileStorageService.getFileAccessUrl(
+      payload.fileId,
+      payload.userTenantId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.FILE.QUERY_FILES)
@@ -491,7 +636,10 @@ export class AuthMicroserviceController {
 
   @MessagePattern(MESSAGE_PATTERNS.SETTINGS.UPDATE_SECURITY)
   updateSecuritySettings(@Payload() payload: UpdateSecuritySettingsMessageDto) {
-    return this.securitySettingsService.updateSecurity(payload.dto, payload.callerIp);
+    return this.securitySettingsService.updateSecurity(
+      payload.dto,
+      payload.callerIp,
+    );
   }
 
   /** Lets another service check a password against the configured policy before creating anything. */
@@ -618,7 +766,10 @@ export class AuthMicroserviceController {
 
   @MessagePattern(MESSAGE_PATTERNS.HELP.GET_ARTICLE)
   getArticle(@Payload() payload: HelpIdDto) {
-    return this.helpSupportService.getArticle(payload.id);
+    return this.helpSupportService.getArticle(
+      payload.id,
+      payload.countView !== false,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.HELP.CREATE_ARTICLE)
@@ -643,7 +794,10 @@ export class AuthMicroserviceController {
 
   @MessagePattern(MESSAGE_PATTERNS.HELP.GET_VIDEO)
   getVideo(@Payload() payload: HelpIdDto) {
-    return this.helpSupportService.getVideo(payload.id);
+    return this.helpSupportService.getVideo(
+      payload.id,
+      payload.countView !== false,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.HELP.CREATE_VIDEO)
@@ -673,7 +827,13 @@ export class AuthMicroserviceController {
 
   @MessagePattern(MESSAGE_PATTERNS.HELP.CREATE_TICKET)
   createTicket(@Payload() payload: CreateSupportTicketMessageDto) {
-    return this.helpSupportService.createTicket(payload.dto, payload.createdBy, payload.createdByName);
+    return this.helpSupportService.createTicket(payload.dto, {
+      createdBy: payload.createdBy,
+      createdByName: payload.createdByName,
+      createdByEmail: payload.createdByEmail,
+      createdByRole: payload.createdByRole,
+      tenantId: payload.tenantId,
+    });
   }
 
   @MessagePattern(MESSAGE_PATTERNS.HELP.UPDATE_TICKET)

@@ -1,5 +1,20 @@
-import { Table, Column, Model, DataType, PrimaryKey, IsUUID, Default, Index, CreatedAt, UpdatedAt } from 'sequelize-typescript';
-import { HelpCategory, SupportTicketPriority, SupportTicketStatus } from '@app/common';
+import {
+  Table,
+  Column,
+  Model,
+  DataType,
+  PrimaryKey,
+  IsUUID,
+  Default,
+  Index,
+  CreatedAt,
+  UpdatedAt,
+} from 'sequelize-typescript';
+import {
+  HelpCategory,
+  SupportTicketPriority,
+  SupportTicketStatus,
+} from '@app/common';
 
 @Table({ tableName: 'support_tickets' })
 export class SupportTicket extends Model {
@@ -20,7 +35,10 @@ export class SupportTicket extends Model {
   @Column(DataType.TEXT)
   declare description: string;
 
-  @Column({ type: DataType.ENUM(...Object.values(HelpCategory)), allowNull: true })
+  @Column({
+    type: DataType.ENUM(...Object.values(HelpCategory)),
+    allowNull: true,
+  })
   declare category: HelpCategory;
 
   @Index
@@ -37,6 +55,22 @@ export class SupportTicket extends Model {
 
   @Column
   declare createdByName: string;
+
+  /** Where the reply goes: emailed when the ticket's status changes. */
+  @Column({ type: DataType.STRING, allowNull: true })
+  declare createdByEmail: string | null;
+
+  /** e.g. 'Super Admin', 'Org Admin', 'Employee'. */
+  @Column({ type: DataType.STRING, allowNull: true })
+  declare createdByRole: string | null;
+
+  /** The organization that raised it; null for a Super Admin's own ticket. */
+  @Index
+  @Column({ type: DataType.UUID, allowNull: true })
+  declare tenantId: string | null;
+
+  @Column({ type: DataType.STRING, allowNull: true })
+  declare organizationName: string | null;
 
   @Column(DataType.TEXT)
   declare resolutionNote: string;

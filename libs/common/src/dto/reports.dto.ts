@@ -2,56 +2,103 @@ import {
   IsString,
   IsNotEmpty,
   IsOptional,
-  IsEnum,
+  IsIn,
   IsInt,
   Min,
   Max,
   IsArray,
-  IsObject,
+  IsISO8601,
+  MaxLength,
+  ArrayMaxSize,
+  ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
-export class GenerateReportDto {
-  @ApiProperty({
-    example: 'organization-summary',
-    description:
-      'Report template ID: organization-summary, user-activity, subscription-reports, employee-growth, system-usage, security-audit, or custom report ID',
+/** The platform reports the Super Admin can run. */
+export const REPORT_TYPES = [
+  'organization-summary',
+  'user-activity',
+  'subscription-reports',
+  'employee-growth',
+  'system-usage',
+  'security-audit',
+] as const;
+export type ReportType = (typeof REPORT_TYPES)[number];
+
+/** Time windows a report can cover; `custom` uses `from`/`to`. */
+export const REPORT_PERIODS = [
+  'last-7-days',
+  'last-30-days',
+  'last-90-days',
+  'this-month',
+  'last-month',
+  'last-12-months',
+  'this-year',
+  'all-time',
+  'custom',
+] as const;
+export type ReportPeriod = (typeof REPORT_PERIODS)[number];
+
+/** What a report is filtered by. Every field is optional; each report uses the ones it supports. */
+export class ReportFiltersDto {
+  @ApiPropertyOptional({ enum: REPORT_PERIODS, example: 'last-30-days' })
+  @IsOptional()
+  @IsIn(REPORT_PERIODS as unknown as string[])
+  period?: ReportPeriod;
+
+  @ApiPropertyOptional({
+    example: '2026-01-01',
+    description: 'Start of a custom period (ISO date)',
   })
-  @IsString()
-  @IsNotEmpty()
-  reportType: string;
-
-  @ApiPropertyOptional({ example: 'json', enum: ['json', 'csv'] })
   @IsOptional()
-  @IsEnum(['json', 'csv'])
-  format?: 'json' | 'csv' = 'json';
-
-  @ApiPropertyOptional({ example: 'last-6-months', description: 'last-30-days, last-3-months, last-6-months, last-year, custom' })
-  @IsOptional()
-  @IsString()
-  period?: string;
-
-  @ApiPropertyOptional({ example: '2026-01-01T00:00:00.000Z' })
-  @IsOptional()
-  @IsString()
+  @IsISO8601()
   from?: string;
 
-  @ApiPropertyOptional({ example: '2026-08-31T23:59:59.999Z' })
+  @ApiPropertyOptional({
+    example: '2026-08-31',
+    description: 'End of a custom period (ISO date, inclusive)',
+  })
   @IsOptional()
-  @IsString()
+  @IsISO8601()
   to?: string;
 
-  @ApiPropertyOptional({ description: 'Filter report by specific organization/tenant ID' })
+  @ApiPropertyOptional({
+    example: 'ACTIVE',
+    description: 'Organization or subscription status, depending on the report',
+  })
   @IsOptional()
   @IsString()
-  tenantId?: string;
+  @MaxLength(40)
+  status?: string;
+}
+
+export class GenerateReportDto {
+  @ApiProperty({ enum: REPORT_TYPES, example: 'organization-summary' })
+  @IsIn(REPORT_TYPES as unknown as string[])
+  reportType: ReportType;
+
+  @ApiPropertyOptional({ type: ReportFiltersDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ReportFiltersDto)
+  filters?: ReportFiltersDto;
+
+  @ApiPropertyOptional({
+    type: [String],
+    description: 'Column keys to include; all when omitted',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(40)
+  @IsString({ each: true })
+  columns?: string[];
 }
 
 export class PlatformGrowthQueryDto {
   @ApiPropertyOptional({ example: '6months', enum: ['6months', '12months'] })
   @IsOptional()
-  @IsString()
+  @IsIn(['6months', '12months'])
   period?: '6months' | '12months' = '6months';
 }
 
@@ -66,12 +113,18 @@ export class TopOrganizationsQueryDto {
 }
 
 export class CustomReportQueryDto {
-  @ApiPropertyOptional({ example: 'Security', description: 'Filter by category: Security, Organizations, Reports, Subscription' })
+  @ApiPropertyOptional({
+    example: 'Organizations',
+    description: 'Filter by category',
+  })
   @IsOptional()
   @IsString()
   category?: string;
 
-  @ApiPropertyOptional({ example: 'Employee', description: 'Search report name or description' })
+  @ApiPropertyOptional({
+    example: 'monthly',
+    description: 'Search name or description',
+  })
   @IsOptional()
   @IsString()
   search?: string;
@@ -93,60 +146,75 @@ export class CustomReportQueryDto {
 }
 
 export class CreateCustomReportDto {
-  @ApiProperty({ example: 'Employee Activity Report' })
+  @ApiProperty({ example: 'Monthly organization review' })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(120)
   name: string;
 
-  @ApiProperty({ example: 'Security', description: 'Security, Organizations, Reports, Subscription' })
-  @IsString()
-  @IsNotEmpty()
-  category: string;
-
-  @ApiPropertyOptional({ example: 'User logins and engagement metrics across all tenants' })
+  @ApiPropertyOptional({
+    example:
+      'Every organization with its plan and headcount, for the monthly review.',
+  })
   @IsOptional()
   @IsString()
+  @MaxLength(500)
   description?: string;
 
-  @ApiPropertyOptional({ example: ['logins', 'failed_attempts', 'active_sessions'], type: [String] })
+  @ApiProperty({
+    enum: REPORT_TYPES,
+    example: 'organization-summary',
+    description: 'Which report this is built on',
+  })
+  @IsIn(REPORT_TYPES as unknown as string[])
+  reportType: ReportType;
+
+  @ApiPropertyOptional({ type: ReportFiltersDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ReportFiltersDto)
+  filters?: ReportFiltersDto;
+
+  @ApiPropertyOptional({
+    type: [String],
+    description: 'Column keys to include; all when omitted',
+  })
   @IsOptional()
   @IsArray()
-  metrics?: string[];
-
-  @ApiPropertyOptional({ example: { dateRange: 'last-30-days' } })
-  @IsOptional()
-  @IsObject()
-  filters?: Record<string, any>;
+  @ArrayMaxSize(40)
+  @IsString({ each: true })
+  columns?: string[];
 }
 
 export class UpdateCustomReportDto {
-  @ApiPropertyOptional({ example: 'Employee Activity Report (Updated)' })
+  @ApiPropertyOptional({ example: 'Monthly organization review' })
   @IsOptional()
   @IsString()
+  @IsNotEmpty()
+  @MaxLength(120)
   name?: string;
 
-  @ApiPropertyOptional({ example: 'Security' })
+  @ApiPropertyOptional()
   @IsOptional()
   @IsString()
-  category?: string;
-
-  @ApiPropertyOptional({ example: 'Updated description' })
-  @IsOptional()
-  @IsString()
+  @MaxLength(500)
   description?: string;
 
-  @ApiPropertyOptional({ example: ['logins', 'active_sessions'], type: [String] })
+  @ApiPropertyOptional({ enum: REPORT_TYPES })
+  @IsOptional()
+  @IsIn(REPORT_TYPES as unknown as string[])
+  reportType?: ReportType;
+
+  @ApiPropertyOptional({ type: ReportFiltersDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ReportFiltersDto)
+  filters?: ReportFiltersDto;
+
+  @ApiPropertyOptional({ type: [String] })
   @IsOptional()
   @IsArray()
-  metrics?: string[];
-
-  @ApiPropertyOptional({ example: { dateRange: 'last-6-months' } })
-  @IsOptional()
-  @IsObject()
-  filters?: Record<string, any>;
-
-  @ApiPropertyOptional({ example: 'Active', enum: ['Active', 'Archived'] })
-  @IsOptional()
-  @IsString()
-  status?: string;
+  @ArrayMaxSize(40)
+  @IsString({ each: true })
+  columns?: string[];
 }
