@@ -1,8 +1,19 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  OnModuleInit,
+  Optional,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
-import { Op } from 'sequelize';
-import { parseUserAgent } from '@app/common';
-import { AuditLog } from '../models';
+import { Op, QueryTypes, WhereOptions } from 'sequelize';
+import {
+  DEFAULT_PLATFORM_TIME_ZONE,
+  localClock,
+  parseUserAgent,
+  utcOffsetMinutes,
+} from '@app/common';
+import { AuditLog, AuthCredential, SuperAdmin } from '../models';
 
 export interface AuditLogEntry {
   action: string;
@@ -22,7 +33,8 @@ export interface AuditLogEntry {
   userAvatar?: string;
   actionDetails?: string;
   device?: string;
-  changes?: Array<{ field: string; before: any; after: any }> | Record<string, any>;
+  changes?:
+    Array<{ field: string; before: any; after: any }> | Record<string, any>;
   metadata?: Record<string, any>;
   createdAt?: Date;
 }
@@ -34,6 +46,8 @@ export interface AuditLogQuery {
   userId?: string;
   module?: string;
   status?: string;
+  /** 'security' narrows to the events counted as Security Events. */
+  category?: string;
   tenantId?: string;
   organizationId?: string;
   from?: string | Date;
@@ -43,9 +57,28 @@ export interface AuditLogQuery {
   format?: 'csv' | 'json';
 }
 
-/** Failure actions are named for it (`LOGIN_FAILED`), so the action is the only signal available. */
+/** Most rows a single CSV export carries. */
+export const AUDIT_EXPORT_LIMIT = 10_000;
+
+/**
+ * Session renewals happen every few minutes for every signed-in user. They
+ * were written to the trail until now and drowned out everything a person
+ * actually did, so they're no longer recorded and older ones are left out.
+ */
+const NOISE_ACTIONS = ['TOKEN_REFRESH'];
+
+/** Sign-in failures and anything touching access control. */
+const SECURITY_ACTIONS = [
+  'LOGIN_FAILED',
+  'TWO_FA_FAILED',
+  'TOKEN_REFRESH_FAILED',
+  'ACCOUNT_LOCKED',
+];
+const SECURITY_MODULE = 'Security';
+
+/** Failure actions are named for it (`LOGIN_FAILED`), so the action is the signal when no status is given. */
 const statusForAction = (action: string): string =>
-  /FAIL|DENIED|ERROR|INVALID/i.test(action) ? 'Failed' : 'Active';
+  /FAIL|DENIED|ERROR|INVALID/i.test(action) ? 'Failed' : 'Success';
 
 /**
  * A readable device label, or nothing when the agent is unrecognisable —
@@ -60,12 +93,91 @@ const describeUserAgent = (userAgent?: string): string | undefined => {
   return `${operatingSystem} / ${browser}`;
 };
 
-@Injectable()
-export class AuditService {
-  private readonly logger = new Logger(AuditService.name);
-  private seeded = false;
+const fullName = (
+  person: {
+    name?: string | null;
+    firstName?: string | null;
+    lastName?: string | null;
+  } | null,
+) =>
+  person
+    ? person.name?.trim() ||
+      [person.firstName, person.lastName].filter(Boolean).join(' ').trim() ||
+      undefined
+    : undefined;
 
-  constructor(@InjectModel(AuditLog) private readonly auditLogModel: typeof AuditLog) { }
+/** "org_admin" → "Org Admin". */
+const roleLabel = (role?: string | null) =>
+  role
+    ? role
+        .replace(/[_-]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .replace(/\b\w/g, (c) => c.toUpperCase())
+    : undefined;
+
+/**
+ * The six sample rows this service used to insert into an empty table so the
+ * screen had something to show. They are removed on startup; the signature is
+ * exact (one shared timestamp and IP, the invented names) so nothing real can
+ * match it.
+ */
+const SAMPLE_SIGNATURE = {
+  ipAddress: '103.21.244.12',
+  createdAt: new Date('2026-08-18T10:42:00.000Z'),
+  userName: [
+    'David Lee',
+    'John Smith',
+    'Emily Johnson',
+    'Sophia Wang',
+    'Micheal Brown',
+    'Sara David',
+  ],
+};
+
+const platformTimeZone = () =>
+  process.env.NOTIFICATIONS_DEFAULT_TIME_ZONE || DEFAULT_PLATFORM_TIME_ZONE;
+
+@Injectable()
+export class AuditService implements OnModuleInit {
+  private readonly logger = new Logger(AuditService.name);
+  private readonly organizationNames = new Map<
+    string,
+    { name: string | null; at: number }
+  >();
+
+  constructor(
+    @InjectModel(AuditLog) private readonly auditLogModel: typeof AuditLog,
+    @Optional()
+    @InjectModel(SuperAdmin)
+    private readonly superAdminModel?: typeof SuperAdmin,
+    @Optional()
+    @InjectModel(AuthCredential)
+    private readonly credentialModel?: typeof AuthCredential,
+  ) {}
+
+  async onModuleInit() {
+    try {
+      const removed = await this.auditLogModel.destroy({
+        where: {
+          ipAddress: SAMPLE_SIGNATURE.ipAddress,
+          createdAt: SAMPLE_SIGNATURE.createdAt,
+          userName: { [Op.in]: SAMPLE_SIGNATURE.userName },
+        },
+      });
+      if (removed)
+        this.logger.log(
+          `Removed ${removed} sample audit entries that were never real activity.`,
+        );
+      // 'Active' was the old word for a successful action.
+      await this.auditLogModel.update(
+        { status: 'Success' },
+        { where: { status: 'Active' } },
+      );
+    } catch (err) {
+      this.logger.warn(`Audit log cleanup skipped: ${(err as Error)?.message}`);
+    }
+  }
 
   /**
    * Writes an audit entry. Never throws — a logging failure must not be able
@@ -73,28 +185,30 @@ export class AuditService {
    */
   async log(entry: AuditLogEntry): Promise<void> {
     try {
+      const actor = await this.resolveActor(entry);
+      const tenantId = entry.tenantId || actor.tenantId;
+      const organizationName =
+        entry.organizationName ||
+        (tenantId ? await this.organizationName(tenantId) : undefined) ||
+        actor.tenantName;
+
       await this.auditLogModel.create({
         action: entry.action,
         actorType: entry.actorType,
         userId: entry.userId,
-        email: entry.email,
-        tenantId: entry.tenantId,
+        email: entry.email || actor.email,
+        tenantId,
         ipAddress: entry.ipAddress || 'unknown',
         userAgent: entry.userAgent || 'unknown',
         reason: entry.reason,
         module: entry.module || 'Authentication',
-        // No caller passes a status, so defaulting flatly to 'Active' filed
-        // every LOGIN_FAILED as a success and left the Failed Actions KPI —
-        // which counts `status: 'Failed'` — unable to ever match one.
         status: entry.status || statusForAction(entry.action),
-        organizationName: entry.organizationName,
+        organizationName,
         organizationLogo: entry.organizationLogo,
-        userName: entry.userName,
-        userRole: entry.userRole,
+        userName: entry.userName || actor.name,
+        userRole: entry.userRole || actor.role,
         userAvatar: entry.userAvatar,
         actionDetails: entry.actionDetails,
-        // Auth callers pass a raw user agent and no device, which the activity
-        // drawer then had to render as a full `Mozilla/5.0 (…)` string.
         device: entry.device || describeUserAgent(entry.userAgent),
         changes: entry.changes,
         metadata: entry.metadata,
@@ -107,47 +221,156 @@ export class AuditService {
   }
 
   /**
-   * Queries audit logs with pagination, multi-field search, and module/status filters.
+   * Who the entry is about, from the account itself — callers mostly know an
+   * id or an email, and the trail should read "Ayesha Khan · Org Admin", not a
+   * UUID. A failed sign-in for a real account is attributed to it too.
    */
-  async query(filter: AuditLogQuery) {
-    await this.ensureSeedLogs();
+  private async resolveActor(entry: AuditLogEntry): Promise<{
+    name?: string;
+    role?: string;
+    email?: string;
+    tenantId?: string;
+    tenantName?: string;
+  }> {
+    try {
+      if (entry.actorType === 'superadmin') {
+        const admin =
+          entry.userId && this.superAdminModel
+            ? await this.superAdminModel.findByPk(entry.userId, {
+                attributes: ['name', 'firstName', 'lastName', 'email'],
+              })
+            : entry.email && this.superAdminModel
+              ? await this.superAdminModel.findOne({
+                  where: { email: entry.email },
+                  attributes: ['name', 'firstName', 'lastName', 'email'],
+                })
+              : null;
+        return {
+          name: fullName(admin),
+          role: 'Super Admin',
+          email: admin?.email,
+        };
+      }
+      if (
+        entry.actorType === 'tenant' &&
+        this.credentialModel &&
+        (entry.userId || entry.email)
+      ) {
+        const attributes = [
+          'firstName',
+          'lastName',
+          'email',
+          'role',
+          'tenantId',
+          'tenantName',
+        ];
+        const cred = entry.userId
+          ? await this.credentialModel.findByPk(entry.userId, { attributes })
+          : await this.credentialModel.findOne({
+              where: { email: entry.email },
+              attributes,
+            });
+        if (cred) {
+          return {
+            name: fullName(cred),
+            role: roleLabel(cred.role),
+            email: cred.email,
+            tenantId: cred.tenantId,
+            tenantName: cred.tenantName,
+          };
+        }
+      }
+    } catch (err) {
+      this.logger.debug(
+        `Audit actor lookup failed: ${(err as Error)?.message}`,
+      );
+    }
+    return {};
+  }
 
-    const page = filter.page && filter.page > 0 ? Number(filter.page) : 1;
-    const limit = filter.limit && filter.limit > 0 && filter.limit <= 100 ? Number(filter.limit) : 25;
+  /** The organization's current display name, cached for ten minutes. */
+  private async organizationName(
+    tenantId: string,
+  ): Promise<string | undefined> {
+    const cached = this.organizationNames.get(tenantId);
+    if (cached && Date.now() - cached.at < 10 * 60_000)
+      return cached.name ?? undefined;
+    let name: string | null = null;
+    try {
+      const rows = await this.auditLogModel.sequelize!.query<{
+        name: string | null;
+      }>(
+        'SELECT COALESCE(NULLIF("organizationName", \'\'), name) AS name FROM tenants WHERE id = :id LIMIT 1',
+        { replacements: { id: tenantId }, type: QueryTypes.SELECT },
+      );
+      name = rows[0]?.name ?? null;
+    } catch {
+      // The tenants table lives in the shared platform database; if it can't be read, leave the name blank.
+    }
+    this.organizationNames.set(tenantId, { name, at: Date.now() });
+    return name ?? undefined;
+  }
 
-    const where: Record<string | symbol, any> = {};
+  private buildWhere(filter: AuditLogQuery): WhereOptions {
+    const and: WhereOptions[] = [{ action: { [Op.notIn]: NOISE_ACTIONS } }];
 
-    if (filter.email) where.email = filter.email;
-    if (filter.action) where.action = filter.action;
-    if (filter.userId) where.userId = filter.userId;
-    if (filter.module) where.module = filter.module;
-    if (filter.status) where.status = filter.status;
+    if (filter.email) and.push({ email: filter.email });
+    if (filter.action) and.push({ action: filter.action });
+    if (filter.userId) and.push({ userId: filter.userId });
+    if (filter.module) and.push({ module: filter.module });
+    if (filter.status) and.push({ status: filter.status });
+    if (filter.category === 'security') and.push(this.securityWhere());
 
     const tenantFilter = filter.tenantId || filter.organizationId;
-    if (tenantFilter) where.tenantId = tenantFilter;
+    if (tenantFilter) and.push({ tenantId: tenantFilter });
 
-    if (filter.from || filter.to) {
-      where.createdAt = {};
-      if (filter.from) where.createdAt[Op.gte] = new Date(filter.from);
-      if (filter.to) where.createdAt[Op.lte] = new Date(filter.to);
-    }
+    const range: Record<symbol, Date> = {};
+    const from = filter.from ? new Date(filter.from) : null;
+    const to = filter.to ? new Date(filter.to) : null;
+    if (from && !Number.isNaN(from.getTime())) range[Op.gte] = from;
+    if (to && !Number.isNaN(to.getTime())) range[Op.lte] = to;
+    if (Object.getOwnPropertySymbols(range).length)
+      and.push({ createdAt: range });
 
     if (filter.search && filter.search.trim()) {
       const term = `%${filter.search.trim()}%`;
-      const searchOp = (Op as any).iLike || Op.like;
-      where[Op.or] = [
-        { organizationName: { [searchOp]: term } },
-        { userName: { [searchOp]: term } },
-        { email: { [searchOp]: term } },
-        { action: { [searchOp]: term } },
-        { actionDetails: { [searchOp]: term } },
-        { module: { [searchOp]: term } },
-        { ipAddress: { [searchOp]: term } },
-      ];
+      and.push({
+        [Op.or]: [
+          'organizationName',
+          'userName',
+          'email',
+          'action',
+          'actionDetails',
+          'module',
+          'ipAddress',
+        ].map((field) => ({
+          [field]: { [Op.iLike]: term },
+        })),
+      });
     }
 
+    return { [Op.and]: and };
+  }
+
+  private securityWhere(): WhereOptions {
+    return {
+      [Op.or]: [
+        { action: { [Op.in]: SECURITY_ACTIONS } },
+        { module: SECURITY_MODULE },
+      ],
+    };
+  }
+
+  /** Queries audit logs with pagination, multi-field search, and filters. */
+  async query(filter: AuditLogQuery) {
+    const page = filter.page && filter.page > 0 ? Number(filter.page) : 1;
+    const limit =
+      filter.limit && filter.limit > 0 && filter.limit <= 100
+        ? Number(filter.limit)
+        : 25;
+
     const { count, rows } = await this.auditLogModel.findAndCountAll({
-      where,
+      where: this.buildWhere(filter),
       order: [['createdAt', 'DESC']],
       limit,
       offset: (page - 1) * limit,
@@ -162,15 +385,11 @@ export class AuditService {
     };
   }
 
-  /**
-   * Get single audit log with full details and field changes (for Activity Details drawer).
-   */
+  /** Single audit log with full details and field changes (for the Activity Details drawer). */
   async getById(id: string) {
-    await this.ensureSeedLogs();
-
     const log = await this.auditLogModel.findByPk(id);
     if (!log) {
-      throw new NotFoundException(`Audit log with ID ${id} not found`);
+      throw new NotFoundException('This activity record no longer exists.');
     }
     return log;
   }
@@ -181,9 +400,8 @@ export class AuditService {
    * widget renders, rather than returning full audit rows.
    */
   async getRecentActivity(limit = 10) {
-    await this.ensureSeedLogs();
-
     const logs = await this.auditLogModel.findAll({
+      where: { action: { [Op.notIn]: NOISE_ACTIONS } },
       order: [['createdAt', 'DESC']],
       limit,
     });
@@ -201,30 +419,24 @@ export class AuditService {
   }
 
   /**
-   * Turns an audit row into the readable sentence the feed shows, e.g.
-   * `New Organization "pepsiCo" registered by System`. Falls back to the raw
-   * action rather than inventing wording for events it doesn't recognise.
+   * Turns an audit row into the readable sentence the feed shows. Falls back
+   * to the raw action rather than inventing wording for events it doesn't
+   * recognise.
    */
   private describeActivity(log: AuditLog): string {
     const actor = log.userName || log.email || 'System';
-    const subject = log.organizationName ? `"${log.organizationName}"` : '';
+    const detail = log.actionDetails ? ` ${log.actionDetails}` : '';
 
     switch (log.action) {
-      case 'ORGANIZATION_CREATED':
-        return `New Organization ${subject} registered by ${actor}`.replace(/\s+/g, ' ').trim();
-      case 'SUBSCRIPTION_UPDATED':
-        return `Subscription plan ${log.actionDetails ? `"${log.actionDetails}"` : ''} updated by ${actor}`
-          .replace(/\s+/g, ' ')
-          .trim();
-      case 'BACKUP_COMPLETED':
-        return `System backup completed successfully by ${actor}`;
       case 'LOGIN_SUCCESS':
         return `${actor} signed in`;
       case 'LOGIN_FAILED':
-        return `Failed sign-in attempt for ${log.email || 'unknown account'}`;
+        return `Failed sign-in attempt for ${log.email || 'an unknown account'}`;
+      case 'LOGOUT':
+        return `${actor} signed out`;
       default: {
         const readable = log.action.replace(/_/g, ' ').toLowerCase();
-        return `${readable.charAt(0).toUpperCase()}${readable.slice(1)} by ${actor}`;
+        return `${readable.charAt(0).toUpperCase()}${readable.slice(1)}${detail} by ${actor}`;
       }
     }
   }
@@ -240,346 +452,286 @@ export class AuditService {
   }
 
   /**
-   * Get KPI statistics for top cards:
-   * - Total Activities (+8.2% vs last 30 days)
-   * - Today's Activity (+1.1% vs yesterday)
-   * - Security Events (Requires review)
-   * - Failed Actions (-3.2% vs last 30 days)
+   * The four KPI cards. Every figure is counted from the trail; a trend is 0
+   * (and so hidden) when there's no earlier period to compare against.
+   * "Today" is the platform's local day.
    */
   async getStats() {
-    await this.ensureSeedLogs();
-
     const now = new Date();
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const startOfYesterday = new Date(startOfToday.getTime() - 24 * 60 * 60 * 1000);
-    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-    const sixtyDaysAgo = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000);
+    const DAY = 24 * 60 * 60 * 1000;
+    const startOfToday = localClock(
+      now,
+      utcOffsetMinutes(platformTimeZone(), now),
+    ).dayStart;
+    const startOfYesterday = new Date(startOfToday.getTime() - DAY);
+    const thirtyDaysAgo = new Date(now.getTime() - 30 * DAY);
+    const sixtyDaysAgo = new Date(now.getTime() - 60 * DAY);
+
+    const count = (...conditions: WhereOptions[]) =>
+      this.auditLogModel.count({
+        where: {
+          [Op.and]: [{ action: { [Op.notIn]: NOISE_ACTIONS } }, ...conditions],
+        },
+      });
+    const since = (from: Date, to?: Date): WhereOptions => ({
+      createdAt: to ? { [Op.gte]: from, [Op.lt]: to } : { [Op.gte]: from },
+    });
+    const failed: WhereOptions = { status: 'Failed' };
 
     const [
-      totalCount,
-      todayCount,
-      yesterdayCount,
-      last30Count,
-      prev30Count,
-      failedCount,
+      total,
+      today,
+      yesterday,
+      last30,
+      prev30,
       failedLast30,
       failedPrev30,
-      securityCount,
+      securityLast30,
+      modules,
     ] = await Promise.all([
-      this.auditLogModel.count(),
-      this.auditLogModel.count({
-        where: { createdAt: { [Op.gte]: startOfToday } },
-      }),
-      this.auditLogModel.count({
+      count(),
+      count(since(startOfToday)),
+      count(since(startOfYesterday, startOfToday)),
+      count(since(thirtyDaysAgo)),
+      count(since(sixtyDaysAgo, thirtyDaysAgo)),
+      count(failed, since(thirtyDaysAgo)),
+      count(failed, since(sixtyDaysAgo, thirtyDaysAgo)),
+      count(this.securityWhere(), since(thirtyDaysAgo)),
+      this.auditLogModel.findAll({
+        attributes: ['module'],
         where: {
-          createdAt: {
-            [Op.gte]: startOfYesterday,
-            [Op.lt]: startOfToday,
-          },
+          module: { [Op.ne]: null },
+          action: { [Op.notIn]: NOISE_ACTIONS },
         },
-      }),
-      this.auditLogModel.count({
-        where: { createdAt: { [Op.gte]: thirtyDaysAgo } },
-      }),
-      this.auditLogModel.count({
-        where: {
-          createdAt: {
-            [Op.gte]: sixtyDaysAgo,
-            [Op.lt]: thirtyDaysAgo,
-          },
-        },
-      }),
-      this.auditLogModel.count({ where: { status: 'Failed' } }),
-      this.auditLogModel.count({
-        where: { status: 'Failed', createdAt: { [Op.gte]: thirtyDaysAgo } },
-      }),
-      this.auditLogModel.count({
-        where: {
-          status: 'Failed',
-          createdAt: { [Op.gte]: sixtyDaysAgo, [Op.lt]: thirtyDaysAgo },
-        },
-      }),
-      this.auditLogModel.count({
-        where: {
-          [Op.or]: [
-            { module: 'Authentication' },
-            { action: { [(Op as any).iLike || Op.like]: '%login%' } },
-            { action: { [(Op as any).iLike || Op.like]: '%permission%' } },
-            { status: 'Failed' },
-          ],
-        },
+        group: ['module'],
+        raw: true,
       }),
     ]);
 
-    // A period with nothing before it has no movement to report. Reporting 0
-    // lets the caller omit the trend line rather than print an invented one.
     const percentChange = (current: number, previous: number): number =>
       previous > 0
         ? Number((((current - previous) / previous) * 100).toFixed(1))
         : 0;
-
-    const totalTrend = percentChange(last30Count, prev30Count);
-    const todayTrend = percentChange(todayCount, yesterdayCount);
-    const failedTrend = percentChange(failedLast30, failedPrev30);
+    const trend = (current: number, previous: number) => {
+      const change = percentChange(current, previous);
+      return {
+        changePercentage: change,
+        direction: change >= 0 ? 'up' : 'down',
+      };
+    };
 
     return {
       totalActivities: {
-        count: totalCount,
-        changePercentage: totalTrend,
-        period: 'vs last 30 days',
-        direction: totalTrend >= 0 ? 'up' : 'down',
+        count: total,
+        period: 'last 30 days vs the 30 before',
+        ...trend(last30, prev30),
       },
       todayActivity: {
-        count: todayCount,
-        changePercentage: todayTrend,
+        count: today,
         period: 'vs yesterday',
-        direction: todayTrend >= 0 ? 'up' : 'down',
+        ...trend(today, yesterday),
       },
       securityEvents: {
-        count: securityCount,
-        status: 'Requires review',
-        badge: 'warning',
+        count: securityLast30,
+        status:
+          securityLast30 > 0
+            ? 'Last 30 days — review them'
+            : 'None in the last 30 days',
+        badge: securityLast30 > 0 ? 'warning' : 'success',
       },
       failedActions: {
-        count: failedCount,
-        changePercentage: failedTrend,
-        period: 'vs last 30 days',
-        direction: failedTrend > 0 ? 'up' : 'down',
+        count: failedLast30,
+        period: 'last 30 days vs the 30 before',
+        ...trend(failedLast30, failedPrev30),
       },
+      modules: (modules as unknown as { module: string }[])
+        .map((m) => m.module)
+        .filter(Boolean)
+        .sort(),
     };
   }
 
   /**
-   * Exports filtered audit logs into CSV format.
+   * Organization users' sign-ins in a window, per organization — for the
+   * Reports page. Counted from the trail: successful sign-ins, failed ones,
+   * how many different people signed in, and when the last one did.
    */
-  async exportLogs(filter: AuditLogQuery) {
-    await this.ensureSeedLogs();
+  async signInSummary(query: {
+    from?: string;
+    to?: string;
+    tenantIds?: string[];
+  }) {
+    const from = query.from ? new Date(query.from) : new Date(0);
+    const to = query.to ? new Date(query.to) : new Date();
+    const tenantFilter = query.tenantIds?.length
+      ? 'AND "tenantId" IN (:tenantIds)'
+      : '';
+    const rows = await this.auditLogModel.sequelize!.query<{
+      tenantId: string;
+      successful: string;
+      failed: string;
+      uniqueUsers: string;
+      lastSignInAt: Date | null;
+    }>(
+      `SELECT "tenantId",
+              COUNT(*) FILTER (WHERE action = 'LOGIN_SUCCESS') AS successful,
+              COUNT(*) FILTER (WHERE action IN ('LOGIN_FAILED', 'TWO_FA_FAILED')) AS failed,
+              COUNT(DISTINCT "userId") FILTER (WHERE action = 'LOGIN_SUCCESS') AS "uniqueUsers",
+              MAX("createdAt") FILTER (WHERE action = 'LOGIN_SUCCESS') AS "lastSignInAt"
+         FROM audit_logs
+        WHERE "actorType" = 'tenant'
+          AND "tenantId" IS NOT NULL
+          AND action IN ('LOGIN_SUCCESS', 'LOGIN_FAILED', 'TWO_FA_FAILED')
+          AND "createdAt" >= :from AND "createdAt" <= :to
+          ${tenantFilter}
+        GROUP BY "tenantId"`,
+      {
+        replacements: { from, to, tenantIds: query.tenantIds ?? [] },
+        type: QueryTypes.SELECT,
+      },
+    );
+    const [totals] = await this.auditLogModel.sequelize!.query<{
+      uniqueUsers: string;
+      successful: string;
+    }>(
+      `SELECT COUNT(DISTINCT "userId") AS "uniqueUsers", COUNT(*) AS successful
+         FROM audit_logs
+        WHERE "actorType" = 'tenant' AND action = 'LOGIN_SUCCESS'
+          AND "createdAt" >= :from AND "createdAt" <= :to`,
+      { replacements: { from, to }, type: QueryTypes.SELECT },
+    );
 
-    // Query up to 1000 items for export
-    const exportFilter = { ...filter, page: 1, limit: 1000 };
-    const result = await this.query(exportFilter);
-    const logs = result.data;
+    return {
+      byTenant: Object.fromEntries(
+        rows.map((r) => [
+          r.tenantId,
+          {
+            successful: Number(r.successful),
+            failed: Number(r.failed),
+            uniqueUsers: Number(r.uniqueUsers),
+            lastSignInAt: r.lastSignInAt,
+          },
+        ]),
+      ),
+      totals: {
+        uniqueUsers: Number(totals?.uniqueUsers ?? 0),
+        successful: Number(totals?.successful ?? 0),
+      },
+    };
+  }
+
+  /** Plain rows for a report (security events and the like), newest first. */
+  async reportRows(filter: AuditLogQuery & { maxRows?: number }) {
+    const rows = await this.auditLogModel.findAll({
+      where: this.buildWhere(filter),
+      order: [['createdAt', 'DESC']],
+      limit: Math.min(
+        Math.max(Number(filter.maxRows) || 5000, 1),
+        AUDIT_EXPORT_LIMIT,
+      ),
+      attributes: [
+        'id',
+        'createdAt',
+        'action',
+        'module',
+        'status',
+        'reason',
+        'organizationName',
+        'userName',
+        'email',
+        'userRole',
+        'ipAddress',
+        'device',
+        'actionDetails',
+      ],
+      raw: true,
+    });
+    return rows;
+  }
+
+  /** Every entry matching the filters (up to AUDIT_EXPORT_LIMIT), as CSV. */
+  async exportLogs(filter: AuditLogQuery) {
+    const where = this.buildWhere(filter);
+    const [total, logs] = await Promise.all([
+      this.auditLogModel.count({ where }),
+      this.auditLogModel.findAll({
+        where,
+        order: [['createdAt', 'DESC']],
+        limit: AUDIT_EXPORT_LIMIT,
+      }),
+    ]);
 
     const headers = [
-      'Log ID',
-      'Date & Time',
+      'Date & Time (UTC)',
       'Organization',
       'User',
-      'User Role',
+      'Email',
+      'Role',
       'Action',
       'Details',
       'Module',
       'Status',
+      'Reason',
       'IP Address',
       'Device',
-      'Changes Count',
+      'Changes',
+      'Log ID',
     ];
 
-    const escapeCsv = (val: any) => {
+    // A leading = + - @ would be run as a formula by Excel/Sheets.
+    const escapeCsv = (val: unknown) => {
       if (val === null || val === undefined) return '""';
-      const str = String(val).replace(/"/g, '""');
-      return `"${str}"`;
+      let str = String(val);
+      if (/^[=+\-@\t\r]/.test(str)) str = `'${str}`;
+      return `"${str.replace(/"/g, '""')}"`;
     };
+    const describeChanges = (changes: unknown) =>
+      Array.isArray(changes)
+        ? changes
+            .map((c: any) =>
+              c?.before === undefined || c?.before === null
+                ? `${c?.field}: ${c?.after}`
+                : `${c?.field}: ${c?.before} → ${c?.after}`,
+            )
+            .join('; ')
+        : '';
 
     const csvRows = [
       headers.join(','),
-      ...logs.map((log: any) => {
-        const changesCount = Array.isArray(log.changes) ? log.changes.length : log.changes ? 1 : 0;
-        return [
-          escapeCsv(log.id),
-          escapeCsv(log.createdAt ? new Date(log.createdAt).toISOString() : ''),
-          escapeCsv(log.organizationName || 'Platform'),
-          escapeCsv(log.userName || log.email || 'System'),
-          escapeCsv(log.userRole || log.actorType || 'User'),
-          escapeCsv(log.action),
-          escapeCsv(log.actionDetails || ''),
-          escapeCsv(log.module || 'General'),
-          escapeCsv(log.status || 'Active'),
-          escapeCsv(log.ipAddress || ''),
-          escapeCsv(log.device || log.userAgent || ''),
-          escapeCsv(changesCount),
-        ].join(',');
-      }),
+      ...logs.map((log) =>
+        [
+          log.createdAt
+            ? new Date(log.createdAt)
+                .toISOString()
+                .replace('T', ' ')
+                .slice(0, 19)
+            : '',
+          log.organizationName || 'Platform',
+          log.userName || log.email || 'System',
+          log.email || '',
+          log.userRole || '',
+          log.action,
+          log.actionDetails || '',
+          log.module || '',
+          log.status || '',
+          (log as any).reason || '',
+          log.ipAddress || '',
+          log.device || '',
+          describeChanges(log.changes),
+          log.id,
+        ]
+          .map(escapeCsv)
+          .join(','),
+      ),
     ];
 
     return {
       contentType: 'text/csv',
       filename: `audit-logs-${new Date().toISOString().slice(0, 10)}.csv`,
-      csv: csvRows.join('\n'),
+      // BOM so Excel reads names with accents correctly.
+      csv: `﻿${csvRows.join('\n')}`,
       totalExported: logs.length,
+      totalMatching: total,
     };
-  }
-
-  /**
-   * Ensures realistic baseline audit logs matching the UI screen exist in the database.
-   */
-  private async ensureSeedLogs(): Promise<void> {
-    if (this.seeded) return;
-
-    try {
-      const count = await this.auditLogModel.count();
-      if (count >= 6) {
-        this.seeded = true;
-        return;
-      }
-
-      const seedEntries: AuditLogEntry[] = [
-        {
-          action: 'Changed role permissions',
-          actionDetails: 'HR Manager',
-          module: 'Roles & Permissions',
-          status: 'Active',
-          actorType: 'tenant',
-          organizationName: 'Oppo',
-          organizationLogo: 'https://images.unsplash.com/photo-1616469829941-c7200edec809?w=80',
-          userName: 'David Lee',
-          userRole: 'Organization Admin',
-          userAvatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100',
-          ipAddress: '103.21.244.12',
-          userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-          device: 'Chrome 124 on macOS',
-          changes: [
-            { field: 'Employee - View', before: 'Denied', after: 'Granted' },
-            { field: 'Leave - View', before: 'Denied', after: 'Granted' },
-            { field: 'Leave - Create', before: 'Denied', after: 'Granted' },
-            { field: 'Attendance - View', before: 'Granted', after: 'Granted' },
-          ],
-          createdAt: new Date('2026-08-18T10:42:00.000Z'),
-        },
-        {
-          action: 'Updated subscription plan',
-          actionDetails: 'Enterprise -> Professional',
-          module: 'Subscriptions',
-          status: 'Active',
-          actorType: 'tenant',
-          organizationName: 'Coca-Cola',
-          organizationLogo: 'https://images.unsplash.com/photo-1554866585-cd94860890b7?w=80',
-          userName: 'John Smith',
-          userRole: 'Organization Admin',
-          userAvatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=100',
-          ipAddress: '103.21.244.12',
-          userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          device: 'Chrome 124 on Windows',
-          changes: [
-            { field: 'Plan Tier', before: 'Enterprise ($1,499/mo)', after: 'Professional ($799/mo)' },
-            { field: 'User Limit', before: 'Unlimited', after: 'Up to 250 users' },
-            { field: 'Dedicated Account Manager', before: 'Enabled', after: 'Disabled' },
-          ],
-          createdAt: new Date('2026-08-18T10:42:00.000Z'),
-        },
-        {
-          action: 'Created HR user',
-          actionDetails: 'Ayesha Fatima',
-          module: 'Users',
-          status: 'Active',
-          actorType: 'tenant',
-          organizationName: 'Haier',
-          organizationLogo: 'https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?w=80',
-          userName: 'Emily Johnson',
-          userRole: 'Organization Admin',
-          userAvatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100',
-          ipAddress: '103.21.244.12',
-          userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15',
-          device: 'Safari 17 on macOS',
-          changes: [
-            { field: 'Account Status', before: 'None', after: 'Invited' },
-            { field: 'Assigned Role', before: 'None', after: 'HR Specialist' },
-            { field: 'Department', before: 'None', after: 'People Operations' },
-          ],
-          createdAt: new Date('2026-08-18T10:42:00.000Z'),
-        },
-        {
-          action: 'Failed login attempt',
-          actionDetails: 'Invalid credentials (3rd attempt)',
-          module: 'Authentication',
-          status: 'Active',
-          actorType: 'tenant',
-          organizationName: 'Vivo',
-          organizationLogo: 'https://images.unsplash.com/photo-1511707171634-5f897ff02aa9?w=80',
-          userName: 'Sophia Wang',
-          userRole: 'Organization Admin',
-          userAvatar: 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=100',
-          ipAddress: '103.21.244.12',
-          userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          device: 'Edge 123 on Windows',
-          reason: 'Invalid password provided',
-          changes: [
-            { field: 'Failed Attempts', before: '2', after: '3' },
-            { field: 'Security Alert', before: 'Normal', after: 'Requires review' },
-          ],
-          createdAt: new Date('2026-08-18T10:42:00.000Z'),
-        },
-        {
-          action: 'Exported report',
-          actionDetails: 'Employee Summary Report',
-          module: 'Reports',
-          status: 'Active',
-          actorType: 'tenant',
-          organizationName: 'Unilever',
-          organizationLogo: 'https://images.unsplash.com/photo-1560179707-f14e90ef3623?w=80',
-          userName: 'Micheal Brown',
-          userRole: 'Organization Admin',
-          userAvatar: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=100',
-          ipAddress: '103.21.244.12',
-          userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
-          device: 'Chrome 124 on Linux',
-          changes: [
-            { field: 'Report Export', before: 'Draft', after: 'Generated' },
-            { field: 'Total Records', before: '0', after: '450 Employees' },
-          ],
-          createdAt: new Date('2026-08-18T10:42:00.000Z'),
-        },
-        {
-          action: 'Updated subscription plan',
-          actionDetails: 'Enterprise -> Professional',
-          module: 'Subscriptions',
-          status: 'Active',
-          actorType: 'tenant',
-          organizationName: 'PixelCraft',
-          organizationLogo: 'https://images.unsplash.com/photo-1572021335469-31706a17aaef?w=80',
-          userName: 'Sara David',
-          userRole: 'Organization Admin',
-          userAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100',
-          ipAddress: '103.21.244.12',
-          userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:125.0) Gecko/20100101 Firefox/125.0',
-          device: 'Firefox 125 on macOS',
-          changes: [
-            { field: 'Plan Tier', before: 'Enterprise ($1,499/mo)', after: 'Professional ($799/mo)' },
-            { field: 'Billing Cycle', before: 'Monthly', after: 'Annual' },
-          ],
-          createdAt: new Date('2026-08-18T10:42:00.000Z'),
-        },
-      ];
-
-      for (const entry of seedEntries) {
-        await this.auditLogModel.create({
-          action: entry.action,
-          actorType: entry.actorType,
-          userId: entry.userId,
-          email: entry.email,
-          tenantId: entry.tenantId,
-          ipAddress: entry.ipAddress || 'unknown',
-          userAgent: entry.userAgent || 'unknown',
-          reason: entry.reason,
-          module: entry.module,
-          status: entry.status,
-          organizationName: entry.organizationName,
-          organizationLogo: entry.organizationLogo,
-          userName: entry.userName,
-          userRole: entry.userRole,
-          userAvatar: entry.userAvatar,
-          actionDetails: entry.actionDetails,
-          device: entry.device,
-          changes: entry.changes,
-          metadata: entry.metadata,
-          createdAt: entry.createdAt,
-        });
-      }
-
-      this.logger.log('Initial sample audit logs seeded successfully.');
-      this.seeded = true;
-    } catch (err) {
-      this.logger.warn(`Could not seed initial audit logs: ${(err as Error)?.message}`);
-    }
   }
 }

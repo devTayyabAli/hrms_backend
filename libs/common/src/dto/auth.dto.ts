@@ -14,6 +14,7 @@ import {
   ArrayNotEmpty,
   IsUUID,
   MaxLength,
+  IsIn,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -186,7 +187,10 @@ export class RefreshTokenDto {
    * gateway reads instead (see api-gateway/src/auth/refresh-token-cookie.ts).
    * The body field remains for non-browser callers that hold their own token.
    */
-  @ApiProperty({ example: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...', required: false })
+  @ApiProperty({
+    example: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',
+    required: false,
+  })
   @IsOptional()
   @IsString()
   @IsNotEmpty()
@@ -194,13 +198,19 @@ export class RefreshTokenDto {
 }
 
 export class LogoutDto {
-  @ApiProperty({ example: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...', required: false })
+  @ApiProperty({
+    example: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',
+    required: false,
+  })
   @IsString()
   refreshToken?: string;
 }
 
 export class AuditLogQueryDto {
-  @ApiPropertyOptional({ example: 'Oppo', description: 'Search across organization, user, action, email, IP' })
+  @ApiPropertyOptional({
+    example: 'Oppo',
+    description: 'Search across organization, user, action, email, IP',
+  })
   @IsOptional()
   @IsString()
   search?: string;
@@ -215,15 +225,30 @@ export class AuditLogQueryDto {
   @IsString()
   action?: string;
 
-  @ApiPropertyOptional({ example: 'Roles & Permissions', description: 'Filter by module: Subscriptions, Users, Roles & Permissions, Authentication, Reports, etc.' })
+  @ApiPropertyOptional({
+    example: 'Roles & Permissions',
+    description:
+      'Filter by module: Subscriptions, Users, Roles & Permissions, Authentication, Reports, etc.',
+  })
   @IsOptional()
   @IsString()
   module?: string;
 
-  @ApiPropertyOptional({ example: 'Active', description: 'Filter by status: Active, Success, Failed, Warning' })
+  @ApiPropertyOptional({
+    example: 'Failed',
+    description: 'Filter by status: Success or Failed',
+  })
   @IsOptional()
   @IsString()
   status?: string;
+
+  @ApiPropertyOptional({
+    enum: ['security'],
+    description: 'security = failed sign-ins and access-control changes',
+  })
+  @IsOptional()
+  @IsIn(['security'])
+  category?: string;
 
   @ApiPropertyOptional({ description: 'Filter by tenant ID' })
   @IsOptional()
@@ -265,7 +290,11 @@ export class AuditLogQueryDto {
   @Max(100)
   limit?: number;
 
-  @ApiPropertyOptional({ example: 'csv', enum: ['csv', 'json'], required: false })
+  @ApiPropertyOptional({
+    example: 'csv',
+    enum: ['csv', 'json'],
+    required: false,
+  })
   @IsOptional()
   @IsString()
   format?: 'csv' | 'json';

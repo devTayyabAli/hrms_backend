@@ -10,8 +10,16 @@ import {
   TenantException,
   TenantErrorCode,
 } from '@app/common';
-import { OrganizationAdminInvitation, InvitationStatus } from '../models/organization-admin-invitation.model';
-import { Tenant, TenantStatus, TenantSetupStatus, TenantProvisioningStatus } from '../models/tenant.model';
+import {
+  OrganizationAdminInvitation,
+  InvitationStatus,
+} from '../models/organization-admin-invitation.model';
+import {
+  Tenant,
+  TenantStatus,
+  TenantSetupStatus,
+  TenantProvisioningStatus,
+} from '../models/tenant.model';
 import { TenantService } from './tenant.service';
 import { PlatformNotifierService } from './platform-notifier.service';
 
@@ -24,6 +32,8 @@ export interface AdminInvitationResult {
   activationUrl: string;
   expiresAt: Date;
   status: InvitationStatus;
+  /** False when the invitation was created but the email couldn't be sent. */
+  emailSent?: boolean;
 }
 
 @Injectable()
@@ -100,7 +110,21 @@ export class OrganizationAdminInvitationService {
       );
     }
 
-    const targetEmail = adminEmail || tenant.adminEmail || tenant.email;
+    const accepted = await this.invitationModel.count({
+      where: { tenantId, status: InvitationStatus.ACCEPTED },
+    });
+    if (accepted > 0) {
+      throw new TenantException(
+        TenantErrorCode.INVALID_TENANT_CONTEXT,
+        "This organization's admin has already activated their account, so no invitation is needed.",
+      );
+    }
+
+    const targetEmail = (
+      adminEmail ||
+      tenant.adminEmail ||
+      tenant.email
+    )?.trim();
     if (!targetEmail) {
       throw new TenantException(
         TenantErrorCode.INVALID_TENANT_CONTEXT,
@@ -111,9 +135,24 @@ export class OrganizationAdminInvitationService {
     // A resend (or a re-invite without a name) keeps the admin's own details
     // from the earlier invitation — falling back to the organization's name
     // made the org name become the admin's first/last name on activation.
-    const previous = adminName && phone ? null : await this.findPreviousAdminDetails(tenant, targetEmail);
-    const resolvedAdminName = adminName || previous?.adminName || null;
-    const resolvedPhone = phone || previous?.phone || null;
+    const previous =
+      adminName && phone
+        ? null
+        : await this.findPreviousAdminDetails(tenant, targetEmail);
+    // A first invitation sent after creation still knows who the admin is.
+    const resolvedAdminName =
+      adminName ||
+      previous?.adminName ||
+      tenant.setupRequest?.adminName ||
+      null;
+    const resolvedPhone =
+      phone || previous?.phone || tenant.setupRequest?.adminPhone || null;
+
+    // Sending to a different address makes it the organization's admin email,
+    // so a later resend goes to the same person.
+    if (targetEmail.toLowerCase() !== (tenant.adminEmail ?? '').toLowerCase()) {
+      await tenant.update({ adminEmail: targetEmail });
+    }
 
     // Cancel existing PENDING invitations for this tenant
     await this.invitationModel.update(
@@ -139,9 +178,12 @@ export class OrganizationAdminInvitationService {
     });
 
     const activationUrl = this.buildActivationUrl(rawToken);
-    this.logger.log(`Created Admin Invitation for tenant ${tenant.id} (${targetEmail}).`);
+    this.logger.log(
+      `Created Admin Invitation for tenant ${tenant.id} (${targetEmail}).`,
+    );
 
     // Dispatch invitation email via Auth Service (TCP)
+    let emailSent = false;
     try {
       await firstValueFrom(
         this.authClient
@@ -159,9 +201,14 @@ export class OrganizationAdminInvitationService {
           })
           .pipe(timeout(15000)),
       );
-      this.logger.log(`Invitation email successfully dispatched to ${targetEmail}.`);
+      this.logger.log(
+        `Invitation email successfully dispatched to ${targetEmail}.`,
+      );
+      emailSent = true;
     } catch (mailErr: any) {
-      this.logger.error(`Failed to dispatch invitation email to ${targetEmail}: ${mailErr.message}`);
+      this.logger.error(
+        `Failed to dispatch invitation email to ${targetEmail}: ${mailErr.message}`,
+      );
     }
 
     return {
@@ -173,13 +220,21 @@ export class OrganizationAdminInvitationService {
       activationUrl,
       expiresAt,
       status: InvitationStatus.PENDING,
+      emailSent,
     };
+  }
+
+  /** Whether any invitation (in any state) was ever created for the organization. */
+  async hasInvitation(tenantId: string): Promise<boolean> {
+    return (await this.invitationModel.count({ where: { tenantId } })) > 0;
   }
 
   /**
    * Resend / Replace Admin Invitation (Phase L)
    */
-  async resendAdminInvitation(tenantId: string): Promise<AdminInvitationResult> {
+  async resendAdminInvitation(
+    tenantId: string,
+  ): Promise<AdminInvitationResult> {
     const tenant = await this.tenantService.getTenantById(tenantId);
     const accepted = await this.invitationModel.count({
       where: { tenantId, status: InvitationStatus.ACCEPTED },
@@ -205,14 +260,17 @@ export class OrganizationAdminInvitationService {
     adminEmail: string,
   ): Promise<{ adminName: string | null; phone: string | null } | null> {
     const orgNames = new Set(
-      [tenant.name, tenant.organizationName].filter(Boolean).map((n) => n!.trim().toLowerCase()),
+      [tenant.name, tenant.organizationName]
+        .filter(Boolean)
+        .map((n) => n!.trim().toLowerCase()),
     );
     const invitations = await this.invitationModel.findAll({
       where: { tenantId: tenant.id, adminEmail },
       order: [['createdAt', 'DESC']],
     });
     const named = invitations.find(
-      (inv) => inv.adminName && !orgNames.has(inv.adminName.trim().toLowerCase()),
+      (inv) =>
+        inv.adminName && !orgNames.has(inv.adminName.trim().toLowerCase()),
     );
     return {
       adminName: named?.adminName || null,
@@ -285,7 +343,10 @@ export class OrganizationAdminInvitationService {
     }
 
     const tenant = invitation.tenant;
-    if (!tenant || tenant.provisioningStatus !== TenantProvisioningStatus.READY) {
+    if (
+      !tenant ||
+      tenant.provisioningStatus !== TenantProvisioningStatus.READY
+    ) {
       throw new TenantException(
         TenantErrorCode.INVALID_TENANT_CONTEXT,
         'Organization database is not ready for activation.',
@@ -328,12 +389,17 @@ export class OrganizationAdminInvitationService {
     // leave a user with no way to sign in.
     try {
       await firstValueFrom(
-        this.authClient.send(MESSAGE_PATTERNS.SETTINGS.VALIDATE_PASSWORD, { password: data.password }).pipe(timeout(10000)),
+        this.authClient
+          .send(MESSAGE_PATTERNS.SETTINGS.VALIDATE_PASSWORD, {
+            password: data.password,
+          })
+          .pipe(timeout(10000)),
       );
     } catch (error: any) {
       throw new TenantException(
         TenantErrorCode.INVALID_TENANT_CONTEXT,
-        error?.message || "The password doesn't meet the platform's password policy.",
+        error?.message ||
+          "The password doesn't meet the platform's password policy.",
       );
     }
 
@@ -365,7 +431,9 @@ export class OrganizationAdminInvitationService {
           .pipe(timeout(10000)),
       );
     } catch (err: any) {
-      this.logger.error(`Failed to create Admin User in User Service: ${err.message}`);
+      this.logger.error(
+        `Failed to create Admin User in User Service: ${err.message}`,
+      );
       throw new TenantException(
         TenantErrorCode.INVALID_TENANT_CONTEXT,
         `User creation failed: ${err.message}`,
@@ -382,13 +450,19 @@ export class OrganizationAdminInvitationService {
             tenantId: tenant.id,
             tenantName: tenant.organizationName || tenant.name,
             role: 'Admin',
-            firstName: data.firstName || invitation.adminName?.split(' ')[0] || 'Admin',
-            lastName: data.lastName || invitation.adminName?.split(' ').slice(1).join(' ') || '',
+            firstName:
+              data.firstName || invitation.adminName?.split(' ')[0] || 'Admin',
+            lastName:
+              data.lastName ||
+              invitation.adminName?.split(' ').slice(1).join(' ') ||
+              '',
           })
           .pipe(timeout(10000)),
       );
     } catch (err: any) {
-      this.logger.error(`Failed to create Auth Credentials in Auth Service: ${err.message}`);
+      this.logger.error(
+        `Failed to create Auth Credentials in Auth Service: ${err.message}`,
+      );
       throw new TenantException(
         TenantErrorCode.INVALID_TENANT_CONTEXT,
         `Auth credential creation failed: ${err.message}`,

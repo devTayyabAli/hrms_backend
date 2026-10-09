@@ -1,4 +1,10 @@
-import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { Op } from 'sequelize';
@@ -8,7 +14,12 @@ import { ClientProxy } from '@nestjs/microservices';
 import { firstValueFrom, timeout } from 'rxjs';
 import { Sequelize } from 'sequelize';
 import { SERVICES, MESSAGE_PATTERNS } from '@app/common';
-import { TenantDatabaseConfig, BackupRecord, BackupStatus, PlatformHealthSample } from '../models';
+import {
+  TenantDatabaseConfig,
+  BackupRecord,
+  BackupStatus,
+  PlatformHealthSample,
+} from '../models';
 
 /** How often the platform's health is sampled for uptime. */
 const SAMPLE_INTERVAL_MS = 60_000;
@@ -19,7 +30,8 @@ const SAMPLE_RETENTION_DAYS = 90;
 /** The deployed version, from the package.json shipped alongside dist. */
 const appVersion = (() => {
   try {
-    return JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8')).version as string;
+    return JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8'))
+      .version as string;
   } catch {
     return null;
   }
@@ -51,7 +63,12 @@ export interface ComponentHealth {
 export interface StorageBreakdown {
   totalBytes: number;
   totalGB: number;
-  categories: Array<{ name: string; bytes: number; gb: number; percentage: number }>;
+  categories: Array<{
+    name: string;
+    bytes: number;
+    gb: number;
+    percentage: number;
+  }>;
 }
 
 @Injectable()
@@ -63,16 +80,21 @@ export class PlatformStatusService implements OnModuleInit, OnModuleDestroy {
   constructor(
     @InjectModel(TenantDatabaseConfig)
     private readonly tenantDbConfigModel: typeof TenantDatabaseConfig,
-    @InjectModel(BackupRecord) private readonly backupRecordModel: typeof BackupRecord,
+    @InjectModel(BackupRecord)
+    private readonly backupRecordModel: typeof BackupRecord,
     @Inject(SERVICES.AUTH_SERVICE) private readonly authClient: ClientProxy,
     @Inject(SERVICES.USER_SERVICE) private readonly userClient: ClientProxy,
     private readonly configService: ConfigService,
-    @InjectModel(PlatformHealthSample) private readonly sampleModel: typeof PlatformHealthSample,
+    @InjectModel(PlatformHealthSample)
+    private readonly sampleModel: typeof PlatformHealthSample,
   ) {}
 
   onModuleInit() {
     if (process.env.NODE_ENV === 'test') return;
-    this.sampler = setInterval(() => void this.recordSample(), SAMPLE_INTERVAL_MS);
+    this.sampler = setInterval(
+      () => void this.recordSample(),
+      SAMPLE_INTERVAL_MS,
+    );
     this.sampler.unref?.();
   }
 
@@ -96,18 +118,34 @@ export class PlatformStatusService implements OnModuleInit, OnModuleDestroy {
         user.status === 'down' ? 'user-service' : null,
         db.status !== 'operational' ? 'database' : null,
       ].filter(Boolean) as string[];
-      const status = failing.length === 0 ? 'operational' : failing.length >= 3 ? 'down' : 'degraded';
-      await this.sampleModel.create({ status, failing: failing.join(', ') || null });
+      const status =
+        failing.length === 0
+          ? 'operational'
+          : failing.length >= 3
+            ? 'down'
+            : 'degraded';
+      await this.sampleModel.create({
+        status,
+        failing: failing.join(', ') || null,
+      });
 
       const day = new Date().toISOString().slice(0, 10);
       if (day !== this.lastPruneDay) {
         this.lastPruneDay = day;
         await this.sampleModel.destroy({
-          where: { createdAt: { [Op.lt]: new Date(Date.now() - SAMPLE_RETENTION_DAYS * 86_400_000) } },
+          where: {
+            createdAt: {
+              [Op.lt]: new Date(
+                Date.now() - SAMPLE_RETENTION_DAYS * 86_400_000,
+              ),
+            },
+          },
         });
       }
     } catch (error: any) {
-      this.logger.warn(`Health sample not recorded: ${error?.message ?? error}`);
+      this.logger.warn(
+        `Health sample not recorded: ${error?.message ?? error}`,
+      );
     }
   }
 
@@ -119,18 +157,28 @@ export class PlatformStatusService implements OnModuleInit, OnModuleDestroy {
     const since = new Date(Date.now() - UPTIME_WINDOW_DAYS * 86_400_000);
     const [total, operational, first] = await Promise.all([
       this.sampleModel.count({ where: { createdAt: { [Op.gte]: since } } }),
-      this.sampleModel.count({ where: { createdAt: { [Op.gte]: since }, status: 'operational' } }),
-      this.sampleModel.findOne({ where: { createdAt: { [Op.gte]: since } }, order: [['createdAt', 'ASC']], attributes: ['createdAt'] }),
+      this.sampleModel.count({
+        where: { createdAt: { [Op.gte]: since }, status: 'operational' },
+      }),
+      this.sampleModel.findOne({
+        where: { createdAt: { [Op.gte]: since } },
+        order: [['createdAt', 'ASC']],
+        attributes: ['createdAt'],
+      }),
     ]);
     return {
-      percentage: total >= 60 ? Math.round((operational / total) * 10_000) / 100 : null,
+      percentage:
+        total >= 60 ? Math.round((operational / total) * 10_000) / 100 : null,
       sampleCount: total,
       windowDays: UPTIME_WINDOW_DAYS,
       measuredSince: first?.createdAt ?? null,
     };
   }
 
-  private async checkService(client: ClientProxy, name: string): Promise<ServiceHealth> {
+  private async checkService(
+    client: ClientProxy,
+    name: string,
+  ): Promise<ServiceHealth> {
     try {
       const res: any = await firstValueFrom(
         client.send(MESSAGE_PATTERNS.HEALTH.CHECK, {}).pipe(timeout(3000)),
@@ -138,10 +186,16 @@ export class PlatformStatusService implements OnModuleInit, OnModuleDestroy {
       return {
         service: name,
         status: res?.status === 'up' ? 'up' : 'down',
-        uptimeSeconds: typeof res?.uptimeSeconds === 'number' ? res.uptimeSeconds : null,
+        uptimeSeconds:
+          typeof res?.uptimeSeconds === 'number' ? res.uptimeSeconds : null,
       };
     } catch (err: any) {
-      return { service: name, status: 'down', uptimeSeconds: null, error: err.message };
+      return {
+        service: name,
+        status: 'down',
+        uptimeSeconds: null,
+        error: err.message,
+      };
     }
   }
 
@@ -158,19 +212,46 @@ export class PlatformStatusService implements OnModuleInit, OnModuleDestroy {
    * live rollup for a dashboard card, not a billing-critical figure.
    */
   private async getStorageUsage(): Promise<StorageUsage> {
+    const { platformBytes, byTenant, unmeasuredDatabases } =
+      await this.measureDatabases();
+    let usedBytes = platformBytes;
+    for (const size of byTenant.values()) usedBytes += size ?? 0;
+    return this.toStorageUsage(usedBytes, unmeasuredDatabases);
+  }
+
+  /**
+   * The platform database's size and each organization's database size
+   * (null where it couldn't be measured). Used by the storage card and the
+   * System Usage report.
+   */
+  async measureDatabases(): Promise<{
+    platformBytes: number;
+    byTenant: Map<string, number | null>;
+    unmeasuredDatabases: number;
+  }> {
     const platformSequelize = this.tenantDbConfigModel.sequelize!;
     // eslint-disable-next-line no-restricted-syntax -- reads the size of the connection's own database; no dynamic/untrusted values interpolated.
     const [[platformRow]]: any = await platformSequelize.query(
       'SELECT pg_database_size(current_database()) as size;',
     );
-    let usedBytes = Number(platformRow?.size || 0);
+    const platformBytes = Number(platformRow?.size || 0);
+    const byTenant = new Map<string, number | null>();
 
     const tenantDbConfigs = await this.tenantDbConfigModel.findAll();
+    const tenantByDatabase = new Map<string, string>();
     const groups = new Map<
       string,
-      { host: string; port: number; username: string; password: string; databaseNames: string[] }
+      {
+        host: string;
+        port: number;
+        username: string;
+        password: string;
+        databaseNames: string[];
+      }
     >();
     for (const config of tenantDbConfigs) {
+      tenantByDatabase.set(config.databaseName, config.tenantId);
+      byTenant.set(config.tenantId, null);
       const key = `${config.host}:${config.port}:${config.username}`;
       const group = groups.get(key);
       if (group) {
@@ -203,7 +284,12 @@ export class PlatformStatusService implements OnModuleInit, OnModuleDestroy {
         // and a tenant DB's host isn't necessarily the platform DB's host, so
         // that helper's env-driven check can't be reused as-is here.
         dialectOptions: group.host.includes('neon.tech')
-          ? { ssl: { require: true, rejectUnauthorized: process.env.NODE_ENV === 'production' } }
+          ? {
+              ssl: {
+                require: true,
+                rejectUnauthorized: process.env.NODE_ENV === 'production',
+              },
+            }
           : undefined,
         logging: false,
       });
@@ -218,10 +304,13 @@ export class PlatformStatusService implements OnModuleInit, OnModuleDestroy {
         );
         const measured = new Set<string>();
         for (const row of rows || []) {
-          usedBytes += Number(row.size || 0);
+          const tenantId = tenantByDatabase.get(row.datname);
+          if (tenantId) byTenant.set(tenantId, Number(row.size || 0));
           measured.add(row.datname);
         }
-        unmeasuredDatabases += group.databaseNames.filter((name) => !measured.has(name)).length;
+        unmeasuredDatabases += group.databaseNames.filter(
+          (name) => !measured.has(name),
+        ).length;
       } catch (err: any) {
         this.logger.warn(
           `Could not measure storage for databases on ${group.host}:${group.port}: ${err.message}`,
@@ -232,15 +321,26 @@ export class PlatformStatusService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
+    return { platformBytes, byTenant, unmeasuredDatabases };
+  }
+
+  private toStorageUsage(
+    usedBytes: number,
+    unmeasuredDatabases: number,
+  ): StorageUsage {
     const usedGB = Math.round((usedBytes / 1024 ** 3) * 100) / 100;
-    const quotaGBRaw = this.configService.get<string>('PLATFORM_STORAGE_QUOTA_GB');
+    const quotaGBRaw = this.configService.get<string>(
+      'PLATFORM_STORAGE_QUOTA_GB',
+    );
     const quotaGB = quotaGBRaw ? Number(quotaGBRaw) : null;
 
     return {
       usedBytes,
       usedGB,
       quotaGB,
-      percentageUsed: quotaGB ? Math.round((usedGB / quotaGB) * 1000) / 10 : null,
+      percentageUsed: quotaGB
+        ? Math.round((usedGB / quotaGB) * 1000) / 10
+        : null,
       unmeasuredDatabases,
     };
   }
@@ -260,11 +360,20 @@ export class PlatformStatusService implements OnModuleInit, OnModuleDestroy {
   private async checkEmail(): Promise<ComponentHealth> {
     try {
       const ok: any = await firstValueFrom(
-        this.authClient.send(MESSAGE_PATTERNS.MAIL.VERIFY_CONNECTION, {}).pipe(timeout(5000)),
+        this.authClient
+          .send(MESSAGE_PATTERNS.MAIL.VERIFY_CONNECTION, {})
+          .pipe(timeout(5000)),
       );
-      return { component: 'Email Services', status: ok ? 'operational' : 'down' };
+      return {
+        component: 'Email Services',
+        status: ok ? 'operational' : 'down',
+      };
     } catch (err: any) {
-      return { component: 'Email Services', status: 'down', error: err.message };
+      return {
+        component: 'Email Services',
+        status: 'down',
+        error: err.message,
+      };
     }
   }
 
@@ -272,7 +381,9 @@ export class PlatformStatusService implements OnModuleInit, OnModuleDestroy {
   private async checkFileStorage(): Promise<ComponentHealth> {
     try {
       const res: any = await firstValueFrom(
-        this.authClient.send(MESSAGE_PATTERNS.FILE.CHECK_HEALTH, {}).pipe(timeout(5000)),
+        this.authClient
+          .send(MESSAGE_PATTERNS.FILE.CHECK_HEALTH, {})
+          .pipe(timeout(5000)),
       );
       return {
         component: 'File Storage',
@@ -290,12 +401,16 @@ export class PlatformStatusService implements OnModuleInit, OnModuleDestroy {
    * sizes come from Postgres directly; file and backup sizes come from
    * auth-service, which owns the file-metadata records.
    */
-  private async getStorageBreakdown(databaseBytes: number): Promise<StorageBreakdown> {
+  private async getStorageBreakdown(
+    databaseBytes: number,
+  ): Promise<StorageBreakdown> {
     let filesBytes = 0;
     let backupsBytes = 0;
     try {
       const res: any = await firstValueFrom(
-        this.authClient.send(MESSAGE_PATTERNS.FILE.GET_STORAGE_BREAKDOWN, {}).pipe(timeout(5000)),
+        this.authClient
+          .send(MESSAGE_PATTERNS.FILE.GET_STORAGE_BREAKDOWN, {})
+          .pipe(timeout(5000)),
       );
       filesBytes = Number(res?.filesBytes) || 0;
       backupsBytes = Number(res?.backupsBytes) || 0;
@@ -318,18 +433,40 @@ export class PlatformStatusService implements OnModuleInit, OnModuleDestroy {
     }
 
     const databaseOnlyBytes = Math.max(0, databaseBytes - logsBytes);
-    const totalBytes = databaseOnlyBytes + logsBytes + filesBytes + backupsBytes;
-    const pct = (bytes: number) => (totalBytes > 0 ? Math.round((bytes / totalBytes) * 1000) / 10 : 0);
+    const totalBytes =
+      databaseOnlyBytes + logsBytes + filesBytes + backupsBytes;
+    const pct = (bytes: number) =>
+      totalBytes > 0 ? Math.round((bytes / totalBytes) * 1000) / 10 : 0;
     const toGB = (bytes: number) => Math.round((bytes / 1024 ** 3) * 100) / 100;
 
     return {
       totalBytes,
       totalGB: toGB(totalBytes),
       categories: [
-        { name: 'Files & Documents', bytes: filesBytes, gb: toGB(filesBytes), percentage: pct(filesBytes) },
-        { name: 'Database', bytes: databaseOnlyBytes, gb: toGB(databaseOnlyBytes), percentage: pct(databaseOnlyBytes) },
-        { name: 'Backups', bytes: backupsBytes, gb: toGB(backupsBytes), percentage: pct(backupsBytes) },
-        { name: 'Logs', bytes: logsBytes, gb: toGB(logsBytes), percentage: pct(logsBytes) },
+        {
+          name: 'Files & Documents',
+          bytes: filesBytes,
+          gb: toGB(filesBytes),
+          percentage: pct(filesBytes),
+        },
+        {
+          name: 'Database',
+          bytes: databaseOnlyBytes,
+          gb: toGB(databaseOnlyBytes),
+          percentage: pct(databaseOnlyBytes),
+        },
+        {
+          name: 'Backups',
+          bytes: backupsBytes,
+          gb: toGB(backupsBytes),
+          percentage: pct(backupsBytes),
+        },
+        {
+          name: 'Logs',
+          bytes: logsBytes,
+          gb: toGB(logsBytes),
+          percentage: pct(logsBytes),
+        },
       ],
     };
   }
@@ -350,32 +487,52 @@ export class PlatformStatusService implements OnModuleInit, OnModuleDestroy {
    * explanation rather than a fabricated number.
    */
   async getStatus() {
-    const [authHealth, userHealth, storage, dbHealth, emailHealth, storageHealth, lastBackupAt] =
-      await Promise.all([
-        this.checkService(this.authClient, 'auth-service'),
-        this.checkService(this.userClient, 'user-service'),
-        this.getStorageUsage(),
-        this.checkDatabase(),
-        this.checkEmail(),
-        this.checkFileStorage(),
-        this.getLastBackupAt(),
-      ]);
+    const [
+      authHealth,
+      userHealth,
+      storage,
+      dbHealth,
+      emailHealth,
+      storageHealth,
+      lastBackupAt,
+    ] = await Promise.all([
+      this.checkService(this.authClient, 'auth-service'),
+      this.checkService(this.userClient, 'user-service'),
+      this.getStorageUsage(),
+      this.checkDatabase(),
+      this.checkEmail(),
+      this.checkFileStorage(),
+      this.getLastBackupAt(),
+    ]);
     const tenantHealth: ServiceHealth = {
       service: 'tenant-service',
       status: 'up',
       uptimeSeconds: process.uptime(),
     };
 
-    const services = { auth: authHealth, tenant: tenantHealth, user: userHealth };
-    const downCount = Object.values(services).filter((s) => s.status === 'down').length;
+    const services = {
+      auth: authHealth,
+      tenant: tenantHealth,
+      user: userHealth,
+    };
+    const downCount = Object.values(services).filter(
+      (s) => s.status === 'down',
+    ).length;
     const systemStatus =
-      downCount === 0 ? 'operational' : downCount === Object.keys(services).length ? 'down' : 'degraded';
+      downCount === 0
+        ? 'operational'
+        : downCount === Object.keys(services).length
+          ? 'down'
+          : 'degraded';
 
     // The five cards the Overview tab renders. "API Services" reflects the
     // microservice mesh as a whole; the rest are individually probed.
     const apiStatus = downCount === 0 ? 'operational' : 'degraded';
     const components: ComponentHealth[] = [
-      { component: 'Platform Status', status: systemStatus === 'operational' ? 'operational' : 'degraded' },
+      {
+        component: 'Platform Status',
+        status: systemStatus === 'operational' ? 'operational' : 'degraded',
+      },
       { component: 'API Services', status: apiStatus },
       dbHealth,
       storageHealth,
@@ -383,12 +540,17 @@ export class PlatformStatusService implements OnModuleInit, OnModuleDestroy {
     ];
     const allOperational = components.every((c) => c.status === 'operational');
 
-    const [breakdown, uptime] = await Promise.all([this.getStorageBreakdown(storage.usedBytes), this.getUptime()]);
+    const [breakdown, uptime] = await Promise.all([
+      this.getStorageBreakdown(storage.usedBytes),
+      this.getUptime(),
+    ]);
 
     return {
       systemStatus,
       systemHealth: {
-        summary: allOperational ? 'All Systems Operational' : 'Degraded — one or more components need attention',
+        summary: allOperational
+          ? 'All Systems Operational'
+          : 'Degraded — one or more components need attention',
         allOperational,
         components,
       },
@@ -401,7 +563,9 @@ export class PlatformStatusService implements OnModuleInit, OnModuleDestroy {
         nodeVersion: process.version,
         runningSince: new Date(Date.now() - process.uptime() * 1000),
         timeZone: process.env.NOTIFICATIONS_DEFAULT_TIME_ZONE || 'Asia/Karachi',
-        storageProvider: (process.env.STORAGE_PROVIDER || 'local').toLowerCase(),
+        storageProvider: (
+          process.env.STORAGE_PROVIDER || 'local'
+        ).toLowerCase(),
         storageQuotaGB: storage.quotaGB,
       },
       storage,

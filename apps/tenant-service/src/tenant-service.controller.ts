@@ -274,7 +274,15 @@ import { BackupService } from './services/backup.service';
 import { PlatformBillingService } from './services/platform-billing.service';
 import { SubscriptionLimitService } from './services/subscription-limit.service';
 import { BillingScheduler } from './services/billing.scheduler';
-import { PlatformReportsService } from './services/platform-reports.service';
+import {
+  PlatformReportsService,
+  type ReportActor,
+} from './services/platform-reports.service';
+import type {
+  CreateCustomReportDto,
+  GenerateReportDto,
+  UpdateCustomReportDto,
+} from '@app/common';
 import { EmployeeService } from './services/employee.service';
 import { AttendanceService } from './services/attendance.service';
 import { OrganizationDepartmentsService } from './services/organization-departments.service';
@@ -369,7 +377,9 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION.CREATE_ORGANIZATION)
-  async createOrganizationMessage(@Payload() dto: CreateOrganizationProvisionDto) {
+  async createOrganizationMessage(
+    @Payload() dto: CreateOrganizationProvisionDto,
+  ) {
     return this.tenantProvisioningService.createOrganizationAndProvision(dto);
   }
 
@@ -385,12 +395,16 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION.VALIDATE_ONBOARDING)
-  async validateOnboardingMessage(@Payload() dto: ValidateOrganizationOnboardingDto) {
+  async validateOnboardingMessage(
+    @Payload() dto: ValidateOrganizationOnboardingDto,
+  ) {
     return this.onboardingValidatorService.validateOnboardingPayload(dto);
   }
 
   @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION.REVIEW_ONBOARDING)
-  async reviewOnboardingMessage(@Payload() dto: CreateOrganizationOnboardingDto) {
+  async reviewOnboardingMessage(
+    @Payload() dto: CreateOrganizationOnboardingDto,
+  ) {
     return this.onboardingValidatorService.generateReviewSummary(dto);
   }
 
@@ -401,7 +415,10 @@ export class TenantServiceController {
 
   @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION.VALIDATE_INITIAL_STEP)
   async validateInitialStepMessage(@Payload() payload: any) {
-    return this.onboardingValidatorService.validateInitialStep(payload?.step, payload?.data || payload);
+    return this.onboardingValidatorService.validateInitialStep(
+      payload?.step,
+      payload?.data || payload,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION.REVIEW_INITIAL)
@@ -422,18 +439,29 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION.UPDATE_MODULE_ACCESS)
-  async updateModuleAccessMessage(@Payload() data: UpdateModuleAccessMessageDto) {
-    return this.moduleAccessService.setOrganizationModules(data.tenantId, data.modules);
+  async updateModuleAccessMessage(
+    @Payload() data: UpdateModuleAccessMessageDto,
+  ) {
+    return this.moduleAccessService.setOrganizationModules(
+      data.tenantId,
+      data.modules,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION.CHECK_MODULE_ACCESS)
   async checkModuleAccessMessage(@Payload() data: CheckModuleAccessDto) {
-    return this.moduleAccessService.isModuleEnabled(data.tenantId, data.moduleKey, data.action);
+    return this.moduleAccessService.isModuleEnabled(
+      data.tenantId,
+      data.moduleKey,
+      data.action,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.TENANT.PROVISION_TENANT)
   async provisionTenantMessage(@Payload() data: TenantIdDto) {
-    return this.tenantProvisioningService.provisionTenantDatabase(data.tenantId);
+    return this.tenantProvisioningService.provisionTenantDatabase(
+      data.tenantId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.TENANT.RETRY_PROVISION)
@@ -461,8 +489,17 @@ export class TenantServiceController {
   // ==========================================
 
   @MessagePattern(MESSAGE_PATTERNS.PLATFORM_ORGANIZATIONS.GET_ALL)
-  async getAllPlatformOrganizationsMessage(@Payload() query: GetPlatformOrganizationsQueryDto) {
+  async getAllPlatformOrganizationsMessage(
+    @Payload() query: GetPlatformOrganizationsQueryDto,
+  ) {
     return this.platformOrganizationsService.getOrganizations(query || {});
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PLATFORM_ORGANIZATIONS.EXPORT)
+  async exportPlatformOrganizationsMessage(
+    @Payload() query: GetPlatformOrganizationsQueryDto,
+  ) {
+    return this.platformOrganizationsService.exportOrganizations(query || {});
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PLATFORM_ORGANIZATIONS.GET_STATS)
@@ -471,7 +508,9 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PLATFORM_ORGANIZATIONS.GET_OVERVIEW)
-  async getPlatformOrganizationsOverviewMessage(@Payload() data: { months?: number }) {
+  async getPlatformOrganizationsOverviewMessage(
+    @Payload() data: { months?: number },
+  ) {
     return this.platformOrganizationsService.getOverview(data?.months);
   }
 
@@ -491,18 +530,33 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PLATFORM_ORGANIZATIONS.UPDATE)
-  async updatePlatformOrganizationMessage(@Payload() data: UpdateOrganizationMessageDto) {
-    return this.platformOrganizationsService.updateOrganization(data.tenantId, data.dto);
+  async updatePlatformOrganizationMessage(
+    @Payload() data: UpdateOrganizationMessageDto,
+  ) {
+    return this.platformOrganizationsService.updateOrganization(
+      data.tenantId,
+      data.dto,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PLATFORM_ORGANIZATIONS.UPDATE_STATUS)
-  async updatePlatformOrganizationStatusMessage(@Payload() data: UpdateOrganizationStatusMessageDto) {
-    return this.platformOrganizationsService.updateOrganizationStatus(data.tenantId, data.status);
+  async updatePlatformOrganizationStatusMessage(
+    @Payload() data: UpdateOrganizationStatusMessageDto,
+  ) {
+    return this.platformOrganizationsService.updateOrganizationStatus(
+      data.tenantId,
+      data.status,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PLATFORM_ORGANIZATIONS.DELETE)
-  async deletePlatformOrganizationMessage(@Payload() data: DeleteOrganizationMessageDto) {
-    return this.platformOrganizationsService.deleteOrganization(data.tenantId, data.dto.confirmName);
+  async deletePlatformOrganizationMessage(
+    @Payload() data: DeleteOrganizationMessageDto,
+  ) {
+    return this.platformOrganizationsService.deleteOrganization(
+      data.tenantId,
+      data.dto.confirmName,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PLATFORM_STATUS.GET_STATUS)
@@ -557,6 +611,8 @@ export class TenantServiceController {
       data.dto?.adminEmail,
       data.dto?.adminName,
       data.createdBy,
+      undefined,
+      data.dto?.customMessage,
     );
   }
 
@@ -566,7 +622,9 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.INVITATION.VALIDATE)
-  async validateInvitationTokenMessage(@Payload() data: ValidateInvitationTokenDto) {
+  async validateInvitationTokenMessage(
+    @Payload() data: ValidateInvitationTokenDto,
+  ) {
     return this.invitationService.validateInvitationToken(data.token);
   }
 
@@ -612,7 +670,9 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION_SETUP.UPDATE_PROFILE)
-  async updateProfileMessage(@Payload() data: UpdateOrganizationProfileMessageDto) {
+  async updateProfileMessage(
+    @Payload() data: UpdateOrganizationProfileMessageDto,
+  ) {
     return this.setupService.updateOrganizationProfile(data.tenantId, data.dto);
   }
 
@@ -627,10 +687,12 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION_SETUP.UPDATE_DEPARTMENT)
-  async updateDepartmentMessage(
-    @Payload() data: UpdateDepartmentMessageDto,
-  ) {
-    return this.setupService.updateDepartment(data.tenantId, data.departmentId, data.dto);
+  async updateDepartmentMessage(@Payload() data: UpdateDepartmentMessageDto) {
+    return this.setupService.updateDepartment(
+      data.tenantId,
+      data.departmentId,
+      data.dto,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION_SETUP.DELETE_DEPARTMENT)
@@ -649,15 +711,20 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION_SETUP.UPDATE_DESIGNATION)
-  async updateDesignationMessage(
-    @Payload() data: UpdateDesignationMessageDto,
-  ) {
-    return this.setupService.updateDesignation(data.tenantId, data.designationId, data.dto);
+  async updateDesignationMessage(@Payload() data: UpdateDesignationMessageDto) {
+    return this.setupService.updateDesignation(
+      data.tenantId,
+      data.designationId,
+      data.dto,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION_SETUP.DELETE_DESIGNATION)
   async deleteDesignationMessage(@Payload() data: TenantDesignationIdDto) {
-    return this.setupService.deleteDesignation(data.tenantId, data.designationId);
+    return this.setupService.deleteDesignation(
+      data.tenantId,
+      data.designationId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION_SETUP.GET_WORKING_HOURS)
@@ -666,7 +733,9 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION_SETUP.UPDATE_WORKING_HOURS)
-  async updateWorkingHoursMessage(@Payload() data: UpdateWorkingHoursMessageDto) {
+  async updateWorkingHoursMessage(
+    @Payload() data: UpdateWorkingHoursMessageDto,
+  ) {
     return this.setupService.updateWorkingHours(data.tenantId, data.dto);
   }
 
@@ -681,10 +750,12 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION_SETUP.UPDATE_LEAVE_POLICY)
-  async updateLeavePolicyMessage(
-    @Payload() data: UpdateLeavePolicyMessageDto,
-  ) {
-    return this.setupService.updateLeavePolicy(data.tenantId, data.policyId, data.dto);
+  async updateLeavePolicyMessage(@Payload() data: UpdateLeavePolicyMessageDto) {
+    return this.setupService.updateLeavePolicy(
+      data.tenantId,
+      data.policyId,
+      data.dto,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION_SETUP.DELETE_LEAVE_POLICY)
@@ -715,8 +786,13 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION_SETUP.APPLY_INDUSTRY_TEMPLATE)
-  async applyIndustryTemplateMessage(@Payload() data: ApplyIndustryTemplateMessageDto) {
-    return this.industryTemplateService.applyTemplate(data.tenantId, data.actorUserId);
+  async applyIndustryTemplateMessage(
+    @Payload() data: ApplyIndustryTemplateMessageDto,
+  ) {
+    return this.industryTemplateService.applyTemplate(
+      data.tenantId,
+      data.actorUserId,
+    );
   }
 
   // ==========================================
@@ -724,10 +800,12 @@ export class TenantServiceController {
   // ==========================================
 
   @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION_POLICY.CREATE)
-  async createPolicyMessage(
-    @Payload() data: CreatePolicyMessageDto,
-  ) {
-    return this.policyService.createPolicy(data.tenantId, data.dto, data.createdBy);
+  async createPolicyMessage(@Payload() data: CreatePolicyMessageDto) {
+    return this.policyService.createPolicy(
+      data.tenantId,
+      data.dto,
+      data.createdBy,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION_POLICY.GET_ALL)
@@ -741,10 +819,13 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION_POLICY.UPDATE)
-  async updatePolicyMessage(
-    @Payload() data: UpdatePolicyMessageDto,
-  ) {
-    return this.policyService.updatePolicy(data.tenantId, data.policyId, data.dto, data.updatedBy);
+  async updatePolicyMessage(@Payload() data: UpdatePolicyMessageDto) {
+    return this.policyService.updatePolicy(
+      data.tenantId,
+      data.policyId,
+      data.dto,
+      data.updatedBy,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION_POLICY.DELETE)
@@ -753,24 +834,31 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION_POLICY.ACTIVATE)
-  async activatePolicyMessage(
-    @Payload() data: ActivatePolicyMessageDto,
-  ) {
-    return this.policyService.activatePolicy(data.tenantId, data.policyId, data.dto, data.activatedBy);
+  async activatePolicyMessage(@Payload() data: ActivatePolicyMessageDto) {
+    return this.policyService.activatePolicy(
+      data.tenantId,
+      data.policyId,
+      data.dto,
+      data.activatedBy,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION_POLICY.DEACTIVATE)
-  async deactivatePolicyMessage(
-    @Payload() data: DeactivatePolicyMessageDto,
-  ) {
-    return this.policyService.deactivatePolicy(data.tenantId, data.policyId, data.updatedBy);
+  async deactivatePolicyMessage(@Payload() data: DeactivatePolicyMessageDto) {
+    return this.policyService.deactivatePolicy(
+      data.tenantId,
+      data.policyId,
+      data.updatedBy,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION_POLICY.ARCHIVE)
-  async archivePolicyMessage(
-    @Payload() data: ArchivePolicyMessageDto,
-  ) {
-    return this.policyService.archivePolicy(data.tenantId, data.policyId, data.updatedBy);
+  async archivePolicyMessage(@Payload() data: ArchivePolicyMessageDto) {
+    return this.policyService.archivePolicy(
+      data.tenantId,
+      data.policyId,
+      data.updatedBy,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION_POLICY.GET_ACTIVE)
@@ -784,10 +872,13 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION_POLICY.CREATE_VERSION)
-  async createNewVersionMessage(
-    @Payload() data: CreateNewVersionMessageDto,
-  ) {
-    return this.policyService.createNewVersion(data.tenantId, data.policyId, data.dto, data.createdBy);
+  async createNewVersionMessage(@Payload() data: CreateNewVersionMessageDto) {
+    return this.policyService.createNewVersion(
+      data.tenantId,
+      data.policyId,
+      data.dto,
+      data.createdBy,
+    );
   }
 
   // ==========================================
@@ -835,8 +926,13 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.BILLING.UPDATE_SUBSCRIPTION_STATUS)
-  async updateSubscriptionStatusMessage(@Payload() payload: UpdateSubscriptionStatusMessageDto) {
-    return this.billingService.updateSubscriptionStatus(payload.id, payload.status);
+  async updateSubscriptionStatusMessage(
+    @Payload() payload: UpdateSubscriptionStatusMessageDto,
+  ) {
+    return this.billingService.updateSubscriptionStatus(
+      payload.id,
+      payload.status,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.BILLING.CREATE_PAYMENT)
@@ -851,17 +947,26 @@ export class TenantServiceController {
 
   @MessagePattern(MESSAGE_PATTERNS.BILLING.GET_PAYMENTS)
   async getPaymentsMessage(@Payload() payload: GetPaymentsMessageDto) {
-    return this.billingService.getOrganizationPayments(payload.tenantId, payload.query);
+    return this.billingService.getOrganizationPayments(
+      payload.tenantId,
+      payload.query,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.BILLING.GET_PAYMENT_BY_ID)
   async getPaymentByIdMessage(@Payload() payload: TenantPaymentIdDto) {
-    return this.billingService.getPaymentById(payload.tenantId, payload.paymentId);
+    return this.billingService.getPaymentById(
+      payload.tenantId,
+      payload.paymentId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.BILLING.GET_PAYMENT_STATUS)
   async getPaymentStatusMessage(@Payload() payload: TenantPaymentIdDto) {
-    return this.billingService.getPaymentStatus(payload.tenantId, payload.paymentId);
+    return this.billingService.getPaymentStatus(
+      payload.tenantId,
+      payload.paymentId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.BILLING.INVOICE_CREATE)
@@ -871,32 +976,62 @@ export class TenantServiceController {
 
   @MessagePattern(MESSAGE_PATTERNS.BILLING.INVOICE_GET)
   async getInvoiceByIdMessage(@Payload() payload: TenantInvoiceIdDto) {
-    return this.billingService.getInvoiceById(payload.tenantId, payload.invoiceId);
+    return this.billingService.getInvoiceById(
+      payload.tenantId,
+      payload.invoiceId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.BILLING.INVOICE_LIST)
-  async getOrganizationInvoicesMessage(@Payload() payload: GetInvoicesMessageDto) {
-    return this.billingService.getOrganizationInvoices(payload.tenantId, payload.query);
+  async getOrganizationInvoicesMessage(
+    @Payload() payload: GetInvoicesMessageDto,
+  ) {
+    return this.billingService.getOrganizationInvoices(
+      payload.tenantId,
+      payload.query,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.BILLING.SUBSCRIPTION_CANCEL)
-  async cancelSubscriptionMessage(@Payload() payload: CancelSubscriptionMessageDto) {
-    return this.billingService.cancelSubscription(payload.tenantId, payload.subscriptionId, payload.dto);
+  async cancelSubscriptionMessage(
+    @Payload() payload: CancelSubscriptionMessageDto,
+  ) {
+    return this.billingService.cancelSubscription(
+      payload.tenantId,
+      payload.subscriptionId,
+      payload.dto,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.BILLING.SUBSCRIPTION_SUSPEND)
-  async suspendSubscriptionMessage(@Payload() payload: SubscriptionIdMessageDto) {
-    return this.billingService.suspendSubscription(payload.subscriptionId, payload.tenantId);
+  async suspendSubscriptionMessage(
+    @Payload() payload: SubscriptionIdMessageDto,
+  ) {
+    return this.billingService.suspendSubscription(
+      payload.subscriptionId,
+      payload.tenantId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.BILLING.SUBSCRIPTION_REACTIVATE)
-  async reactivateSubscriptionMessage(@Payload() payload: SubscriptionIdMessageDto) {
-    return this.billingService.reactivateSubscription(payload.subscriptionId, payload.tenantId);
+  async reactivateSubscriptionMessage(
+    @Payload() payload: SubscriptionIdMessageDto,
+  ) {
+    return this.billingService.reactivateSubscription(
+      payload.subscriptionId,
+      payload.tenantId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.BILLING.SUBSCRIPTION_CHANGE_PLAN)
-  async changeSubscriptionPlanMessage(@Payload() payload: ChangeSubscriptionPlanMessageDto) {
-    return this.billingService.changeSubscriptionPlan(payload.tenantId, payload.subscriptionId, payload.dto);
+  async changeSubscriptionPlanMessage(
+    @Payload() payload: ChangeSubscriptionPlanMessageDto,
+  ) {
+    return this.billingService.changeSubscriptionPlan(
+      payload.tenantId,
+      payload.subscriptionId,
+      payload.dto,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.BILLING.SUBSCRIPTION_RENEW)
@@ -915,7 +1050,9 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.BILLING.SUPERADMIN_GET_SUBSCRIPTIONS)
-  async getSuperAdminSubscriptionsMessage(@Payload() query: SubscriptionQueryDto) {
+  async getSuperAdminSubscriptionsMessage(
+    @Payload() query: SubscriptionQueryDto,
+  ) {
     return this.billingService.getSuperAdminSubscriptions(query);
   }
 
@@ -925,13 +1062,21 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.BILLING.SUPERADMIN_GET_SUBSCRIPTION_INVOICES)
-  async getSuperAdminSubscriptionInvoicesMessage(@Payload() payload: SubscriptionIdMessageDto) {
-    return this.billingService.getSuperAdminSubscriptionInvoices(payload.subscriptionId);
+  async getSuperAdminSubscriptionInvoicesMessage(
+    @Payload() payload: SubscriptionIdMessageDto,
+  ) {
+    return this.billingService.getSuperAdminSubscriptionInvoices(
+      payload.subscriptionId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.BILLING.SUPERADMIN_GET_SUBSCRIPTION_PAYMENTS)
-  async getSuperAdminSubscriptionPaymentsMessage(@Payload() payload: SubscriptionIdMessageDto) {
-    return this.billingService.getSuperAdminSubscriptionPayments(payload.subscriptionId);
+  async getSuperAdminSubscriptionPaymentsMessage(
+    @Payload() payload: SubscriptionIdMessageDto,
+  ) {
+    return this.billingService.getSuperAdminSubscriptionPayments(
+      payload.subscriptionId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.BILLING.SUPERADMIN_SUSPEND_SUBSCRIPTION)
@@ -956,7 +1101,10 @@ export class TenantServiceController {
 
   @MessagePattern(MESSAGE_PATTERNS.BILLING.BILLING_EVENTS)
   async getBillingEventsMessage(@Payload() payload: BillingEventsMessageDto) {
-    return this.billingService.getBillingEvents(payload.tenantId, payload.query);
+    return this.billingService.getBillingEvents(
+      payload.tenantId,
+      payload.query,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.BILLING.UPCOMING_RENEWALS)
@@ -990,8 +1138,13 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.BILLING.EXTEND_GRACE_PERIOD)
-  async extendGracePeriodMessage(@Payload() payload: ExtendGracePeriodMessageDto) {
-    return this.billingService.extendGracePeriod(payload.id, payload.additionalDays || 7);
+  async extendGracePeriodMessage(
+    @Payload() payload: ExtendGracePeriodMessageDto,
+  ) {
+    return this.billingService.extendGracePeriod(
+      payload.id,
+      payload.additionalDays || 7,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.BILLING.MARK_PAST_DUE)
@@ -1075,28 +1228,34 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.REPORTS.GENERATE)
-  async handleGenerateReport(@Payload() dto: any) {
-    // Not announced: previews and the AI assistant call this constantly.
-    return this.reportsService.generateReport(dto);
+  async handleGenerateReport(
+    @Payload() payload: { dto: GenerateReportDto; actor?: ReportActor },
+  ) {
+    return this.reportsService.generateReport(payload.dto, payload.actor);
   }
 
-  /** "Organization summary report exported (CSV, last 6 months)" — under Reports & Analytics. */
-  private announceReport(verb: 'exported', dto: any) {
-    const name = String(dto?.reportType ?? 'Custom').replace(/[-_]+/g, ' ');
-    const details = [dto?.format ? String(dto.format).toUpperCase() : null, dto?.period ? String(dto.period).replace(/-/g, ' ') : null].filter(Boolean).join(', ');
+  @MessagePattern(MESSAGE_PATTERNS.REPORTS.GET_RUN_FILE)
+  async handleGetReportRunFile(@Payload() payload: { id: string }) {
+    const file = await this.reportsService.getRunFile(payload.id);
+    this.announceReportDownload(file.title);
+    return file;
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.REPORTS.GET_LAST_RUN_FILE)
+  async handleGetLastReportRunFile(@Payload() payload: { id: string }) {
+    const file = await this.reportsService.getLastRunFile(payload.id);
+    this.announceReportDownload(file.title);
+    return file;
+  }
+
+  /** "Organization Summary downloaded" — under Reports & Analytics. */
+  private announceReportDownload(title: string) {
     void this.platformNotifier.notify({
       category: PlatformNotificationCategory.REPORTS,
-      title: `${name.charAt(0).toUpperCase()}${name.slice(1)} report ${verb}`,
-      body: details ? `${details}.` : 'From the Reports page.',
+      title: `${title} downloaded`,
+      body: 'A CSV copy of the report was downloaded from the Reports page.',
       url: '/reports',
     });
-  }
-
-  @MessagePattern(MESSAGE_PATTERNS.REPORTS.EXPORT)
-  async handleExportReport(@Payload() dto: any) {
-    const result = await this.reportsService.exportReport(dto);
-    this.announceReport('exported', dto);
-    return result;
   }
 
   @MessagePattern(MESSAGE_PATTERNS.REPORTS.GET_CUSTOM_REPORTS)
@@ -1111,13 +1270,24 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.REPORTS.CREATE_CUSTOM_REPORT)
-  async handleCreateCustomReport(@Payload() payload: { dto: any; creatorName?: string }) {
-    return this.reportsService.createCustomReport(payload.dto, payload.creatorName);
+  async handleCreateCustomReport(
+    @Payload() payload: { dto: CreateCustomReportDto; actor?: ReportActor },
+  ) {
+    return this.reportsService.createCustomReport(payload.dto, payload.actor);
   }
 
   @MessagePattern(MESSAGE_PATTERNS.REPORTS.UPDATE_CUSTOM_REPORT)
-  async handleUpdateCustomReport(@Payload() payload: { id: string; dto: any }) {
+  async handleUpdateCustomReport(
+    @Payload() payload: { id: string; dto: UpdateCustomReportDto },
+  ) {
     return this.reportsService.updateCustomReport(payload.id, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.REPORTS.DUPLICATE_CUSTOM_REPORT)
+  async handleDuplicateCustomReport(
+    @Payload() payload: { id: string; actor?: ReportActor },
+  ) {
+    return this.reportsService.duplicateCustomReport(payload.id, payload.actor);
   }
 
   @MessagePattern(MESSAGE_PATTERNS.REPORTS.DELETE_CUSTOM_REPORT)
@@ -1127,9 +1297,10 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.REPORTS.RUN_CUSTOM_REPORT)
-  async handleRunCustomReport(@Payload() payload: { id: string } | string) {
-    const id = typeof payload === 'string' ? payload : payload?.id;
-    return this.reportsService.runCustomReport(id);
+  async handleRunCustomReport(
+    @Payload() payload: { id: string; actor?: ReportActor },
+  ) {
+    return this.reportsService.runCustomReport(payload.id, payload.actor);
   }
   // ==========================================
   // ADMIN: EMPLOYEES SCREEN
@@ -1157,7 +1328,11 @@ export class TenantServiceController {
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE.GET_NEXT_CODE)
   async handleGetNextEmployeeCode(@Payload() payload: TenantIdDto) {
-    return { employeeCode: await this.employeeService.nextEmployeeCode(payload.tenantId) };
+    return {
+      employeeCode: await this.employeeService.nextEmployeeCode(
+        payload.tenantId,
+      ),
+    };
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE.GET_MY_AVATAR)
@@ -1294,7 +1469,10 @@ export class TenantServiceController {
   async handleGetAttendanceStats(
     @Payload() payload: AttendanceStatsMessageDto,
   ) {
-    return this.attendanceService.getStats(payload.tenantId, payload.query.date);
+    return this.attendanceService.getStats(
+      payload.tenantId,
+      payload.query.date,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.ATTENDANCE.GET_OVERVIEW)
@@ -1499,9 +1677,7 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.JOB_OPENING.CREATE)
-  async handleCreateJobOpening(
-    @Payload() payload: CreateJobOpeningMessageDto,
-  ) {
+  async handleCreateJobOpening(@Payload() payload: CreateJobOpeningMessageDto) {
     return this.jobOpeningService.create(
       payload.tenantId,
       payload.dto,
@@ -1510,9 +1686,7 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.JOB_OPENING.UPDATE)
-  async handleUpdateJobOpening(
-    @Payload() payload: UpdateJobOpeningMessageDto,
-  ) {
+  async handleUpdateJobOpening(@Payload() payload: UpdateJobOpeningMessageDto) {
     return this.jobOpeningService.update(
       payload.tenantId,
       payload.jobOpeningId,
@@ -1534,10 +1708,7 @@ export class TenantServiceController {
 
   @MessagePattern(MESSAGE_PATTERNS.JOB_OPENING.DELETE)
   async handleDeleteJobOpening(@Payload() payload: TenantJobOpeningIdDto) {
-    await this.jobOpeningService.remove(
-      payload.tenantId,
-      payload.jobOpeningId,
-    );
+    await this.jobOpeningService.remove(payload.tenantId, payload.jobOpeningId);
     return { message: 'Job opening deleted successfully' };
   }
 
@@ -1606,9 +1777,7 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.CANDIDATE.EXPORT)
-  async handleExportCandidates(
-    @Payload() payload: ExportCandidatesMessageDto,
-  ) {
+  async handleExportCandidates(@Payload() payload: ExportCandidatesMessageDto) {
     return this.candidateService.export(payload.tenantId, payload.query);
   }
 
@@ -1802,9 +1971,7 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.ONBOARDING_TASK.GET_ONE)
-  async handleGetOnboardingTask(
-    @Payload() payload: TenantOnboardingTaskIdDto,
-  ) {
+  async handleGetOnboardingTask(@Payload() payload: TenantOnboardingTaskIdDto) {
     return this.onboardingTaskService.getOne(payload.tenantId, payload.taskId);
   }
 
@@ -1862,8 +2029,13 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE.GET_TREND)
-  async handleGetPerformanceTrend(@Payload() payload: GetPerformanceTrendMessageDto) {
-    return this.performanceDashboardService.getTrend(payload.tenantId, payload.query);
+  async handleGetPerformanceTrend(
+    @Payload() payload: GetPerformanceTrendMessageDto,
+  ) {
+    return this.performanceDashboardService.getTrend(
+      payload.tenantId,
+      payload.query,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE.GET_METRICS)
@@ -1877,27 +2049,49 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE.GET_TOP_PERFORMERS)
-  async handleGetTopPerformers(@Payload() payload: GetPerformanceListMessageDto) {
-    return this.performanceDashboardService.getTopPerformers(payload.tenantId, payload.query);
+  async handleGetTopPerformers(
+    @Payload() payload: GetPerformanceListMessageDto,
+  ) {
+    return this.performanceDashboardService.getTopPerformers(
+      payload.tenantId,
+      payload.query,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE.GET_REVIEWS)
-  async handleGetPerformanceReviews(@Payload() payload: GetPerformanceListMessageDto) {
-    return this.performanceDashboardService.getReviews(payload.tenantId, payload.query);
+  async handleGetPerformanceReviews(
+    @Payload() payload: GetPerformanceListMessageDto,
+  ) {
+    return this.performanceDashboardService.getReviews(
+      payload.tenantId,
+      payload.query,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE.GET_REVIEW)
-  async handleGetPerformanceReview(@Payload() payload: TenantPerformanceReviewIdDto) {
-    return this.performanceDashboardService.getReview(payload.tenantId, payload.reviewId);
+  async handleGetPerformanceReview(
+    @Payload() payload: TenantPerformanceReviewIdDto,
+  ) {
+    return this.performanceDashboardService.getReview(
+      payload.tenantId,
+      payload.reviewId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE.CREATE_REVIEW)
-  async handleCreatePerformanceReview(@Payload() payload: CreatePerformanceReviewMessageDto) {
-    return this.performanceDashboardService.createReview(payload.tenantId, payload.dto);
+  async handleCreatePerformanceReview(
+    @Payload() payload: CreatePerformanceReviewMessageDto,
+  ) {
+    return this.performanceDashboardService.createReview(
+      payload.tenantId,
+      payload.dto,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE.UPDATE_REVIEW)
-  async handleUpdatePerformanceReview(@Payload() payload: UpdatePerformanceReviewMessageDto) {
+  async handleUpdatePerformanceReview(
+    @Payload() payload: UpdatePerformanceReviewMessageDto,
+  ) {
     return this.performanceDashboardService.updateReview(
       payload.tenantId,
       payload.reviewId,
@@ -1906,28 +2100,50 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE.DELETE_REVIEW)
-  async handleDeletePerformanceReview(@Payload() payload: TenantPerformanceReviewIdDto) {
-    await this.performanceDashboardService.deleteReview(payload.tenantId, payload.reviewId);
+  async handleDeletePerformanceReview(
+    @Payload() payload: TenantPerformanceReviewIdDto,
+  ) {
+    await this.performanceDashboardService.deleteReview(
+      payload.tenantId,
+      payload.reviewId,
+    );
     return { message: 'Performance review deleted successfully' };
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE.GET_GOALS)
-  async handleGetPerformanceGoals(@Payload() payload: GetPerformanceListMessageDto) {
-    return this.performanceDashboardService.getGoals(payload.tenantId, payload.query);
+  async handleGetPerformanceGoals(
+    @Payload() payload: GetPerformanceListMessageDto,
+  ) {
+    return this.performanceDashboardService.getGoals(
+      payload.tenantId,
+      payload.query,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE.GET_GOAL)
-  async handleGetPerformanceGoal(@Payload() payload: TenantPerformanceGoalIdDto) {
-    return this.performanceDashboardService.getGoal(payload.tenantId, payload.goalId);
+  async handleGetPerformanceGoal(
+    @Payload() payload: TenantPerformanceGoalIdDto,
+  ) {
+    return this.performanceDashboardService.getGoal(
+      payload.tenantId,
+      payload.goalId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE.CREATE_GOAL)
-  async handleCreatePerformanceGoal(@Payload() payload: CreatePerformanceGoalMessageDto) {
-    return this.performanceDashboardService.createGoal(payload.tenantId, payload.dto);
+  async handleCreatePerformanceGoal(
+    @Payload() payload: CreatePerformanceGoalMessageDto,
+  ) {
+    return this.performanceDashboardService.createGoal(
+      payload.tenantId,
+      payload.dto,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE.UPDATE_GOAL)
-  async handleUpdatePerformanceGoal(@Payload() payload: UpdatePerformanceGoalMessageDto) {
+  async handleUpdatePerformanceGoal(
+    @Payload() payload: UpdatePerformanceGoalMessageDto,
+  ) {
     return this.performanceDashboardService.updateGoal(
       payload.tenantId,
       payload.goalId,
@@ -1936,8 +2152,13 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE.DELETE_GOAL)
-  async handleDeletePerformanceGoal(@Payload() payload: TenantPerformanceGoalIdDto) {
-    await this.performanceDashboardService.deleteGoal(payload.tenantId, payload.goalId);
+  async handleDeletePerformanceGoal(
+    @Payload() payload: TenantPerformanceGoalIdDto,
+  ) {
+    await this.performanceDashboardService.deleteGoal(
+      payload.tenantId,
+      payload.goalId,
+    );
     return { message: 'Performance goal deleted successfully' };
   }
 
@@ -1952,93 +2173,162 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL.GET_HISTORY)
-  async handleGetPayrollHistory(@Payload() payload: GetPayrollHistoryMessageDto) {
-    return this.payrollDashboardService.getHistory(payload.tenantId, payload.query);
+  async handleGetPayrollHistory(
+    @Payload() payload: GetPayrollHistoryMessageDto,
+  ) {
+    return this.payrollDashboardService.getHistory(
+      payload.tenantId,
+      payload.query,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL.GET_RUNS)
   async handleGetPayrollRuns(@Payload() payload: GetPerformanceListMessageDto) {
-    return this.payrollDashboardService.getRuns(payload.tenantId, payload.query?.limit);
+    return this.payrollDashboardService.getRuns(
+      payload.tenantId,
+      payload.query?.limit,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL.GET_RUN)
   async handleGetPayrollRun(@Payload() payload: TenantPayrollRunIdDto) {
-    return this.payrollDashboardService.getRun(payload.tenantId, payload.payrollRunId);
+    return this.payrollDashboardService.getRun(
+      payload.tenantId,
+      payload.payrollRunId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL.CREATE_RUN)
   async handleCreatePayrollRun(@Payload() payload: CreatePayrollRunMessageDto) {
-    return this.payrollDashboardService.createRun(payload.tenantId, payload.dto);
+    return this.payrollDashboardService.createRun(
+      payload.tenantId,
+      payload.dto,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL.RECALCULATE_RUN)
   async handleRecalculatePayrollRun(@Payload() payload: TenantPayrollRunIdDto) {
-    return this.payrollDashboardService.recalculateRun(payload.tenantId, payload.payrollRunId);
+    return this.payrollDashboardService.recalculateRun(
+      payload.tenantId,
+      payload.payrollRunId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL.SUBMIT_RUN)
   async handleSubmitPayrollRun(@Payload() payload: TenantPayrollRunIdDto) {
-    return this.payrollDashboardService.submitRun(payload.tenantId, payload.payrollRunId);
+    return this.payrollDashboardService.submitRun(
+      payload.tenantId,
+      payload.payrollRunId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL.APPROVE_RUN)
   async handleApprovePayrollRun(@Payload() payload: TenantPayrollRunIdDto) {
-    return this.payrollDashboardService.approveRun(payload.tenantId, payload.payrollRunId);
+    return this.payrollDashboardService.approveRun(
+      payload.tenantId,
+      payload.payrollRunId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL.RETURN_RUN)
   async handleReturnPayrollRun(@Payload() payload: ReturnPayrollRunMessageDto) {
-    return this.payrollDashboardService.returnRun(payload.tenantId, payload.payrollRunId, payload.dto);
+    return this.payrollDashboardService.returnRun(
+      payload.tenantId,
+      payload.payrollRunId,
+      payload.dto,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL.PAY_RUN)
   async handlePayPayrollRun(@Payload() payload: PayPayrollRunMessageDto) {
-    return this.payrollDashboardService.payRun(payload.tenantId, payload.payrollRunId, payload.dto);
+    return this.payrollDashboardService.payRun(
+      payload.tenantId,
+      payload.payrollRunId,
+      payload.dto,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL.GET_RUN_ACTIVITY)
   async handleGetPayrollRunActivity(@Payload() payload: TenantPayrollRunIdDto) {
-    return this.payrollDashboardService.getRunActivity(payload.tenantId, payload.payrollRunId);
+    return this.payrollDashboardService.getRunActivity(
+      payload.tenantId,
+      payload.payrollRunId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL.GET_RECORDS)
-  async handleGetPayrollRecords(@Payload() payload: GetPayrollRecordsMessageDto) {
-    return this.payrollDashboardService.getRecords(payload.tenantId, payload.query);
+  async handleGetPayrollRecords(
+    @Payload() payload: GetPayrollRecordsMessageDto,
+  ) {
+    return this.payrollDashboardService.getRecords(
+      payload.tenantId,
+      payload.query,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL.GET_RECORD)
   async handleGetPayrollRecord(@Payload() payload: TenantPayrollRecordIdDto) {
-    return this.payrollDashboardService.getRecord(payload.tenantId, payload.recordId);
+    return this.payrollDashboardService.getRecord(
+      payload.tenantId,
+      payload.recordId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL.ADD_ADJUSTMENT)
-  async handleAddPayrollAdjustment(@Payload() payload: AddPayrollAdjustmentMessageDto) {
-    return this.payrollDashboardService.addAdjustment(payload.tenantId, payload.recordId, payload.dto);
+  async handleAddPayrollAdjustment(
+    @Payload() payload: AddPayrollAdjustmentMessageDto,
+  ) {
+    return this.payrollDashboardService.addAdjustment(
+      payload.tenantId,
+      payload.recordId,
+      payload.dto,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL.REMOVE_ADJUSTMENT)
-  async handleRemovePayrollAdjustment(@Payload() payload: RemovePayrollAdjustmentMessageDto) {
-    return this.payrollDashboardService.removeAdjustment(payload.tenantId, payload.adjustmentId);
+  async handleRemovePayrollAdjustment(
+    @Payload() payload: RemovePayrollAdjustmentMessageDto,
+  ) {
+    return this.payrollDashboardService.removeAdjustment(
+      payload.tenantId,
+      payload.adjustmentId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL.GET_EMPLOYEE_PAY)
   async handleGetEmployeePay(@Payload() payload: TenantEmployeePayDto) {
-    return this.payrollDashboardService.getEmployeePay(payload.tenantId, payload.employeeId);
+    return this.payrollDashboardService.getEmployeePay(
+      payload.tenantId,
+      payload.employeeId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL.SET_EMPLOYEE_SALARY)
-  async handleSetEmployeeSalary(@Payload() payload: SetEmployeeSalaryMessageDto) {
-    return this.payrollDashboardService.setEmployeeSalary(payload.tenantId, payload.employeeId, payload.dto);
+  async handleSetEmployeeSalary(
+    @Payload() payload: SetEmployeeSalaryMessageDto,
+  ) {
+    return this.payrollDashboardService.setEmployeeSalary(
+      payload.tenantId,
+      payload.employeeId,
+      payload.dto,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL.SET_EMPLOYEE_BANK)
   async handleSetEmployeeBank(@Payload() payload: SetEmployeeBankMessageDto) {
-    return this.payrollDashboardService.setEmployeeBank(payload.tenantId, payload.employeeId, payload.dto);
+    return this.payrollDashboardService.setEmployeeBank(
+      payload.tenantId,
+      payload.employeeId,
+      payload.dto,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL.GET_RUN_PAYSLIPS)
   async handleGetRunPayslips(@Payload() payload: TenantPayrollRunIdDto) {
-    return this.payslipService.listRunPayslips(payload.tenantId, payload.payrollRunId);
+    return this.payslipService.listRunPayslips(
+      payload.tenantId,
+      payload.payrollRunId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL.LIST_PAYSLIPS)
@@ -2048,49 +2338,86 @@ export class TenantServiceController {
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL.GET_RECORD_PAYSLIP)
   async handleGetRecordPayslip(@Payload() payload: TenantPayrollRecordIdDto) {
-    return this.payslipService.getRecordPayslip(payload.tenantId, payload.recordId);
+    return this.payslipService.getRecordPayslip(
+      payload.tenantId,
+      payload.recordId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL.GET_RECORD_PAYSLIP_PDF)
-  async handleGetRecordPayslipPdf(@Payload() payload: TenantPayrollRecordIdDto) {
-    return this.payslipService.getRecordPayslipPdf(payload.tenantId, payload.recordId);
+  async handleGetRecordPayslipPdf(
+    @Payload() payload: TenantPayrollRecordIdDto,
+  ) {
+    return this.payslipService.getRecordPayslipPdf(
+      payload.tenantId,
+      payload.recordId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL.EMAIL_RECORD_PAYSLIP)
   async handleEmailRecordPayslip(@Payload() payload: TenantPayrollRecordIdDto) {
-    return this.payslipService.emailRecordPayslip(payload.tenantId, payload.recordId);
+    return this.payslipService.emailRecordPayslip(
+      payload.tenantId,
+      payload.recordId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL.EMAIL_RUN_PAYSLIPS)
   async handleEmailRunPayslips(@Payload() payload: EmailRunPayslipsMessageDto) {
-    return this.payslipService.emailRunPayslips(payload.tenantId, payload.payrollRunId, payload.dto ?? {});
+    return this.payslipService.emailRunPayslips(
+      payload.tenantId,
+      payload.payrollRunId,
+      payload.dto ?? {},
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.GET_MY_PAYSLIPS)
   handleGetMyPayslips(@Payload() payload: EmployeeActorDto) {
-    return this.payslipService.listMyPayslips(payload.tenantId, payload.userId, payload.email);
+    return this.payslipService.listMyPayslips(
+      payload.tenantId,
+      payload.userId,
+      payload.email,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.GET_MY_PAYSLIP)
   handleGetMyPayslip(@Payload() payload: MyPayslipMessageDto) {
-    return this.payslipService.getMyPayslip(payload.tenantId, payload.userId, payload.email, payload.payslipId);
+    return this.payslipService.getMyPayslip(
+      payload.tenantId,
+      payload.userId,
+      payload.email,
+      payload.payslipId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.GET_MY_PAYSLIP_PDF)
   handleGetMyPayslipPdf(@Payload() payload: MyPayslipMessageDto) {
-    return this.payslipService.getMyPayslipPdf(payload.tenantId, payload.userId, payload.email, payload.payslipId);
+    return this.payslipService.getMyPayslipPdf(
+      payload.tenantId,
+      payload.userId,
+      payload.email,
+      payload.payslipId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.EMAIL_MY_PAYSLIP)
   handleEmailMyPayslip(@Payload() payload: MyPayslipMessageDto) {
-    return this.payslipService.emailMyPayslip(payload.tenantId, payload.userId, payload.email, payload.payslipId);
+    return this.payslipService.emailMyPayslip(
+      payload.tenantId,
+      payload.userId,
+      payload.email,
+      payload.payslipId,
+    );
   }
 
   // ── Payroll compensation ───────────────────────────────────────────────────
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPENSATION.LIST_COMPONENTS)
   handleListPayComponents(@Payload() payload: ComponentQueryMessageDto) {
-    return this.compensationService.listComponents(payload.tenantId, payload.query ?? {});
+    return this.compensationService.listComponents(
+      payload.tenantId,
+      payload.query ?? {},
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPENSATION.COMPONENT_OPTIONS)
@@ -2100,17 +2427,28 @@ export class TenantServiceController {
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPENSATION.CREATE_COMPONENT)
   handleCreatePayComponent(@Payload() payload: CreateComponentMessageDto) {
-    return this.compensationService.createComponent(payload.tenantId, payload.dto);
+    return this.compensationService.createComponent(
+      payload.tenantId,
+      payload.dto,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPENSATION.UPDATE_COMPONENT)
   handleUpdatePayComponent(@Payload() payload: UpdateComponentMessageDto) {
-    return this.compensationService.updateComponent(payload.tenantId, payload.id, payload.dto);
+    return this.compensationService.updateComponent(
+      payload.tenantId,
+      payload.id,
+      payload.dto,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPENSATION.SET_COMPONENT_STATUS)
   handleSetPayComponentStatus(@Payload() payload: ComponentStatusMessageDto) {
-    return this.compensationService.setComponentStatus(payload.tenantId, payload.id, payload.dto.status);
+    return this.compensationService.setComponentStatus(
+      payload.tenantId,
+      payload.id,
+      payload.dto.status,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPENSATION.LIST_STRUCTURES)
@@ -2120,12 +2458,19 @@ export class TenantServiceController {
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPENSATION.CREATE_STRUCTURE)
   handleCreateSalaryStructure(@Payload() payload: StructureMessageDto) {
-    return this.compensationService.createStructure(payload.tenantId, payload.dto);
+    return this.compensationService.createStructure(
+      payload.tenantId,
+      payload.dto,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPENSATION.UPDATE_STRUCTURE)
   handleUpdateSalaryStructure(@Payload() payload: UpdateStructureMessageDto) {
-    return this.compensationService.updateStructure(payload.tenantId, payload.id, payload.dto);
+    return this.compensationService.updateStructure(
+      payload.tenantId,
+      payload.id,
+      payload.dto,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPENSATION.LIST_EMPLOYEES)
@@ -2135,37 +2480,62 @@ export class TenantServiceController {
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPENSATION.GET_COMPENSATION)
   handleGetCompensation(@Payload() payload: EmployeeCompensationMessageDto) {
-    return this.compensationService.getCompensation(payload.tenantId, payload.employeeId);
+    return this.compensationService.getCompensation(
+      payload.tenantId,
+      payload.employeeId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPENSATION.PREVIEW_COMPENSATION)
   handlePreviewCompensation(@Payload() payload: SaveCompensationMessageDto) {
-    return this.compensationService.previewCompensation(payload.tenantId, payload.employeeId, payload.dto);
+    return this.compensationService.previewCompensation(
+      payload.tenantId,
+      payload.employeeId,
+      payload.dto,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPENSATION.SAVE_COMPENSATION)
   handleSaveCompensation(@Payload() payload: SaveCompensationMessageDto) {
-    return this.compensationService.saveCompensation(payload.tenantId, payload.employeeId, payload.dto);
+    return this.compensationService.saveCompensation(
+      payload.tenantId,
+      payload.employeeId,
+      payload.dto,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPENSATION.LIST_RECURRING)
   handleListRecurringItems(@Payload() payload: EmployeeCompensationMessageDto) {
-    return this.compensationService.listRecurringItems(payload.tenantId, payload.employeeId);
+    return this.compensationService.listRecurringItems(
+      payload.tenantId,
+      payload.employeeId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPENSATION.CREATE_RECURRING)
   handleCreateRecurringItem(@Payload() payload: RecurringItemMessageDto) {
-    return this.compensationService.createRecurringItem(payload.tenantId, payload.employeeId, payload.dto);
+    return this.compensationService.createRecurringItem(
+      payload.tenantId,
+      payload.employeeId,
+      payload.dto,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPENSATION.UPDATE_RECURRING)
   handleUpdateRecurringItem(@Payload() payload: UpdateRecurringItemMessageDto) {
-    return this.compensationService.updateRecurringItem(payload.tenantId, payload.id, payload.dto);
+    return this.compensationService.updateRecurringItem(
+      payload.tenantId,
+      payload.id,
+      payload.dto,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPENSATION.LIST_LOANS)
   handleListLoans(@Payload() payload: LoanQueryMessageDto) {
-    return this.compensationService.listLoans(payload.tenantId, payload.query ?? {});
+    return this.compensationService.listLoans(
+      payload.tenantId,
+      payload.query ?? {},
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPENSATION.CREATE_LOAN)
@@ -2175,57 +2545,98 @@ export class TenantServiceController {
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPENSATION.UPDATE_LOAN)
   handleUpdateLoan(@Payload() payload: UpdateLoanMessageDto) {
-    return this.compensationService.updateLoan(payload.tenantId, payload.id, payload.dto);
+    return this.compensationService.updateLoan(
+      payload.tenantId,
+      payload.id,
+      payload.dto,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPENSATION.LIST_REIMBURSEMENTS)
   handleListReimbursements(@Payload() payload: ReimbursementQueryMessageDto) {
-    return this.compensationService.listReimbursements(payload.tenantId, payload.query ?? {});
+    return this.compensationService.listReimbursements(
+      payload.tenantId,
+      payload.query ?? {},
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPENSATION.CREATE_REIMBURSEMENT)
   handleCreateReimbursement(@Payload() payload: ReimbursementMessageDto) {
-    return this.compensationService.createReimbursement(payload.tenantId, payload.dto);
+    return this.compensationService.createReimbursement(
+      payload.tenantId,
+      payload.dto,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPENSATION.DECIDE_REIMBURSEMENT)
   handleDecideReimbursement(@Payload() payload: DecideReimbursementMessageDto) {
-    return this.compensationService.decideReimbursement(payload.tenantId, payload.id, payload.dto);
+    return this.compensationService.decideReimbursement(
+      payload.tenantId,
+      payload.id,
+      payload.dto,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPENSATION.LIST_ADJUSTMENTS)
-  handleListAdjustmentEntries(@Payload() payload: AdjustmentEntryQueryMessageDto) {
-    return this.payrollDashboardService.listAdjustmentEntries(payload.tenantId, payload.query ?? {});
+  handleListAdjustmentEntries(
+    @Payload() payload: AdjustmentEntryQueryMessageDto,
+  ) {
+    return this.payrollDashboardService.listAdjustmentEntries(
+      payload.tenantId,
+      payload.query ?? {},
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPENSATION.CREATE_ADJUSTMENT)
   handleCreateAdjustmentEntry(@Payload() payload: AdjustmentEntryMessageDto) {
-    return this.payrollDashboardService.createAdjustmentEntry(payload.tenantId, payload.dto as any);
+    return this.payrollDashboardService.createAdjustmentEntry(
+      payload.tenantId,
+      payload.dto as any,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPENSATION.REMOVE_ADJUSTMENT)
   handleRemoveAdjustmentEntry(@Payload() payload: CompensationIdMessageDto) {
-    return this.payrollDashboardService.removeAdjustmentEntry(payload.tenantId, payload.id);
+    return this.payrollDashboardService.removeAdjustmentEntry(
+      payload.tenantId,
+      payload.id,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPENSATION.IMPORT)
   handleImportCompensation(@Payload() payload: CompensationImportMessageDto) {
-    return this.compensationService.importCompensation(payload.tenantId, payload.dto);
+    return this.compensationService.importCompensation(
+      payload.tenantId,
+      payload.dto,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.GET_MY_COMPENSATION)
   handleGetMyCompensation(@Payload() payload: EmployeeActorDto) {
-    return this.compensationService.myCompensation(payload.tenantId, payload.userId, payload.email);
+    return this.compensationService.myCompensation(
+      payload.tenantId,
+      payload.userId,
+      payload.email,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.GET_MY_REIMBURSEMENTS)
   handleGetMyReimbursements(@Payload() payload: EmployeeActorDto) {
-    return this.compensationService.myReimbursements(payload.tenantId, payload.userId, payload.email);
+    return this.compensationService.myReimbursements(
+      payload.tenantId,
+      payload.userId,
+      payload.email,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.SUBMIT_MY_REIMBURSEMENT)
   handleSubmitMyReimbursement(@Payload() payload: MyReimbursementMessageDto) {
-    return this.compensationService.submitMyReimbursement(payload.tenantId, payload.userId, payload.email, payload.dto);
+    return this.compensationService.submitMyReimbursement(
+      payload.tenantId,
+      payload.userId,
+      payload.email,
+      payload.dto,
+    );
   }
 
   // ── Payroll compliance ─────────────────────────────────────────────────────
@@ -2241,18 +2652,32 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPLIANCE.CREATE_RULE)
-  handleCreateComplianceRule(@Payload() payload: CreateComplianceRuleMessageDto) {
+  handleCreateComplianceRule(
+    @Payload() payload: CreateComplianceRuleMessageDto,
+  ) {
     return this.complianceService.createRule(payload.tenantId, payload.dto);
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPLIANCE.UPDATE_RULE)
-  handleUpdateComplianceRule(@Payload() payload: UpdateComplianceRuleMessageDto) {
-    return this.complianceService.updateRule(payload.tenantId, payload.ruleId, payload.dto);
+  handleUpdateComplianceRule(
+    @Payload() payload: UpdateComplianceRuleMessageDto,
+  ) {
+    return this.complianceService.updateRule(
+      payload.tenantId,
+      payload.ruleId,
+      payload.dto,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPLIANCE.ACTIVATE_RULE)
-  handleActivateComplianceRule(@Payload() payload: ActivateComplianceRuleMessageDto) {
-    return this.complianceService.activateRule(payload.tenantId, payload.ruleId, payload.dto ?? {});
+  handleActivateComplianceRule(
+    @Payload() payload: ActivateComplianceRuleMessageDto,
+  ) {
+    return this.complianceService.activateRule(
+      payload.tenantId,
+      payload.ruleId,
+      payload.dto ?? {},
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPLIANCE.RETIRE_RULE)
@@ -2262,67 +2687,118 @@ export class TenantServiceController {
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPLIANCE.LIST_TAX_PROFILES)
   handleListTaxProfiles(@Payload() payload: TaxYearMessageDto) {
-    return this.complianceService.listTaxProfiles(payload.tenantId, payload.taxYear);
+    return this.complianceService.listTaxProfiles(
+      payload.tenantId,
+      payload.taxYear,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPLIANCE.GET_TAX_PROFILE)
   handleGetTaxProfile(@Payload() payload: EmployeeTaxYearMessageDto) {
-    return this.complianceService.getTaxProfile(payload.tenantId, payload.employeeId, payload.taxYear);
+    return this.complianceService.getTaxProfile(
+      payload.tenantId,
+      payload.employeeId,
+      payload.taxYear,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPLIANCE.SAVE_TAX_PROFILE)
   handleSaveTaxProfile(@Payload() payload: SaveTaxProfileMessageDto) {
-    return this.complianceService.saveTaxProfile(payload.tenantId, payload.employeeId, payload.taxYear, payload.dto);
+    return this.complianceService.saveTaxProfile(
+      payload.tenantId,
+      payload.employeeId,
+      payload.taxYear,
+      payload.dto,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPLIANCE.GET_REPORT)
   handleComplianceReport(@Payload() payload: ComplianceReportMessageDto) {
-    return this.complianceService.report(payload.tenantId, payload.type, payload.filters ?? {});
+    return this.complianceService.report(
+      payload.tenantId,
+      payload.type,
+      payload.filters ?? {},
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPLIANCE.EXPORT_REPORT)
   handleExportComplianceReport(@Payload() payload: ComplianceReportMessageDto) {
-    return this.complianceService.exportReport(payload.tenantId, payload.type, payload.filters ?? {});
+    return this.complianceService.exportReport(
+      payload.tenantId,
+      payload.type,
+      payload.filters ?? {},
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPLIANCE.LIST_TAX_SUMMARIES)
   handleListTaxSummaries(@Payload() payload: TaxYearMessageDto) {
-    return this.complianceService.listTaxSummaries(payload.tenantId, payload.taxYear);
+    return this.complianceService.listTaxSummaries(
+      payload.tenantId,
+      payload.taxYear,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPLIANCE.GET_TAX_SUMMARY)
   handleGetTaxSummary(@Payload() payload: EmployeeTaxYearMessageDto) {
-    return this.complianceService.getTaxSummary(payload.tenantId, payload.employeeId, payload.taxYear);
+    return this.complianceService.getTaxSummary(
+      payload.tenantId,
+      payload.employeeId,
+      payload.taxYear,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPLIANCE.ISSUE_CERTIFICATE)
   handleIssueTaxCertificate(@Payload() payload: EmployeeTaxYearMessageDto) {
-    return this.complianceService.issueCertificate(payload.tenantId, payload.employeeId, payload.taxYear);
+    return this.complianceService.issueCertificate(
+      payload.tenantId,
+      payload.employeeId,
+      payload.taxYear,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPLIANCE.LIST_CERTIFICATES)
   handleListTaxCertificates(@Payload() payload: TaxCertificateListMessageDto) {
-    return this.complianceService.listCertificates(payload.tenantId, payload.filters ?? {});
+    return this.complianceService.listCertificates(
+      payload.tenantId,
+      payload.filters ?? {},
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPLIANCE.GET_CERTIFICATE_PDF)
   handleGetTaxCertificatePdf(@Payload() payload: TaxCertificateIdMessageDto) {
-    return this.complianceService.getCertificatePdf(payload.tenantId, payload.certificateId);
+    return this.complianceService.getCertificatePdf(
+      payload.tenantId,
+      payload.certificateId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.GET_MY_TAX_SUMMARY)
   handleGetMyTaxSummary(@Payload() payload: MyTaxSummaryMessageDto) {
-    return this.complianceService.myTaxSummary(payload.tenantId, payload.userId, payload.email, payload.taxYear);
+    return this.complianceService.myTaxSummary(
+      payload.tenantId,
+      payload.userId,
+      payload.email,
+      payload.taxYear,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.GET_MY_TAX_CERTIFICATES)
   handleGetMyTaxCertificates(@Payload() payload: EmployeeActorDto) {
-    return this.complianceService.myCertificates(payload.tenantId, payload.userId, payload.email);
+    return this.complianceService.myCertificates(
+      payload.tenantId,
+      payload.userId,
+      payload.email,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.GET_MY_TAX_CERTIFICATE_PDF)
   handleGetMyTaxCertificatePdf(@Payload() payload: MyTaxCertificateMessageDto) {
-    return this.complianceService.myCertificatePdf(payload.tenantId, payload.userId, payload.email, payload.certificateId);
+    return this.complianceService.myCertificatePdf(
+      payload.tenantId,
+      payload.userId,
+      payload.email,
+      payload.certificateId,
+    );
   }
 
   // ── Payroll cycle, process checks and export ──────────────────────────────
@@ -2336,84 +2812,156 @@ export class TenantServiceController {
   async handleGetPayrollProcessChecks(
     @Payload() payload: { tenantId: string; payrollRunId: string },
   ) {
-    return this.payrollDashboardService.getProcessChecks(payload.tenantId, payload.payrollRunId);
+    return this.payrollDashboardService.getProcessChecks(
+      payload.tenantId,
+      payload.payrollRunId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL.EXPORT_RECORDS)
   async handleExportPayrollRecords(
     @Payload() payload: { tenantId: string; payrollRunId?: string },
   ) {
-    return this.payrollDashboardService.exportRecords(payload.tenantId, payload.payrollRunId);
+    return this.payrollDashboardService.exportRecords(
+      payload.tenantId,
+      payload.payrollRunId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.GET_DASHBOARD)
   handleEmployeeDashboard(@Payload() payload: EmployeeActorDto) {
-    return this.employeePortalService.getDashboard(payload.tenantId, payload.userId, payload.email);
+    return this.employeePortalService.getDashboard(
+      payload.tenantId,
+      payload.userId,
+      payload.email,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.GET_MY_TEAM)
   handleMyTeam(@Payload() payload: EmployeeActorDto) {
-    return this.myTeamService.getMyTeam(payload.tenantId, payload.userId, payload.email);
+    return this.myTeamService.getMyTeam(
+      payload.tenantId,
+      payload.userId,
+      payload.email,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.GET_HIERARCHY)
   handleHierarchy(@Payload() payload: HierarchyActorDto) {
-    return this.myTeamService.getHierarchy(payload.tenantId, payload.userId, payload.email, payload.canViewAll);
+    return this.myTeamService.getHierarchy(
+      payload.tenantId,
+      payload.userId,
+      payload.email,
+      payload.canViewAll,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.GET_LEADERSHIP)
   handleLeadership(@Payload() payload: EmployeeActorDto) {
-    return this.myTeamService.getLeadership(payload.tenantId, payload.userId, payload.email);
+    return this.myTeamService.getLeadership(
+      payload.tenantId,
+      payload.userId,
+      payload.email,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.GET_PROFILE)
   handleEmployeeProfile(@Payload() payload: EmployeeActorDto) {
-    return this.employeePortalService.getProfile(payload.tenantId, payload.userId, payload.email);
+    return this.employeePortalService.getProfile(
+      payload.tenantId,
+      payload.userId,
+      payload.email,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.UPDATE_PROFILE)
   handleUpdateEmployeeProfile(@Payload() payload: UpdateMyProfileMessageDto) {
-    return this.employeePortalService.updateProfile(payload.tenantId, payload.userId, payload.dto, payload.email);
+    return this.employeePortalService.updateProfile(
+      payload.tenantId,
+      payload.userId,
+      payload.dto,
+      payload.email,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.GET_ATTENDANCE)
   handleEmployeeAttendance(@Payload() payload: GetMyAttendanceMessageDto) {
-    return this.employeePortalService.getAttendance(payload.tenantId, payload.userId, payload.query, payload.email);
+    return this.employeePortalService.getAttendance(
+      payload.tenantId,
+      payload.userId,
+      payload.query,
+      payload.email,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.GET_ATTENDANCE_TODAY)
   handleEmployeeAttendanceToday(@Payload() payload: EmployeeActorDto) {
-    return this.employeePortalService.getAttendanceToday(payload.tenantId, payload.userId, payload.email);
+    return this.employeePortalService.getAttendanceToday(
+      payload.tenantId,
+      payload.userId,
+      payload.email,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.CHECK_IN)
   handleEmployeeCheckIn(@Payload() payload: EmployeePunchDto) {
-    return this.employeePortalService.checkIn(payload.tenantId, payload.userId, payload.email, payload.clientIp);
+    return this.employeePortalService.checkIn(
+      payload.tenantId,
+      payload.userId,
+      payload.email,
+      payload.clientIp,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.CHECK_OUT)
   handleEmployeeCheckOut(@Payload() payload: EmployeePunchDto) {
-    return this.employeePortalService.checkOut(payload.tenantId, payload.userId, payload.email, payload.clientIp, payload.dayEndStatus);
+    return this.employeePortalService.checkOut(
+      payload.tenantId,
+      payload.userId,
+      payload.email,
+      payload.clientIp,
+      payload.dayEndStatus,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.GET_LEAVE_SUMMARY)
   handleEmployeeLeaveSummary(@Payload() payload: GetMyLeaveSummaryMessageDto) {
-    return this.employeePortalService.getLeaveSummary(payload.tenantId, payload.userId, payload.query, payload.email);
+    return this.employeePortalService.getLeaveSummary(
+      payload.tenantId,
+      payload.userId,
+      payload.query,
+      payload.email,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.GET_LEAVE_HISTORY)
   handleEmployeeLeaveHistory(@Payload() payload: GetMyLeaveHistoryMessageDto) {
-    return this.employeePortalService.getLeaveHistory(payload.tenantId, payload.userId, payload.query, payload.email);
+    return this.employeePortalService.getLeaveHistory(
+      payload.tenantId,
+      payload.userId,
+      payload.query,
+      payload.email,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.APPLY_LEAVE)
   handleEmployeeApplyLeave(@Payload() payload: ApplyMyLeaveMessageDto) {
-    return this.employeePortalService.applyLeave(payload.tenantId, payload.userId, payload.dto, payload.email);
+    return this.employeePortalService.applyLeave(
+      payload.tenantId,
+      payload.userId,
+      payload.dto,
+      payload.email,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.PREVIEW_LEAVE)
   handleEmployeePreviewLeave(@Payload() payload: ApplyMyLeaveMessageDto) {
-    return this.employeePortalService.previewLeave(payload.tenantId, payload.userId, payload.dto, payload.email);
+    return this.employeePortalService.previewLeave(
+      payload.tenantId,
+      payload.userId,
+      payload.dto,
+      payload.email,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.GET_LEAVE)
@@ -2449,12 +2997,22 @@ export class TenantServiceController {
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.GET_DOCUMENTS)
   handleEmployeeDocuments(@Payload() payload: GetMyDocumentsMessageDto) {
-    return this.employeePortalService.getDocuments(payload.tenantId, payload.userId, payload.query, payload.email);
+    return this.employeePortalService.getDocuments(
+      payload.tenantId,
+      payload.userId,
+      payload.query,
+      payload.email,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.UPLOAD_DOCUMENT)
   handleEmployeeUploadDocument(@Payload() payload: UploadMyDocumentMessageDto) {
-    return this.employeePortalService.uploadDocument(payload.tenantId, payload.userId, payload.dto, payload.email);
+    return this.employeePortalService.uploadDocument(
+      payload.tenantId,
+      payload.userId,
+      payload.dto,
+      payload.email,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.GET_DOCUMENT)
@@ -2489,33 +3047,55 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.HR_GET_DOCUMENTS)
-  handleHrGetEmployeeDocuments(@Payload() payload: GetEmployeeDocumentsMessageDto) {
+  handleHrGetEmployeeDocuments(
+    @Payload() payload: GetEmployeeDocumentsMessageDto,
+  ) {
     // The same list as LIST_ALL_DOCUMENTS — one implementation for both.
-    return this.employeePortalService.listAllDocuments(payload.tenantId, payload.query, {
-      userId: payload.actorUserId,
-      email: payload.actorEmail,
-    });
+    return this.employeePortalService.listAllDocuments(
+      payload.tenantId,
+      payload.query,
+      {
+        userId: payload.actorUserId,
+        email: payload.actorEmail,
+      },
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.HR_GET_DOCUMENT)
   handleHrGetEmployeeDocument(@Payload() payload: TenantEmployeeDocumentIdDto) {
-    return this.employeePortalService.getEmployeeDocument(payload.tenantId, payload.documentId);
+    return this.employeePortalService.getEmployeeDocument(
+      payload.tenantId,
+      payload.documentId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.REVIEW_DOCUMENT)
-  handleReviewEmployeeDocument(@Payload() payload: ReviewEmployeeDocumentMessageDto) {
-    return this.employeePortalService.reviewDocument(payload.tenantId, payload.documentId, payload.dto, {
-      userId: payload.actorUserId,
-      email: payload.actorEmail,
-    });
+  handleReviewEmployeeDocument(
+    @Payload() payload: ReviewEmployeeDocumentMessageDto,
+  ) {
+    return this.employeePortalService.reviewDocument(
+      payload.tenantId,
+      payload.documentId,
+      payload.dto,
+      {
+        userId: payload.actorUserId,
+        email: payload.actorEmail,
+      },
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.LIST_ALL_DOCUMENTS)
-  handleListAllEmployeeDocuments(@Payload() payload: GetEmployeeDocumentsMessageDto) {
-    return this.employeePortalService.listAllDocuments(payload.tenantId, payload.query, {
-      userId: payload.actorUserId,
-      email: payload.actorEmail,
-    });
+  handleListAllEmployeeDocuments(
+    @Payload() payload: GetEmployeeDocumentsMessageDto,
+  ) {
+    return this.employeePortalService.listAllDocuments(
+      payload.tenantId,
+      payload.query,
+      {
+        userId: payload.actorUserId,
+        email: payload.actorEmail,
+      },
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.GET_DOCUMENT_STATS)
@@ -2525,12 +3105,21 @@ export class TenantServiceController {
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.GET_REQUESTS)
   handleEmployeeRequests(@Payload() payload: EmployeeActorDto) {
-    return this.employeePortalService.getRequests(payload.tenantId, payload.userId, payload.email);
+    return this.employeePortalService.getRequests(
+      payload.tenantId,
+      payload.userId,
+      payload.email,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.CREATE_REQUEST)
   handleEmployeeCreateRequest(@Payload() payload: CreateMyRequestMessageDto) {
-    return this.employeePortalService.createRequest(payload.tenantId, payload.userId, payload.dto, payload.email);
+    return this.employeePortalService.createRequest(
+      payload.tenantId,
+      payload.userId,
+      payload.dto,
+      payload.email,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.UPDATE_REQUEST)
@@ -2565,11 +3154,17 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.LIST_ALL_REQUESTS)
-  handleListAllEmployeeRequests(@Payload() payload: GetEmployeeRequestsMessageDto) {
-    return this.employeePortalService.listAllRequests(payload.tenantId, payload.query, {
-      userId: payload.actorUserId,
-      email: payload.actorEmail,
-    });
+  handleListAllEmployeeRequests(
+    @Payload() payload: GetEmployeeRequestsMessageDto,
+  ) {
+    return this.employeePortalService.listAllRequests(
+      payload.tenantId,
+      payload.query,
+      {
+        userId: payload.actorUserId,
+        email: payload.actorEmail,
+      },
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.GET_REQUEST_STATS)
@@ -2578,7 +3173,9 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.DECIDE_REQUEST)
-  handleDecideEmployeeRequest(@Payload() payload: DecideEmployeeRequestMessageDto) {
+  handleDecideEmployeeRequest(
+    @Payload() payload: DecideEmployeeRequestMessageDto,
+  ) {
     return this.employeePortalService.decideRequest(
       payload.tenantId,
       payload.requestId,
@@ -2589,7 +3186,9 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.GET_NOTIFICATIONS)
-  handleEmployeeNotifications(@Payload() payload: GetMyNotificationsMessageDto) {
+  handleEmployeeNotifications(
+    @Payload() payload: GetMyNotificationsMessageDto,
+  ) {
     return this.employeePortalService.getNotifications(
       payload.tenantId,
       payload.userId,
@@ -2610,7 +3209,11 @@ export class TenantServiceController {
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.MARK_ALL_NOTIFICATIONS_READ)
   handleEmployeeNotificationsReadAll(@Payload() payload: EmployeeActorDto) {
-    return this.employeePortalService.markAllNotificationsRead(payload.tenantId, payload.userId, payload.email);
+    return this.employeePortalService.markAllNotificationsRead(
+      payload.tenantId,
+      payload.userId,
+      payload.email,
+    );
   }
   // ==========================================
   // SUPERADMIN READ MODEL (directory projection)
@@ -2670,12 +3273,18 @@ export class TenantServiceController {
 
   @MessagePattern(MESSAGE_PATTERNS.HR_PORTAL.GET_DASHBOARD)
   handleHrDashboard(@Payload() payload: HrDashboardMessageDto) {
-    return this.hrDashboardService.getDashboard(payload.tenantId, payload.query);
+    return this.hrDashboardService.getDashboard(
+      payload.tenantId,
+      payload.query,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.HR_PORTAL.GET_ADMIN_OVERVIEW)
   handleAdminDashboardOverview(@Payload() payload: AdminDashboardMessageDto) {
-    return this.hrDashboardService.getAdminOverview(payload.tenantId, payload.query);
+    return this.hrDashboardService.getAdminOverview(
+      payload.tenantId,
+      payload.query,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.HR_PORTAL.GET_INSIGHTS)
@@ -2690,12 +3299,18 @@ export class TenantServiceController {
 
   @MessagePattern(MESSAGE_PATTERNS.HR_PORTAL.GET_LEAVE_APPROVALS)
   handleHrLeaveApprovals(@Payload() payload: LeaveApprovalsMessageDto) {
-    return this.hrDashboardService.getLeaveApprovals(payload.tenantId, payload.query);
+    return this.hrDashboardService.getLeaveApprovals(
+      payload.tenantId,
+      payload.query,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.HR_PORTAL.GET_ONBOARDING_MATRIX)
   handleHrOnboardingMatrix(@Payload() payload: OnboardingMatrixMessageDto) {
-    return this.hrDashboardService.getOnboardingMatrix(payload.tenantId, payload.query);
+    return this.hrDashboardService.getOnboardingMatrix(
+      payload.tenantId,
+      payload.query,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.HR_PORTAL.GET_REPORT_TEMPLATES)
@@ -2705,12 +3320,20 @@ export class TenantServiceController {
 
   @MessagePattern(MESSAGE_PATTERNS.HR_PORTAL.GENERATE_REPORT)
   handleGenerateHrReport(@Payload() payload: GenerateHrReportMessageDto) {
-    return this.hrReportsService.generate(payload.tenantId, payload.dto, payload.actorUserId);
+    return this.hrReportsService.generate(
+      payload.tenantId,
+      payload.dto,
+      payload.actorUserId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.HR_PORTAL.EXPORT_REPORT)
   handleExportHrReport(@Payload() payload: GenerateHrReportMessageDto) {
-    return this.hrReportsService.export(payload.tenantId, payload.dto, payload.actorUserId);
+    return this.hrReportsService.export(
+      payload.tenantId,
+      payload.dto,
+      payload.actorUserId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.HR_PORTAL.INVITE_EMPLOYEE)
@@ -2723,12 +3346,16 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.HR_PORTAL.GET_INVITATIONS)
-  handleGetEmployeeInvitations(@Payload() payload: GetEmployeeInvitationsMessageDto) {
+  handleGetEmployeeInvitations(
+    @Payload() payload: GetEmployeeInvitationsMessageDto,
+  ) {
     return this.employeeInvitationService.list(payload.tenantId, payload.query);
   }
 
   @MessagePattern(MESSAGE_PATTERNS.HR_PORTAL.RESEND_INVITATION)
-  handleResendEmployeeInvitation(@Payload() payload: EmployeeInvitationIdMessageDto) {
+  handleResendEmployeeInvitation(
+    @Payload() payload: EmployeeInvitationIdMessageDto,
+  ) {
     return this.employeeInvitationService.resend(
       payload.tenantId,
       payload.invitationId,
@@ -2737,8 +3364,13 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.HR_PORTAL.REVOKE_INVITATION)
-  handleRevokeEmployeeInvitation(@Payload() payload: EmployeeInvitationIdMessageDto) {
-    return this.employeeInvitationService.revoke(payload.tenantId, payload.invitationId);
+  handleRevokeEmployeeInvitation(
+    @Payload() payload: EmployeeInvitationIdMessageDto,
+  ) {
+    return this.employeeInvitationService.revoke(
+      payload.tenantId,
+      payload.invitationId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.HR_PORTAL.VALIDATE_INVITATION)
@@ -2747,7 +3379,9 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.HR_PORTAL.ACCEPT_INVITATION)
-  handleAcceptEmployeeInvitation(@Payload() payload: { dto: AcceptEmployeeInvitationDto }) {
+  handleAcceptEmployeeInvitation(
+    @Payload() payload: { dto: AcceptEmployeeInvitationDto },
+  ) {
     return this.employeeInvitationService.accept(payload.dto);
   }
 
@@ -2761,13 +3395,20 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_TASK.GET_STATS)
-  handleGetWorkspaceTaskStats(@Payload() payload: WorkspaceTaskStatsMessageDto) {
+  handleGetWorkspaceTaskStats(
+    @Payload() payload: WorkspaceTaskStatsMessageDto,
+  ) {
     return this.workspaceTaskService.getStats(payload.tenantId, payload.query);
   }
 
   @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_TASK.EXPORT)
-  handleExportWorkspaceTasks(@Payload() payload: ExportWorkspaceTasksMessageDto) {
-    return this.workspaceTaskService.getAllForExport(payload.tenantId, payload.query);
+  handleExportWorkspaceTasks(
+    @Payload() payload: ExportWorkspaceTasksMessageDto,
+  ) {
+    return this.workspaceTaskService.getAllForExport(
+      payload.tenantId,
+      payload.query,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_TASK.GET_ONE)
@@ -2777,12 +3418,20 @@ export class TenantServiceController {
 
   @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_TASK.CREATE)
   handleCreateWorkspaceTask(@Payload() payload: CreateWorkspaceTaskMessageDto) {
-    return this.workspaceTaskService.create(payload.tenantId, payload.dto, payload.actorUserId);
+    return this.workspaceTaskService.create(
+      payload.tenantId,
+      payload.dto,
+      payload.actorUserId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_TASK.UPDATE)
   handleUpdateWorkspaceTask(@Payload() payload: UpdateWorkspaceTaskMessageDto) {
-    return this.workspaceTaskService.update(payload.tenantId, payload.taskId, payload.dto);
+    return this.workspaceTaskService.update(
+      payload.tenantId,
+      payload.taskId,
+      payload.dto,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_TASK.DELETE)
@@ -2797,7 +3446,12 @@ export class TenantServiceController {
 
   @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_TASK.GET_MINE)
   handleGetMyTasks(@Payload() payload: GetMyTasksMessageDto) {
-    return this.workspaceTaskService.getMine(payload.tenantId, payload.userId, payload.email, payload.query);
+    return this.workspaceTaskService.getMine(
+      payload.tenantId,
+      payload.userId,
+      payload.email,
+      payload.query,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_TASK.UPDATE_MY_STATUS)
@@ -2816,7 +3470,9 @@ export class TenantServiceController {
   // ==========================================
 
   @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_PROJECT.GET_ALL)
-  handleGetWorkspaceProjects(@Payload() payload: GetWorkspaceProjectsMessageDto) {
+  handleGetWorkspaceProjects(
+    @Payload() payload: GetWorkspaceProjectsMessageDto,
+  ) {
     return this.workspaceProjectService.getAll(payload.tenantId, payload.query);
   }
 
@@ -2826,23 +3482,45 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_PROJECT.EXPORT)
-  handleExportWorkspaceProjects(@Payload() payload: GetWorkspaceProjectsMessageDto) {
-    return this.workspaceProjectService.getAllForExport(payload.tenantId, payload.query);
+  handleExportWorkspaceProjects(
+    @Payload() payload: GetWorkspaceProjectsMessageDto,
+  ) {
+    return this.workspaceProjectService.getAllForExport(
+      payload.tenantId,
+      payload.query,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_PROJECT.CREATE)
-  handleCreateWorkspaceProject(@Payload() payload: CreateWorkspaceProjectMessageDto) {
-    return this.workspaceProjectService.create(payload.tenantId, payload.dto, payload.actorUserId);
+  handleCreateWorkspaceProject(
+    @Payload() payload: CreateWorkspaceProjectMessageDto,
+  ) {
+    return this.workspaceProjectService.create(
+      payload.tenantId,
+      payload.dto,
+      payload.actorUserId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_PROJECT.UPDATE)
-  handleUpdateWorkspaceProject(@Payload() payload: UpdateWorkspaceProjectMessageDto) {
-    return this.workspaceProjectService.update(payload.tenantId, payload.projectId, payload.dto);
+  handleUpdateWorkspaceProject(
+    @Payload() payload: UpdateWorkspaceProjectMessageDto,
+  ) {
+    return this.workspaceProjectService.update(
+      payload.tenantId,
+      payload.projectId,
+      payload.dto,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_PROJECT.DELETE)
-  handleDeleteWorkspaceProject(@Payload() payload: WorkspaceProjectIdMessageDto) {
-    return this.workspaceProjectService.remove(payload.tenantId, payload.projectId);
+  handleDeleteWorkspaceProject(
+    @Payload() payload: WorkspaceProjectIdMessageDto,
+  ) {
+    return this.workspaceProjectService.remove(
+      payload.tenantId,
+      payload.projectId,
+    );
   }
 
   // ==========================================
@@ -2851,23 +3529,39 @@ export class TenantServiceController {
 
   @MessagePattern(MESSAGE_PATTERNS.CALENDAR.GET_MONTH)
   handleGetCalendarMonth(@Payload() payload: GetCalendarMessageDto) {
-    return this.calendarService.getMonth(payload.tenantId, payload.query, payload.canEdit ?? false);
+    return this.calendarService.getMonth(
+      payload.tenantId,
+      payload.query,
+      payload.canEdit ?? false,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.CALENDAR.GET_MY_MONTH)
   handleGetMyCalendarMonth(@Payload() payload: GetCalendarMessageDto) {
     // Self-service view: read-only for everyone.
-    return this.calendarService.getMonth(payload.tenantId, payload.query, false);
+    return this.calendarService.getMonth(
+      payload.tenantId,
+      payload.query,
+      false,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.CALENDAR.CREATE_EVENT)
   handleCreateCalendarEvent(@Payload() payload: CreateCalendarEventMessageDto) {
-    return this.calendarService.create(payload.tenantId, payload.dto, payload.actorUserId);
+    return this.calendarService.create(
+      payload.tenantId,
+      payload.dto,
+      payload.actorUserId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.CALENDAR.UPDATE_EVENT)
   handleUpdateCalendarEvent(@Payload() payload: UpdateCalendarEventMessageDto) {
-    return this.calendarService.update(payload.tenantId, payload.eventId, payload.dto);
+    return this.calendarService.update(
+      payload.tenantId,
+      payload.eventId,
+      payload.dto,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.CALENDAR.DELETE_EVENT)
@@ -2885,42 +3579,76 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.COMPANY_DOCUMENT.GET_PUBLISHED)
-  handleGetPublishedDocuments(@Payload() payload: GetPublishedDocumentsMessageDto) {
-    return this.companyDocumentService.getPublished(payload.tenantId, payload.query);
+  handleGetPublishedDocuments(
+    @Payload() payload: GetPublishedDocumentsMessageDto,
+  ) {
+    return this.companyDocumentService.getPublished(
+      payload.tenantId,
+      payload.query,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.COMPANY_DOCUMENT.CREATE)
-  handleCreateCompanyDocument(@Payload() payload: CreateCompanyDocumentMessageDto) {
-    return this.companyDocumentService.create(payload.tenantId, payload.dto, payload.actorUserId);
+  handleCreateCompanyDocument(
+    @Payload() payload: CreateCompanyDocumentMessageDto,
+  ) {
+    return this.companyDocumentService.create(
+      payload.tenantId,
+      payload.dto,
+      payload.actorUserId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.COMPANY_DOCUMENT.UPDATE)
-  handleUpdateCompanyDocument(@Payload() payload: UpdateCompanyDocumentMessageDto) {
-    return this.companyDocumentService.update(payload.tenantId, payload.documentId, payload.dto);
+  handleUpdateCompanyDocument(
+    @Payload() payload: UpdateCompanyDocumentMessageDto,
+  ) {
+    return this.companyDocumentService.update(
+      payload.tenantId,
+      payload.documentId,
+      payload.dto,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.COMPANY_DOCUMENT.DELETE)
   handleDeleteCompanyDocument(@Payload() payload: CompanyDocumentIdMessageDto) {
-    return this.companyDocumentService.remove(payload.tenantId, payload.documentId);
+    return this.companyDocumentService.remove(
+      payload.tenantId,
+      payload.documentId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.CALENDAR.GET_HOLIDAYS)
   handleGetHolidays(@Payload() payload: GetHolidaysMessageDto) {
-    return this.calendarService.listHolidays(payload.tenantId, payload.query.year);
+    return this.calendarService.listHolidays(
+      payload.tenantId,
+      payload.query.year,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.CALENDAR.CREATE_HOLIDAY)
   handleCreateHoliday(@Payload() payload: CreateHolidayMessageDto) {
-    return this.calendarService.createHoliday(payload.tenantId, payload.dto, payload.actorUserId);
+    return this.calendarService.createHoliday(
+      payload.tenantId,
+      payload.dto,
+      payload.actorUserId,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.CALENDAR.UPDATE_HOLIDAY)
   handleUpdateHoliday(@Payload() payload: UpdateHolidayMessageDto) {
-    return this.calendarService.updateHoliday(payload.tenantId, payload.eventId, payload.dto);
+    return this.calendarService.updateHoliday(
+      payload.tenantId,
+      payload.eventId,
+      payload.dto,
+    );
   }
 
   @MessagePattern(MESSAGE_PATTERNS.CALENDAR.DELETE_HOLIDAY)
   handleDeleteHoliday(@Payload() payload: CalendarEventIdMessageDto) {
-    return this.calendarService.removeHoliday(payload.tenantId, payload.eventId);
+    return this.calendarService.removeHoliday(
+      payload.tenantId,
+      payload.eventId,
+    );
   }
 }

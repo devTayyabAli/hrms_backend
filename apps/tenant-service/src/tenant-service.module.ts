@@ -46,11 +46,13 @@ import {
   Invoice,
   BillingEvent,
   CustomReport,
+  ReportRun,
   BackupSettings,
   BackupRecord,
   PlatformHealthSample,
 } from './models';
 import { PlatformReportsService } from './services/platform-reports.service';
+import { PlatformSchemaService } from './services/platform-schema.service';
 import { EmployeeService } from './services/employee.service';
 import { AttendanceService } from './services/attendance.service';
 import { OrganizationDepartmentsService } from './services/organization-departments.service';
@@ -88,7 +90,10 @@ import { PaymentProviderFactory } from './billing/providers/payment-provider.fac
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true, envFilePath: ['.env.development', '.env'] }),
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: ['.env.development', '.env'],
+    }),
     DatabaseModule.forRoot({ isPlatform: true }),
     SequelizeModule.forFeature([
       Tenant,
@@ -101,6 +106,7 @@ import { PaymentProviderFactory } from './billing/providers/payment-provider.fac
       Invoice,
       BillingEvent,
       CustomReport,
+      ReportRun,
       BackupSettings,
       BackupRecord,
       PlatformHealthSample,
@@ -155,6 +161,7 @@ import { PaymentProviderFactory } from './billing/providers/payment-provider.fac
       useClass: RpcActorInterceptor,
     },
     DataScopeService,
+    PlatformSchemaService,
     {
       // Wrapped rather than injected raw, for two reasons the audit raised
       // separately: service-to-service calls had no timeout, retry or
@@ -162,7 +169,11 @@ import { PaymentProviderFactory } from './billing/providers/payment-provider.fac
       // internal hop was both unbounded and indistinguishable from a
       // stranger connecting to the port.
       provide: SERVICES.AUTH_SERVICE,
-      inject: ['AUTH_SERVICE_RAW', TenantContextService, MicroserviceSigningService],
+      inject: [
+        'AUTH_SERVICE_RAW',
+        TenantContextService,
+        MicroserviceSigningService,
+      ],
       useFactory: (
         client: ClientProxy,
         tenantContext: TenantContextService,
@@ -176,7 +187,11 @@ import { PaymentProviderFactory } from './billing/providers/payment-provider.fac
     },
     {
       provide: SERVICES.USER_SERVICE,
-      inject: ['USER_SERVICE_RAW', TenantContextService, MicroserviceSigningService],
+      inject: [
+        'USER_SERVICE_RAW',
+        TenantContextService,
+        MicroserviceSigningService,
+      ],
       useFactory: (
         client: ClientProxy,
         tenantContext: TenantContextService,
@@ -263,4 +278,4 @@ import { PaymentProviderFactory } from './billing/providers/payment-provider.fac
     PlatformReportsService,
   ],
 })
-export class TenantServiceModule { }
+export class TenantServiceModule {}
