@@ -57,6 +57,14 @@ export class UserSession extends Model {
   @Column(DataType.DATE)
   declare lastActiveAt: Date;
 
+  /**
+   * Last time the person actually used the app (a click or key press reported
+   * by the browser). Unlike `lastActiveAt` it is not moved by token refreshes
+   * or the app's own background polling, so the idle timeout can trust it.
+   */
+  @Column({ type: DataType.DATE, allowNull: true })
+  declare lastInteractionAt: Date | null;
+
   @Index
   @Default('active')
   @Column

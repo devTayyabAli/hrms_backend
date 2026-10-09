@@ -9,7 +9,23 @@ import {
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import { firstValueFrom, timeout } from 'rxjs';
+import { JwtService } from '@nestjs/jwt';
 import { SERVICES, MESSAGE_PATTERNS } from '@app/common';
+
+interface MaintenanceState {
+  enabled: boolean;
+  message: string;
+  /** SUPER_ADMINS_ONLY, or ALL_ADMINS to also let organization admins in. */
+  allowedAdmins?: string;
+}
+
+/** An organization admin by the claims on their token: full access, or an admin role. */
+const isOrganizationAdmin = (user: any): boolean => {
+  if (!user) return false;
+  if (user.isFullAccess === true) return true;
+  const roles: string[] = Array.isArray(user.roles) ? user.roles : user.role ? [user.role] : [];
+  return roles.some((role) => /admin/i.test(String(role)));
+};
 
 /**
  * Enforces the Maintenance tab's "Maintenance Mode" toggle: while it is on,
@@ -32,7 +48,18 @@ export class MaintenanceModeGuard implements CanActivate {
     /\/superadmin(\/|$)/,
     /\/health(\/|$)/,
     /\/profile(\/|$)/,
+    // A session's own housekeeping: renewing a token or signing out is
+    // harmless, and blocking refresh would sign out the very admins who are
+    // allowed in once their access token expires.
+    /\/auth\/(refresh|logout|session)(\/|$)/,
   ];
+
+  /** Lets settings writes drop the cache of whichever instance Nest created. */
+  private static instance: MaintenanceModeGuard | null = null;
+
+  static invalidateAll(): void {
+    MaintenanceModeGuard.instance?.invalidate();
+  }
 
   /**
    * Cached maintenance state, refreshed at most once per TTL.
@@ -48,7 +75,7 @@ export class MaintenanceModeGuard implements CanActivate {
    * takes up to TTL seconds to propagate, which is well inside the time it
    * takes an operator to notice either way.
    */
-  private cachedState: { enabled: boolean; message: string } | null = null;
+  private cachedState: MaintenanceState | null = null;
   private cachedAt = 0;
 
   private readonly ttlMs = parseInt(
@@ -62,12 +89,34 @@ export class MaintenanceModeGuard implements CanActivate {
    * — a thundering herd on exactly the dependency the cache exists to
    * protect.
    */
-  private inFlight: Promise<{ enabled: boolean; message: string }> | null =
+  private inFlight: Promise<MaintenanceState> | null =
     null;
 
   constructor(
     @Inject(SERVICES.AUTH_SERVICE) private readonly authClient: ClientProxy,
-  ) {}
+    private readonly jwtService: JwtService,
+  ) {
+    MaintenanceModeGuard.instance = this;
+  }
+
+  /**
+   * The verified claims on the request's bearer token, if any. This guard is
+   * global and runs before the controllers' JwtAuthGuard, so `request.user`
+   * isn't set yet; reading the token here is what lets an allowed admin
+   * through. A forged or expired token simply verifies to nothing.
+   */
+  private tokenUser(request: any): any | null {
+    if (request.user) return request.user;
+    const header: string = request.headers?.authorization ?? '';
+    const token = header.startsWith('Bearer ') ? header.slice(7) : '';
+    if (!token) return null;
+    try {
+      const payload: any = this.jwtService.verify(token);
+      return payload?.type && payload.type !== 'access' ? null : payload;
+    } catch {
+      return null;
+    }
+  }
 
   /** Drops the cache so an operator toggling the flag sees it apply at once. */
   invalidate(): void {
@@ -75,10 +124,7 @@ export class MaintenanceModeGuard implements CanActivate {
     this.cachedAt = 0;
   }
 
-  private async resolveState(): Promise<{
-    enabled: boolean;
-    message: string;
-  }> {
+  private async resolveState(): Promise<MaintenanceState> {
     if (this.cachedState && Date.now() - this.cachedAt < this.ttlMs) {
       return this.cachedState;
     }
@@ -89,7 +135,7 @@ export class MaintenanceModeGuard implements CanActivate {
 
     this.inFlight = firstValueFrom(
       this.authClient
-        .send<{ enabled: boolean; message: string }>(
+        .send<MaintenanceState>(
           MESSAGE_PATTERNS.SETTINGS.GET_MAINTENANCE_STATE,
           {},
         )
@@ -123,7 +169,7 @@ export class MaintenanceModeGuard implements CanActivate {
       return true;
     }
 
-    let state: { enabled: boolean; message: string };
+    let state: MaintenanceState;
     try {
       state = await this.resolveState();
     } catch (err: any) {
@@ -144,13 +190,17 @@ export class MaintenanceModeGuard implements CanActivate {
 
     // A superadmin token still gets through even on a non-exempt path, so
     // platform staff can verify the system while it is closed to everyone else.
-    const roles: string[] = Array.isArray(request.user?.roles)
-      ? request.user.roles
-      : request.user?.role
-        ? [request.user.role]
-        : [];
-    if (roles.includes('superadmin')) {
+    const user = this.tokenUser(request);
+    const roles: string[] = Array.isArray(user?.roles) ? user.roles : user?.role ? [user.role] : [];
+    if (roles.includes('superadmin') || user?.isSuperAdmin === true) {
       return true;
+    }
+
+    if (state.allowedAdmins === 'ALL_ADMINS') {
+      // Organization admins may work during maintenance. Their sign-in goes
+      // through to auth-service, which refuses anyone who isn't an admin.
+      if (/\/auth\/login(\/|$)/.test(path) || /\/auth\/2fa(\/|$)/.test(path)) return true;
+      if (isOrganizationAdmin(user)) return true;
     }
 
     throw new HttpException(

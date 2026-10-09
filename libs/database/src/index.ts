@@ -7,3 +7,4 @@ export * from './migrations';
 export * from './utils/bind-model-to-connection.util';
 export * from './models';
 export * from './projection/outbox-writer';
+export * from './utils/add-missing-columns.util';

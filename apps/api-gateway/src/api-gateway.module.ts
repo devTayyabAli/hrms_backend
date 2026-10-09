@@ -14,6 +14,7 @@ import { ApiGatewayAuthController } from './controllers/auth.controller';
 import { SuperAdminController } from './controllers/superadmin.controller';
 import { SuperAdminProfileController } from './controllers/superadmin-profile.controller';
 import { SuperAdminNotificationsController } from './controllers/superadmin-notifications.controller';
+import { SessionActivityController } from './controllers/session-activity.controller';
 import { SuperAdminAiController } from './controllers/superadmin-ai.controller';
 import { AiAssistantService } from './ai-assistant/ai-assistant.service';
 import { FilesController } from './controllers/files.controller';
@@ -46,6 +47,7 @@ import {
 import { ApiGatewayHealthController } from './controllers/health.controller';
 import { IpAllowlistGuard } from './guards/ip-allowlist.guard';
 import { MaintenanceModeGuard } from './guards/maintenance-mode.guard';
+import { ExportPolicyGuard } from './guards/export-policy.guard';
 
 @Module({
   imports: [
@@ -107,6 +109,7 @@ import { MaintenanceModeGuard } from './guards/maintenance-mode.guard';
     SuperAdminAiController,
     SuperAdminProfileController,
     SuperAdminNotificationsController,
+    SessionActivityController,
     FilesController,
     OrganizationAdminActivationController,
     // Declared before OrganizationSetupController so the admin Departments
@@ -204,6 +207,11 @@ import { MaintenanceModeGuard } from './guards/maintenance-mode.guard';
       // the guard itself exempts /superadmin, /profile and /health.
       provide: APP_GUARD,
       useClass: MaintenanceModeGuard,
+    },
+    {
+      // System Management › General › "Allow users to export data".
+      provide: APP_GUARD,
+      useClass: ExportPolicyGuard,
     },
   ],
 })

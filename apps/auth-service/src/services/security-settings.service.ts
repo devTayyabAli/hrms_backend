@@ -12,7 +12,36 @@ import { describeChangedSettings } from './settings-change.util';
  * for the allowlist use case here (small, admin-curated list of office/VPN
  * ranges); a mismatched or unparseable entry never accidentally matches.
  */
-function ipMatches(ip: string, entry: string): boolean {
+/**
+ * One spelling per address: IPv4 arriving over an IPv6 socket is reported as
+ * "::ffff:203.0.113.25", which never equalled the "203.0.113.25" an
+ * administrator types — so enabling the allowlist could shut everyone out.
+ */
+export function normalizeIp(ip: string): string {
+  const value = (ip ?? '').trim().toLowerCase();
+  return value.startsWith('::ffff:') && value.includes('.') ? value.slice(7) : value;
+}
+
+const IPV4 = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
+const IPV6 = /^[0-9a-f:]+$/i;
+
+/** Why an allowlist entry can't be used, or null. IPv4 may be an address or a CIDR; IPv6 an exact address. */
+export function allowlistEntryProblem(entry: string): string | null {
+  const value = entry.trim();
+  if (value.includes('/')) {
+    const [range, prefix] = value.split('/');
+    if (!IPV4.test(range)) return 'CIDR ranges are supported for IPv4 only, e.g. 203.0.113.0/24.';
+    if (!/^\d+$/.test(prefix) || Number(prefix) < 8 || Number(prefix) > 32) return 'A CIDR prefix must be between /8 and /32.';
+    return null;
+  }
+  if (IPV4.test(value)) return null;
+  if (value.includes(':') && IPV6.test(value)) return null;
+  return 'Enter an IPv4 address (203.0.113.25), an IPv4 range (203.0.113.0/24) or an IPv6 address.';
+}
+
+function ipMatches(rawIp: string, rawEntry: string): boolean {
+  const ip = normalizeIp(rawIp);
+  const entry = normalizeIp(rawEntry);
   if (!entry.includes('/')) {
     return ip === entry;
   }
@@ -62,8 +91,25 @@ export class SecuritySettingsService {
     return this.getOrCreate();
   }
 
-  async updateSecurity(dto: UpdateSecuritySettingsDto): Promise<SecuritySettings> {
+  /**
+   * Refuses a change that would leave the administrator making it unable to
+   * reach the Super Admin portal: switching the allowlist on, or removing an
+   * entry, while their own address isn't (or wouldn't be) covered.
+   */
+  private async assertCallerKeepsAccess(callerIp: string | undefined, entries: string[]) {
+    if (!callerIp) return;
+    if (entries.some((entry) => ipMatches(callerIp, entry))) return;
+    throw new BadRequestException(
+      `This would lock you out: your current IP address (${normalizeIp(callerIp)}) isn't on the allowlist. Add it first, then try again.`,
+    );
+  }
+
+  async updateSecurity(dto: UpdateSecuritySettingsDto, callerIp?: string): Promise<SecuritySettings> {
     const settings = await this.getOrCreate();
+    if (dto.ipWhitelistEnabled === true && !settings.ipWhitelistEnabled) {
+      const entries = await this.allowedIpModel.findAll({ attributes: ['ipOrCidr'] });
+      await this.assertCallerKeepsAccess(callerIp, entries.map((e) => e.ipOrCidr));
+    }
     const changed = describeChangedSettings(settings.get({ plain: true }), dto);
     await settings.update(dto);
     if (changed) this.announce('Platform security settings changed', `Updated: ${changed}.`);
@@ -75,6 +121,10 @@ export class SecuritySettingsService {
   }
 
   async addAllowedIp(dto: AddAllowedIpDto): Promise<AllowedIpAddress> {
+    const ipOrCidr = normalizeIp(dto.ipOrCidr);
+    const problem = allowlistEntryProblem(ipOrCidr);
+    if (problem) throw new BadRequestException(problem);
+    dto = { ...dto, ipOrCidr };
     const existing = await this.allowedIpModel.findOne({ where: { ipOrCidr: dto.ipOrCidr } });
     if (existing) {
       throw new BadRequestException(`${dto.ipOrCidr} is already on the allowlist.`);
@@ -89,10 +139,17 @@ export class SecuritySettingsService {
    * `undefined` completes its observable without emitting, which surfaces at
    * the gateway as firstValueFrom's "no elements in sequence" error.
    */
-  async removeAllowedIp(id: string): Promise<{ success: boolean }> {
+  async removeAllowedIp(id: string, callerIp?: string): Promise<{ success: boolean }> {
     const entry = await this.allowedIpModel.findByPk(id);
     if (!entry) {
       throw new NotFoundException(`Allowed IP entry ${id} not found.`);
+    }
+    const settings = await this.getOrCreate();
+    if (settings.ipWhitelistEnabled) {
+      const remaining = (await this.allowedIpModel.findAll({ attributes: ['id', 'ipOrCidr'] }))
+        .filter((e) => e.id !== id)
+        .map((e) => e.ipOrCidr);
+      await this.assertCallerKeepsAccess(callerIp, remaining);
     }
     await entry.destroy();
     this.announce('IP removed from the allowlist', `${entry.ipOrCidr} can no longer reach the Super Admin portal while the allowlist is on.`);

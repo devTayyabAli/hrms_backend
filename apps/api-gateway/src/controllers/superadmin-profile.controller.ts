@@ -15,6 +15,7 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { TAGS } from '../swagger/swagger-tags';
+import { IpAllowlistGuard } from '../guards/ip-allowlist.guard';
 import { ClientProxy } from '@nestjs/microservices';
 import {
   SERVICES,
@@ -32,7 +33,8 @@ import { JwtAuthGuard, TenantGuard, RolesGuard, Roles, CurrentUser, SuperAdminGu
 
 @Controller(['profile', 'superadmin/profile'])
 @PlatformRoute()
-@UseGuards(JwtAuthGuard, TenantGuard, RolesGuard, SuperAdminGuard)
+// The Security tab's IP allowlist covers the whole Super Admin portal, this included.
+@UseGuards(JwtAuthGuard, TenantGuard, RolesGuard, SuperAdminGuard, IpAllowlistGuard)
 @Roles('superadmin')
 @ApiBearerAuth()
 export class SuperAdminProfileController {

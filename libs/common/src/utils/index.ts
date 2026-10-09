@@ -8,3 +8,4 @@ export * from './user-agent.util';
 export * from './csv.util';
 export * from './list-bounds.util';
 export * from './web-push.util';
+export * from './time-zone.util';

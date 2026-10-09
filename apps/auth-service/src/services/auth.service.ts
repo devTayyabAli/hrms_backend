@@ -34,7 +34,6 @@ import {
   TotpUtil,
   BCRYPT_SALT_ROUNDS,
   PASSWORD_HISTORY_LIMIT,
-  DEFAULT_PASSWORD_EXPIRY_DAYS,
   STRONG_PASSWORD_REGEX,
   STRONG_PASSWORD_MESSAGE,
   parseDurationMs,
@@ -49,6 +48,7 @@ import { OtpService } from './otp.service';
 import { MailService } from './mail.service';
 import { AuditService } from './audit.service';
 import { PlatformNotificationService } from './platform-notification.service';
+import { MaintenanceSettingsService } from './maintenance-settings.service';
 import { PlatformNotificationCategory } from '../models';
 
 interface SessionMeta {
@@ -79,6 +79,7 @@ export class AuthService implements OnModuleInit {
     private securitySettingsService: SecuritySettingsService,
     private accountLockoutService: AccountLockoutService,
     @Optional() private platformNotifications?: PlatformNotificationService,
+    @Optional() private maintenanceSettings?: MaintenanceSettingsService,
   ) { }
 
   /** "Chrome 154 on Windows 10/11 · 18.143.151.88 · Lahore, PK" — what a security alert tells the admin. */
@@ -221,14 +222,56 @@ export class AuthService implements OnModuleInit {
     return [...(history || []), newHash].slice(-PASSWORD_HISTORY_LIMIT);
   }
 
-  private isPasswordExpired(passwordLastChangedAt: Date | null | undefined, createdAt: Date): boolean {
-    const expiryDays = parseInt(
-      this.configService.get<string>('PASSWORD_EXPIRY_DAYS', String(DEFAULT_PASSWORD_EXPIRY_DAYS)),
-      10,
-    );
+  /**
+   * Whether the Security tab's password expiry has passed for this password.
+   * 0 days means passwords never expire. The browser makes the person set a
+   * new one before continuing when this is true.
+   */
+  private async isPasswordExpired(passwordLastChangedAt: Date | null | undefined, createdAt: Date): Promise<boolean> {
+    const { passwordExpiryDays } = await this.securitySettingsService.getOrCreate();
+    if (!passwordExpiryDays) return false;
     const referenceDate = passwordLastChangedAt || createdAt;
     if (!referenceDate) return false;
-    return Date.now() - new Date(referenceDate).getTime() > expiryDays * 24 * 60 * 60 * 1000;
+    return Date.now() - new Date(referenceDate).getTime() > passwordExpiryDays * 24 * 60 * 60 * 1000;
+  }
+
+  /** Idle past the configured timeout (0 = never). Sessions older than this column start from `lastActiveAt`. */
+  private async idleTimedOut(session: { lastInteractionAt?: Date | null; lastActiveAt?: Date | null }) {
+    const { sessionIdleTimeoutMinutes } = await this.securitySettingsService.getOrCreate();
+    if (!sessionIdleTimeoutMinutes) return null;
+    const last = session.lastInteractionAt ?? session.lastActiveAt;
+    if (!last) return null;
+    return Date.now() - new Date(last).getTime() > sessionIdleTimeoutMinutes * 60_000 ? sessionIdleTimeoutMinutes : null;
+  }
+
+  /**
+   * The browser reports that the person is using the app. Moves the idle
+   * clock and answers with the timeout, so the page can sign out on time.
+   */
+  async touchSession(
+    sessionId: string,
+  ): Promise<{ active: boolean; idleTimeoutMinutes: number; passwordExpired: boolean }> {
+    const { sessionIdleTimeoutMinutes } = await this.securitySettingsService.getOrCreate();
+    const state = await this.getSessionState(sessionId);
+    if (!state.active) return { active: false, idleTimeoutMinutes: sessionIdleTimeoutMinutes, passwordExpired: false };
+    await this.userSessionModel.update({ lastInteractionAt: new Date() }, { where: { id: sessionId, status: 'active' } });
+    return {
+      active: true,
+      idleTimeoutMinutes: sessionIdleTimeoutMinutes,
+      // Re-checked here, not only at login, so a reload can't skip the change-password step.
+      passwordExpired: await this.sessionPasswordExpired(sessionId),
+    };
+  }
+
+  private async sessionPasswordExpired(sessionId: string): Promise<boolean> {
+    const session = await this.userSessionModel.findByPk(sessionId, { attributes: ['superAdminId', 'authCredentialId'] });
+    if (!session) return false;
+    const owner = session.superAdminId
+      ? await this.superAdminModel.findByPk(session.superAdminId, { attributes: ['passwordLastChangedAt', 'createdAt'] })
+      : session.authCredentialId
+        ? await this.credentialModel.findByPk(session.authCredentialId, { attributes: ['passwordLastChangedAt', 'createdAt'] })
+        : null;
+    return owner ? this.isPasswordExpired(owner.passwordLastChangedAt, owner.createdAt) : false;
   }
 
   /**
@@ -278,6 +321,7 @@ export class AuthService implements OnModuleInit {
         ipAddress: sessionMeta.ipAddress?.replace(/^::ffff:/i, '') || 'unknown',
         location: sessionMeta.location || null,
         lastActiveAt: now,
+        lastInteractionAt: now,
         status: 'active',
         refreshTokenHash,
         expiresAt,
@@ -509,7 +553,7 @@ export class AuthService implements OnModuleInit {
       message: 'SuperAdmin login successful',
       accessToken,
       refreshToken,
-      passwordExpired: this.isPasswordExpired(admin.passwordLastChangedAt, admin.createdAt),
+      passwordExpired: await this.isPasswordExpired(admin.passwordLastChangedAt, admin.createdAt),
       user: {
         id: admin.id,
         email: admin.email,
@@ -623,7 +667,7 @@ export class AuthService implements OnModuleInit {
       message: 'SuperAdmin 2FA login successful',
       accessToken,
       refreshToken,
-      passwordExpired: this.isPasswordExpired(admin.passwordLastChangedAt, admin.createdAt),
+      passwordExpired: await this.isPasswordExpired(admin.passwordLastChangedAt, admin.createdAt),
       user: {
         id: admin.id,
         email: admin.email,
@@ -889,6 +933,18 @@ export class AuthService implements OnModuleInit {
 
     const effectiveRole = effectiveAuth.primaryRole || cred.role;
 
+    // Maintenance with "all admins allowed": the gateway let this sign-in
+    // through so organization admins can work — everyone else waits.
+    if (this.maintenanceSettings) {
+      const maintenance = await this.maintenanceSettings.getMaintenanceState();
+      const isAdmin =
+        effectiveAuth.isFullAccess === true ||
+        [effectiveRole, ...(effectiveAuth.roles ?? [])].some((role) => /admin/i.test(String(role ?? '')));
+      if (maintenance.enabled && !isAdmin) {
+        throw new ServiceUnavailableException(maintenance.message);
+      }
+    }
+
     const { accessToken, refreshToken } = await this.issueTokenPair(
       {
         sub: cred.id,
@@ -926,7 +982,7 @@ export class AuthService implements OnModuleInit {
       message: 'Login successful',
       accessToken,
       refreshToken,
-      passwordExpired: this.isPasswordExpired(cred.passwordLastChangedAt, cred.createdAt),
+      passwordExpired: await this.isPasswordExpired(cred.passwordLastChangedAt, cred.createdAt),
       user: {
         id: cred.id,
         tenantUserId: effectiveAuth.userId,
@@ -996,6 +1052,9 @@ export class AuthService implements OnModuleInit {
     }
 
     const session = await this.userSessionModel.findByPk(payload.sid);
+    if (session && session.status === 'active' && (await this.idleTimedOut(session))) {
+      await session.update({ status: 'expired', revokedAt: new Date(), revokedReason: 'Signed out after inactivity' });
+    }
     if (!session || session.status !== 'active' || new Date() > session.expiresAt) {
       await this.auditService.log({
         action: 'TOKEN_REFRESH_FAILED',
@@ -1122,7 +1181,7 @@ export class AuthService implements OnModuleInit {
    */
   async getSessionState(sessionId: string): Promise<{ active: boolean; reason?: string }> {
     const session = await this.userSessionModel.findByPk(sessionId, {
-      attributes: ['id', 'status', 'expiresAt'],
+      attributes: ['id', 'status', 'expiresAt', 'lastActiveAt', 'lastInteractionAt'],
     });
     if (!session) return { active: false, reason: 'Your session has ended. Please sign in again.' };
     if (session.status !== 'active') {
@@ -1136,6 +1195,14 @@ export class AuthService implements OnModuleInit {
     }
     if (session.expiresAt && new Date(session.expiresAt).getTime() < Date.now()) {
       return { active: false, reason: 'Your session has expired. Please sign in again.' };
+    }
+    const idleMinutes = await this.idleTimedOut(session);
+    if (idleMinutes) {
+      await session.update({ status: 'expired', revokedAt: new Date(), revokedReason: 'Signed out after inactivity' });
+      return {
+        active: false,
+        reason: `You were signed out after ${idleMinutes >= 60 ? `${idleMinutes / 60} hour${idleMinutes === 60 ? '' : 's'}` : `${idleMinutes} minutes`} of inactivity. Please sign in again.`,
+      };
     }
     return { active: true };
   }

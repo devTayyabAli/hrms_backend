@@ -32,6 +32,7 @@ import { AccountLockoutService } from './services/account-lockout.service';
 import { HelpSupportService } from './services/help-support.service';
 import { AiConversationService } from './services/ai-conversation.service';
 import { PlatformNotificationService } from './services/platform-notification.service';
+import { PlatformSchemaService } from './services/platform-schema.service';
 
 import { AuthMicroserviceController } from './controllers/auth.controller';
 
@@ -157,6 +158,7 @@ import {
     HelpSupportService,
     AiConversationService,
     PlatformNotificationService,
+    PlatformSchemaService,
   ],
 
   controllers: [AuthMicroserviceController],

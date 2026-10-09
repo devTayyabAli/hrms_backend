@@ -1,11 +1,29 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { readFileSync } from 'fs';
+import { join } from 'path';
+import { Op } from 'sequelize';
 import { InjectModel } from '@nestjs/sequelize';
 import { ConfigService } from '@nestjs/config';
 import { ClientProxy } from '@nestjs/microservices';
 import { firstValueFrom, timeout } from 'rxjs';
 import { Sequelize } from 'sequelize';
 import { SERVICES, MESSAGE_PATTERNS } from '@app/common';
-import { TenantDatabaseConfig, BackupRecord, BackupStatus } from '../models';
+import { TenantDatabaseConfig, BackupRecord, BackupStatus, PlatformHealthSample } from '../models';
+
+/** How often the platform's health is sampled for uptime. */
+const SAMPLE_INTERVAL_MS = 60_000;
+/** Uptime is reported over this window. */
+const UPTIME_WINDOW_DAYS = 30;
+const SAMPLE_RETENTION_DAYS = 90;
+
+/** The deployed version, from the package.json shipped alongside dist. */
+const appVersion = (() => {
+  try {
+    return JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8')).version as string;
+  } catch {
+    return null;
+  }
+})();
 
 export interface ServiceHealth {
   service: string;
@@ -37,8 +55,10 @@ export interface StorageBreakdown {
 }
 
 @Injectable()
-export class PlatformStatusService {
+export class PlatformStatusService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PlatformStatusService.name);
+  private sampler: NodeJS.Timeout | null = null;
+  private lastPruneDay = '';
 
   constructor(
     @InjectModel(TenantDatabaseConfig)
@@ -47,7 +67,68 @@ export class PlatformStatusService {
     @Inject(SERVICES.AUTH_SERVICE) private readonly authClient: ClientProxy,
     @Inject(SERVICES.USER_SERVICE) private readonly userClient: ClientProxy,
     private readonly configService: ConfigService,
+    @InjectModel(PlatformHealthSample) private readonly sampleModel: typeof PlatformHealthSample,
   ) {}
+
+  onModuleInit() {
+    if (process.env.NODE_ENV === 'test') return;
+    this.sampler = setInterval(() => void this.recordSample(), SAMPLE_INTERVAL_MS);
+    this.sampler.unref?.();
+  }
+
+  onModuleDestroy() {
+    if (this.sampler) clearInterval(this.sampler);
+  }
+
+  /**
+   * One minute of health: does every service answer, and does the database?
+   * Never throws — a monitoring hiccup must not take anything else down.
+   */
+  async recordSample(): Promise<void> {
+    try {
+      const [auth, user, db] = await Promise.all([
+        this.checkService(this.authClient, 'auth-service'),
+        this.checkService(this.userClient, 'user-service'),
+        this.checkDatabase(),
+      ]);
+      const failing = [
+        auth.status === 'down' ? 'auth-service' : null,
+        user.status === 'down' ? 'user-service' : null,
+        db.status !== 'operational' ? 'database' : null,
+      ].filter(Boolean) as string[];
+      const status = failing.length === 0 ? 'operational' : failing.length >= 3 ? 'down' : 'degraded';
+      await this.sampleModel.create({ status, failing: failing.join(', ') || null });
+
+      const day = new Date().toISOString().slice(0, 10);
+      if (day !== this.lastPruneDay) {
+        this.lastPruneDay = day;
+        await this.sampleModel.destroy({
+          where: { createdAt: { [Op.lt]: new Date(Date.now() - SAMPLE_RETENTION_DAYS * 86_400_000) } },
+        });
+      }
+    } catch (error: any) {
+      this.logger.warn(`Health sample not recorded: ${error?.message ?? error}`);
+    }
+  }
+
+  /**
+   * Share of sampled minutes that were fully operational over the last 30
+   * days. Null until there is an hour of samples — too little to mean much.
+   */
+  async getUptime() {
+    const since = new Date(Date.now() - UPTIME_WINDOW_DAYS * 86_400_000);
+    const [total, operational, first] = await Promise.all([
+      this.sampleModel.count({ where: { createdAt: { [Op.gte]: since } } }),
+      this.sampleModel.count({ where: { createdAt: { [Op.gte]: since }, status: 'operational' } }),
+      this.sampleModel.findOne({ where: { createdAt: { [Op.gte]: since } }, order: [['createdAt', 'ASC']], attributes: ['createdAt'] }),
+    ]);
+    return {
+      percentage: total >= 60 ? Math.round((operational / total) * 10_000) / 100 : null,
+      sampleCount: total,
+      windowDays: UPTIME_WINDOW_DAYS,
+      measuredSince: first?.createdAt ?? null,
+    };
+  }
 
   private async checkService(client: ClientProxy, name: string): Promise<ServiceHealth> {
     try {
@@ -302,7 +383,7 @@ export class PlatformStatusService {
     ];
     const allOperational = components.every((c) => c.status === 'operational');
 
-    const breakdown = await this.getStorageBreakdown(storage.usedBytes);
+    const [breakdown, uptime] = await Promise.all([this.getStorageBreakdown(storage.usedBytes), this.getUptime()]);
 
     return {
       systemStatus,
@@ -312,14 +393,24 @@ export class PlatformStatusService {
         components,
       },
       services,
-      uptimePercentage: null,
+      uptimePercentage: uptime.percentage,
+      uptime,
+      system: {
+        version: process.env.APP_VERSION || appVersion,
+        environment: process.env.NODE_ENV || 'development',
+        nodeVersion: process.version,
+        runningSince: new Date(Date.now() - process.uptime() * 1000),
+        timeZone: process.env.NOTIFICATIONS_DEFAULT_TIME_ZONE || 'Asia/Karachi',
+        storageProvider: (process.env.STORAGE_PROVIDER || 'local').toLowerCase(),
+        storageQuotaGB: storage.quotaGB,
+      },
       storage,
       storageOverview: breakdown,
       activeIntegrations: null,
       lastBackupAt,
       notes: {
         uptimePercentage:
-          'Requires a persisted uptime-monitoring subsystem (e.g. Prometheus/Pingdom); not yet implemented. `systemStatus` and `systemHealth.components` reflect live health instead.',
+          'Share of minutes in the last 30 days in which every service and the database answered, sampled once a minute. Null until an hour of samples exists.',
         activeIntegrations:
           'No integrations subsystem exists in this codebase yet — needs a dedicated model/table before this can be real.',
       },

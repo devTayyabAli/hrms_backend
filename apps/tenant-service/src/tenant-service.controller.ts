@@ -526,7 +526,7 @@ export class TenantServiceController {
 
   @MessagePattern(MESSAGE_PATTERNS.BACKUP.CREATE_NOW)
   async createBackupNowMessage(@Payload() payload: { triggeredBy?: string }) {
-    return this.backupService.createBackupNow(payload?.triggeredBy);
+    return this.backupService.startBackup(payload?.triggeredBy);
   }
 
   @MessagePattern(MESSAGE_PATTERNS.BACKUP.LIST)

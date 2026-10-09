@@ -1,12 +1,46 @@
-import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ConflictException, Inject, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
 import { ClientProxy } from '@nestjs/microservices';
 import { firstValueFrom } from 'rxjs';
 import { Sequelize } from 'sequelize';
 import { Op } from 'sequelize';
 import { gzipSync } from 'zlib';
-import { SERVICES, MESSAGE_PATTERNS, UpdateBackupSettingsDto, GetBackupsQueryDto } from '@app/common';
+import { SERVICES, MESSAGE_PATTERNS, UpdateBackupSettingsDto, GetBackupsQueryDto, localClock, utcOffsetMinutes } from '@app/common';
 import { BackupSettings, BackupRecord, BackupStatus, TenantDatabaseConfig } from '../models';
+import { BackupFrequency } from '../models/backup-settings.model';
+
+/** How often the schedule is checked. */
+const SCHEDULE_CHECK_MS = 5 * 60_000;
+/** A backup still "in progress" after this long was cut off by a restart. */
+const STALE_RUN_MS = 2 * 60 * 60_000;
+
+/**
+ * The most recent moment a scheduled backup was due: today's (or this
+ * Monday's, or the 1st's) backup time in the platform time zone, else the
+ * one before it. A backup is owed when none has run since this moment.
+ */
+export const latestBackupSlot = (frequency: string, time: string, now: Date, offsetMinutes: number): Date => {
+  const [h, m] = (time || '02:00').split(':').map(Number);
+  const slotMinutes = (h || 0) * 60 + (m || 0);
+  const clock = localClock(now, offsetMinutes);
+  const day = 86_400_000;
+  const at = (dayStart: Date) => new Date(dayStart.getTime() + slotMinutes * 60_000);
+
+  if (frequency === BackupFrequency.WEEKLY) {
+    let daysBack = (clock.weekday - 1 + 7) % 7; // Monday
+    if (daysBack === 0 && clock.minutes < slotMinutes) daysBack = 7;
+    return at(new Date(clock.dayStart.getTime() - daysBack * day));
+  }
+  if (frequency === BackupFrequency.MONTHLY) {
+    const local = new Date(now.getTime() + offsetMinutes * 60_000);
+    const firstThisMonth = new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), 1) - offsetMinutes * 60_000);
+    const due = at(firstThisMonth);
+    if (now >= due) return due;
+    return at(new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth() - 1, 1) - offsetMinutes * 60_000));
+  }
+  const today = at(clock.dayStart);
+  return now >= today ? today : new Date(today.getTime() - day);
+};
 
 /**
  * A table larger than this fails the whole backup rather than being silently
@@ -21,8 +55,10 @@ interface DatabaseDump {
 }
 
 @Injectable()
-export class BackupService {
+export class BackupService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(BackupService.name);
+  private scheduler: NodeJS.Timeout | null = null;
+  private running = false;
 
   constructor(
     @InjectModel(BackupSettings) private readonly settingsModel: typeof BackupSettings,
@@ -31,6 +67,67 @@ export class BackupService {
     private readonly tenantDbConfigModel: typeof TenantDatabaseConfig,
     @Inject(SERVICES.AUTH_SERVICE) private readonly authClient: ClientProxy,
   ) {}
+
+  onModuleInit() {
+    if (process.env.NODE_ENV === 'test') return;
+    // A run cut off by a restart would read "in progress" forever.
+    void this.recordModel
+      .update(
+        { status: BackupStatus.FAILED, errorMessage: 'Interrupted by a service restart.', completedAt: new Date() },
+        { where: { status: BackupStatus.IN_PROGRESS, startedAt: { [Op.lt]: new Date(Date.now() - 60_000) } } },
+      )
+      .catch((error) => this.logger.warn(`Could not close interrupted backups: ${error?.message ?? error}`));
+    this.scheduler = setInterval(() => void this.runScheduled(), SCHEDULE_CHECK_MS);
+    this.scheduler.unref?.();
+  }
+
+  onModuleDestroy() {
+    if (this.scheduler) clearInterval(this.scheduler);
+  }
+
+  /** Automatic backups: runs one when the configured slot has passed with no backup since. */
+  async runScheduled(now = new Date()): Promise<BackupRecord | null> {
+    try {
+      const settings = await this.getOrCreateSettings();
+      if (!settings.automaticBackupEnabled) return null;
+      const offset = utcOffsetMinutes(process.env.NOTIFICATIONS_DEFAULT_TIME_ZONE, now);
+      const slot = latestBackupSlot(settings.frequency, settings.time, now, offset);
+      const since = await this.recordModel.count({
+        where: { createdAt: { [Op.gte]: slot }, status: { [Op.in]: [BackupStatus.SUCCESS, BackupStatus.IN_PROGRESS] } },
+      });
+      if (since > 0) return null;
+      this.logger.log(`Scheduled ${settings.frequency.toLowerCase()} backup is due (slot ${slot.toISOString()}).`);
+      return await this.startBackup('schedule');
+    } catch (error: any) {
+      if (!(error instanceof ConflictException)) this.logger.error(`Scheduled backup check failed: ${error?.message ?? error}`);
+      return null;
+    }
+  }
+
+  /**
+   * Starts a backup and returns at once with the in-progress record; the dump
+   * runs in the background. Run inside the request it outlived the reverse
+   * proxy's 60s timeout on any real dataset. One backup at a time.
+   */
+  async startBackup(triggeredBy?: string): Promise<BackupRecord> {
+    const running = await this.recordModel.findOne({
+      where: { status: BackupStatus.IN_PROGRESS, startedAt: { [Op.gte]: new Date(Date.now() - STALE_RUN_MS) } },
+    });
+    if (running || this.running) {
+      throw new ConflictException('A backup is already running. Wait for it to finish before starting another.');
+    }
+    this.running = true;
+    const record = await this.recordModel.create({
+      type: 'FULL',
+      status: BackupStatus.IN_PROGRESS,
+      triggeredBy: triggeredBy || 'superadmin',
+      startedAt: new Date(),
+    });
+    void this.runBackup(record).finally(() => {
+      this.running = false;
+    });
+    return record;
+  }
 
   // ==========================================
   // SETTINGS
@@ -122,14 +219,7 @@ export class BackupService {
    * it captures data rather than full DDL, and it inherits the file storage
    * service's 10MB per-file ceiling (compressed).
    */
-  async createBackupNow(triggeredBy?: string): Promise<BackupRecord> {
-    const record = await this.recordModel.create({
-      type: 'FULL',
-      status: BackupStatus.IN_PROGRESS,
-      triggeredBy: triggeredBy || 'superadmin',
-      startedAt: new Date(),
-    });
-
+  private async runBackup(record: BackupRecord): Promise<BackupRecord> {
     try {
       const databases: Record<string, DatabaseDump> = {};
 
@@ -179,7 +269,7 @@ export class BackupService {
             size: compressed.length,
           },
           tenantId: 'platform',
-          uploadedBy: triggeredBy || 'superadmin',
+          uploadedBy: record.triggeredBy || 'superadmin',
           category: 'backups',
           entityType: 'BackupRecord',
           entityId: record.id,
@@ -258,12 +348,7 @@ export class BackupService {
     }
   }
 
-  /**
-   * Applies `retentionDays` from settings. Invoked at the end of each backup
-   * run (there is no scheduler in this codebase to run it independently —
-   * the same constraint BillingScheduler's jobs live with), and callable on
-   * its own.
-   */
+  /** Applies `retentionDays` from settings, after every successful backup. */
   async enforceRetention(): Promise<{ deleted: number }> {
     const settings = await this.getOrCreateSettings();
     const cutoff = new Date(Date.now() - settings.retentionDays * 86400000);

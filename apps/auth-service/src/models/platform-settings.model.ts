@@ -84,6 +84,16 @@ export class PlatformSettings extends Model {
   @Column
   declare allowUsersToExportData: boolean;
 
+  /** "Dark" | "Light" | "Compact" — the Super Admin sidebar. Replaces the two-value sidebarStyle enum. */
+  @Default('Dark')
+  @Column({ type: DataType.STRING(20), allowNull: false })
+  declare sidebarVariant: string;
+
+  /** "Light" | "Dark" | "System". */
+  @Default('Light')
+  @Column({ type: DataType.STRING(20), allowNull: false })
+  declare defaultTheme: string;
+
   @CreatedAt
   declare createdAt: Date;
 

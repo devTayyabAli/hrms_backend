@@ -3,6 +3,8 @@ import { MessagePattern, Payload } from '@nestjs/microservices';
 import {
   MESSAGE_PATTERNS,
   PlatformNotificationListPayloadDto,
+  UpdateSecuritySettingsMessageDto,
+  ValidatePasswordPolicyDto,
   PlatformNotificationReadPayloadDto,
   PlatformNotifyPayloadDto,
   PushSubscribePayloadDto,
@@ -82,6 +84,7 @@ import { MaintenanceSettingsService } from '../services/maintenance-settings.ser
 import { HelpSupportService } from '../services/help-support.service';
 import { AiConversationService } from '../services/ai-conversation.service';
 import { PlatformNotificationService } from '../services/platform-notification.service';
+import { PasswordPolicyService } from '../services/password-policy.service';
 
 @Controller()
 export class AuthMicroserviceController {
@@ -100,6 +103,7 @@ export class AuthMicroserviceController {
     private readonly helpSupportService: HelpSupportService,
     private readonly aiConversationService: AiConversationService,
     private readonly platformNotificationService: PlatformNotificationService,
+    private readonly passwordPolicyService: PasswordPolicyService,
   ) { }
 
   // The former `wrapRpcError` helper lived here and re-implemented, per call
@@ -479,9 +483,22 @@ export class AuthMicroserviceController {
     return this.securitySettingsService.getSecurity();
   }
 
+  /** The browser saw the person use the app — moves the session's idle clock. */
+  @MessagePattern(MESSAGE_PATTERNS.AUTH.TOUCH_SESSION)
+  touchSession(@Payload() payload: SessionStateQueryDto) {
+    return this.authService.touchSession(payload.sessionId);
+  }
+
   @MessagePattern(MESSAGE_PATTERNS.SETTINGS.UPDATE_SECURITY)
-  updateSecuritySettings(@Payload() dto: UpdateSecuritySettingsDto) {
-    return this.securitySettingsService.updateSecurity(dto);
+  updateSecuritySettings(@Payload() payload: UpdateSecuritySettingsMessageDto) {
+    return this.securitySettingsService.updateSecurity(payload.dto, payload.callerIp);
+  }
+
+  /** Lets another service check a password against the configured policy before creating anything. */
+  @MessagePattern(MESSAGE_PATTERNS.SETTINGS.VALIDATE_PASSWORD)
+  async validatePasswordPolicy(@Payload() payload: ValidatePasswordPolicyDto) {
+    await this.passwordPolicyService.validate(payload.password);
+    return { valid: true };
   }
 
   @MessagePattern(MESSAGE_PATTERNS.SETTINGS.LIST_ALLOWED_IPS)
@@ -496,7 +513,7 @@ export class AuthMicroserviceController {
 
   @MessagePattern(MESSAGE_PATTERNS.SETTINGS.REMOVE_ALLOWED_IP)
   removeAllowedIp(@Payload() dto: RemoveAllowedIpMessageDto) {
-    return this.securitySettingsService.removeAllowedIp(dto.id);
+    return this.securitySettingsService.removeAllowedIp(dto.id, dto.callerIp);
   }
 
   @MessagePattern(MESSAGE_PATTERNS.SETTINGS.CHECK_IP_ALLOWED)
@@ -524,6 +541,12 @@ export class AuthMicroserviceController {
   @MessagePattern(MESSAGE_PATTERNS.SETTINGS.UPDATE_DOMAIN)
   updateDomain(@Payload() payload: UpdateDomainMessageDto) {
     return this.customDomainsService.update(payload.id, payload.dto);
+  }
+
+  /** Re-checks a domain's DNS and certificate now. */
+  @MessagePattern(MESSAGE_PATTERNS.SETTINGS.VERIFY_DOMAIN)
+  verifyDomain(@Payload() dto: RemoveDomainMessageDto) {
+    return this.customDomainsService.verify(dto.id);
   }
 
   @MessagePattern(MESSAGE_PATTERNS.SETTINGS.REMOVE_DOMAIN)

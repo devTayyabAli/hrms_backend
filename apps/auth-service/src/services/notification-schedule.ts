@@ -4,64 +4,16 @@
  * Pure functions, so the scheduling rules are tested without a database.
  */
 
+import { localClock } from '@app/common';
+
+// Time-zone helpers now live in @app/common (backups use them too); re-exported for existing callers.
+export { utcOffsetMinutes, localClock } from '@app/common';
+
 const DAY_MINUTES = 24 * 60;
 /** Digests go out at this local time — or as soon after as quiet hours allow. */
 export const DIGEST_LOCAL_MINUTES = 9 * 60;
 /** Weekly digests go out on Monday. */
 const DIGEST_WEEKDAY = 1;
-const DEFAULT_TIME_ZONE = 'Asia/Karachi';
-
-const ianaOffsetMinutes = (timeZone: string, at: Date): number | null => {
-  try {
-    const parts = new Intl.DateTimeFormat('en-US', {
-      timeZone,
-      hourCycle: 'h23',
-      year: 'numeric',
-      month: 'numeric',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: 'numeric',
-    }).formatToParts(at);
-    const get = (type: string) => Number(parts.find((p) => p.type === type)?.value);
-    const asUtc = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'));
-    return Math.round((asUtc - Math.floor(at.getTime() / 60_000) * 60_000) / 60_000);
-  } catch {
-    return null;
-  }
-};
-
-/**
- * Minutes east of UTC for a profile time zone. The profile stores labels such
- * as "UTC+05:00 (Asia/Karachi)" or "(UTC + 05:00) Islamabad, Karachi": an IANA
- * name wins (it knows about daylight saving), then an explicit offset, then
- * the platform default.
- */
-export const utcOffsetMinutes = (timeZone: string | null | undefined, at: Date = new Date()): number => {
-  const label = timeZone ?? '';
-  const iana = /[A-Za-z]+\/[A-Za-z_]+(?:\/[A-Za-z_]+)?/.exec(label)?.[0];
-  if (iana) {
-    const offset = ianaOffsetMinutes(iana, at);
-    if (offset !== null) return offset;
-  }
-  const explicit = /UTC\s*([+-])\s*(\d{1,2})(?::?(\d{2}))?/i.exec(label);
-  if (explicit) {
-    const minutes = Number(explicit[2]) * 60 + Number(explicit[3] ?? 0);
-    return explicit[1] === '-' ? -minutes : minutes;
-  }
-  return ianaOffsetMinutes(process.env.NOTIFICATIONS_DEFAULT_TIME_ZONE || DEFAULT_TIME_ZONE, at) ?? 0;
-};
-
-/** Wall-clock view of `at` in a zone `offset` minutes east of UTC. */
-export const localClock = (at: Date, offset: number) => {
-  const shifted = new Date(at.getTime() + offset * 60_000);
-  return {
-    minutes: shifted.getUTCHours() * 60 + shifted.getUTCMinutes(),
-    weekday: shifted.getUTCDay(),
-    /** UTC instant of local midnight that started this local day. */
-    dayStart: new Date(Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate()) - offset * 60_000),
-  };
-};
-
 export const toMinutes = (time: string): number => {
   const [h, m] = time.split(':').map(Number);
   return h * 60 + m;

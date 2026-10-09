@@ -48,6 +48,7 @@ import {
   CustomReport,
   BackupSettings,
   BackupRecord,
+  PlatformHealthSample,
 } from './models';
 import { PlatformReportsService } from './services/platform-reports.service';
 import { EmployeeService } from './services/employee.service';
@@ -102,6 +103,7 @@ import { PaymentProviderFactory } from './billing/providers/payment-provider.fac
       CustomReport,
       BackupSettings,
       BackupRecord,
+      PlatformHealthSample,
       // SuperAdmin read model. Lives in the platform DB; tenant-service is
       // its only writer, user-service reads it.
       PlatformDirectoryPerson,

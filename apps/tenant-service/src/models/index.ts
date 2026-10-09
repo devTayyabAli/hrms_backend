@@ -51,3 +51,4 @@ export { WorkspaceProject } from './workspace-project.model';
 export { WorkspaceTask } from './workspace-task.model';
 export { CalendarEvent } from './calendar-event.model';
 export { CompanyDocument } from './company-document.model';
+export { PlatformHealthSample } from './platform-health-sample.model';

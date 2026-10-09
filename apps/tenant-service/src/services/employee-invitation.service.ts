@@ -410,6 +410,14 @@ export class EmployeeInvitationService {
     if (!STRONG_PASSWORD_REGEX.test(dto.password ?? '')) {
       this.fail(STRONG_PASSWORD_MESSAGE);
     }
+    // The platform's configured policy (Security tab) may be stricter than the baseline above.
+    try {
+      await firstValueFrom(
+        this.authClient.send(MESSAGE_PATTERNS.SETTINGS.VALIDATE_PASSWORD, { password: dto.password }).pipe(timeout(10000)),
+      );
+    } catch (error: any) {
+      this.fail(error?.message || "The password doesn't meet the platform's password policy.");
+    }
 
     const tenantId = await this.resolveTenantId(dto.token);
     const { invitation, employee } = await this.loadPendingByToken(tenantId, dto.token);

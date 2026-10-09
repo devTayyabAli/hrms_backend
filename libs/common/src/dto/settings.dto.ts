@@ -1,6 +1,9 @@
 import {
   IsBoolean,
   IsDefined,
+  IsEmail,
+  IsIn,
+  ValidateIf,
   IsEnum,
   IsInt,
   IsNotEmpty,
@@ -35,15 +38,23 @@ export enum TimeFormat {
   H24 = '24h',
 }
 
+/** Sidebar looks the Super Admin portal offers. */
+export const SIDEBAR_VARIANTS = ['Dark', 'Light', 'Compact'] as const;
+/** Default colour scheme; "System" follows each viewer's device. */
+export const THEME_PREFERENCES = ['Light', 'Dark', 'System'] as const;
+
 export class UpdateGeneralSettingsDto {
-  @ApiPropertyOptional({ example: 'Fuutura HRMS' })
+  @ApiPropertyOptional({ example: 'Fuutura HRMS', description: 'Sender name and header of every platform email; browser tab title.' })
   @IsOptional()
   @IsString()
+  @IsNotEmpty()
+  @MaxLength(80)
   platformName?: string;
 
-  @ApiPropertyOptional({ example: 'Smart HR, Simplified' })
+  @ApiPropertyOptional({ example: 'Smart HR, Simplified', description: 'Shown under the platform name in emails.' })
   @IsOptional()
   @IsString()
+  @MaxLength(120)
   platformTagline?: string;
 
   @ApiPropertyOptional({ example: '#3F93F6' })
@@ -56,15 +67,27 @@ export class UpdateGeneralSettingsDto {
   @Matches(/^#[0-9A-Fa-f]{6}$/, { message: 'secondaryColor must be a hex color like #0F1520' })
   secondaryColor?: string;
 
-  @ApiPropertyOptional({ example: 'Fuutura Technologies' })
+  @ApiPropertyOptional({ example: 'Fuutura Technologies', description: 'Copyright line in email footers.' })
   @IsOptional()
   @IsString()
+  @MaxLength(120)
   companyName?: string;
 
-  @ApiPropertyOptional({ example: 'support@fuutura.com' })
+  @ApiPropertyOptional({ example: 'support@fuutura.com', description: 'Reply-to and contact address in every email.' })
   @IsOptional()
-  @IsString()
+  @ValidateIf((_, value) => value !== '')
+  @IsEmail({}, { message: 'supportEmail must be a valid email address.' })
   supportEmail?: string;
+
+  @ApiPropertyOptional({ enum: SIDEBAR_VARIANTS })
+  @IsOptional()
+  @IsIn(SIDEBAR_VARIANTS as unknown as string[])
+  sidebarVariant?: string;
+
+  @ApiPropertyOptional({ enum: THEME_PREFERENCES })
+  @IsOptional()
+  @IsIn(THEME_PREFERENCES as unknown as string[])
+  defaultTheme?: string;
 
   @ApiPropertyOptional({ enum: SidebarStyle })
   @IsOptional()
@@ -115,6 +138,11 @@ export class UpdateGeneralSettingsDto {
 // ==========================================
 // SECURITY SETTINGS
 // ==========================================
+
+/** Idle-timeout choices offered (minutes); 0 = sessions never time out for inactivity. */
+export const SESSION_IDLE_TIMEOUT_OPTIONS = [0, 15, 30, 60, 120, 240, 480, 1440] as const;
+/** Password-expiry choices offered (days); 0 = passwords never expire. */
+export const PASSWORD_EXPIRY_OPTIONS = [0, 30, 60, 90, 180, 365] as const;
 
 export enum TwoFactorMethod {
   TOTP = 'TOTP',
@@ -203,6 +231,43 @@ export class UpdateSecuritySettingsDto {
   @Min(1)
   @Max(20)
   maxFailedLoginAttempts?: number;
+
+  @ApiPropertyOptional({
+    example: 60,
+    enum: SESSION_IDLE_TIMEOUT_OPTIONS,
+    description: 'Sign out a session after this many minutes without activity. 0 = never.',
+  })
+  @IsOptional()
+  @IsInt()
+  @IsIn(SESSION_IDLE_TIMEOUT_OPTIONS as unknown as number[])
+  sessionIdleTimeoutMinutes?: number;
+
+  @ApiPropertyOptional({
+    example: 90,
+    enum: PASSWORD_EXPIRY_OPTIONS,
+    description: 'Days before a password must be changed. 0 = never.',
+  })
+  @IsOptional()
+  @IsInt()
+  @IsIn(PASSWORD_EXPIRY_OPTIONS as unknown as number[])
+  passwordExpiryDays?: number;
+}
+
+/**
+ * The gateway's call to update security settings. `callerIp` is the address
+ * the request came from, so an allowlist change that would shut the
+ * administrator making it out can be refused.
+ */
+export class UpdateSecuritySettingsMessageDto {
+  @ValidateNested()
+  @Type(() => UpdateSecuritySettingsDto)
+  @IsDefined()
+  dto: UpdateSecuritySettingsDto;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  callerIp?: string;
 }
 
 export class AddAllowedIpDto {
@@ -270,6 +335,19 @@ export class RemoveAllowedIpMessageDto {
   @IsString()
   @IsNotEmpty()
   id: string;
+
+  /** See UpdateSecuritySettingsMessageDto.callerIp. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  callerIp?: string;
+}
+
+/** Checks a candidate password against the configured policy before anything is created with it. */
+export class ValidatePasswordPolicyDto {
+  @IsString()
+  @MaxLength(256)
+  password: string;
 }
 
 export class UpdateDomainMessageDto {

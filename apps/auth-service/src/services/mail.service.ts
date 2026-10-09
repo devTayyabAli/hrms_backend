@@ -1,7 +1,16 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { InjectModel } from '@nestjs/sequelize';
+import { PlatformSettings } from '../models';
 import * as nodemailer from 'nodemailer';
 import { SendEmailDto, SendTemplateEmailDto, EmailTemplateUtil } from '@app/common';
+
+interface Branding {
+  platformName: string;
+  tagline: string | null;
+  companyName: string | null;
+  supportEmail: string | null;
+}
 
 @Injectable()
 export class MailService implements OnModuleInit {
@@ -9,7 +18,40 @@ export class MailService implements OnModuleInit {
   private transporter: nodemailer.Transporter | null = null;
   private mailEnabled = true;
 
-  constructor(private readonly configService: ConfigService) {}
+  private brandingCache: { value: Branding; at: number } | null = null;
+
+  constructor(
+    private readonly configService: ConfigService,
+    @Optional() @InjectModel(PlatformSettings) private readonly generalSettings?: typeof PlatformSettings,
+  ) {}
+
+  /**
+   * System Management › General: the platform's name, tagline, company and
+   * support address, which every email carries. Read through a one-minute
+   * cache — the env values are the fallback before anything is configured.
+   */
+  private async branding(): Promise<Branding> {
+    if (this.brandingCache && Date.now() - this.brandingCache.at < 60_000) return this.brandingCache.value;
+    const fallbackName = this.configService.get<string>('MAIL_FROM_NAME', 'HRMS Platform');
+    let value: Branding = { platformName: fallbackName, tagline: null, companyName: null, supportEmail: null };
+    try {
+      const row = await this.generalSettings?.findOne({
+        attributes: ['platformName', 'platformTagline', 'companyName', 'supportEmail'],
+      });
+      if (row) {
+        value = {
+          platformName: row.platformName?.trim() || fallbackName,
+          tagline: row.platformTagline?.trim() || null,
+          companyName: row.companyName?.trim() || null,
+          supportEmail: row.supportEmail?.trim() || null,
+        };
+      }
+    } catch (error: any) {
+      this.logger.warn(`Email branding unavailable, using defaults: ${error?.message ?? error}`);
+    }
+    this.brandingCache = { value, at: Date.now() };
+    return value;
+  }
 
   async onModuleInit() {
     this.mailEnabled = this.configService.get<string>('MAIL_ENABLED', 'true') === 'true';
@@ -57,9 +99,11 @@ export class MailService implements OnModuleInit {
   async sendEmail(
     dto: SendEmailDto,
   ): Promise<{ success: boolean; messageId?: string; mocked?: boolean; error?: string }> {
-    const fromName = this.configService.get<string>('MAIL_FROM_NAME', 'HRMS Platform');
+    const brand = await this.branding();
+    const fromName = brand.platformName;
     const fromEmail = this.configService.get<string>('MAIL_FROM_EMAIL', 'noreply@hrms.local');
-    const replyTo = this.configService.get<string>('MAIL_REPLY_TO');
+    // Replies reach the support address set in General settings, else the env one.
+    const replyTo = brand.supportEmail || this.configService.get<string>('MAIL_REPLY_TO');
     const attachments = dto.attachments?.map((file) => ({
       filename: file.filename,
       content: Buffer.from(file.content, 'base64'),
@@ -107,10 +151,13 @@ export class MailService implements OnModuleInit {
   async sendTemplateEmail(
     dto: SendTemplateEmailDto,
   ): Promise<{ success: boolean; messageId?: string; mocked?: boolean; error?: string }> {
-    const fromName = this.configService.get<string>('MAIL_FROM_NAME', 'HRMS Platform');
+    const brand = await this.branding();
     const rendered = EmailTemplateUtil.renderTemplate(dto.templateName, {
       ...dto.variables,
-      fromName,
+      fromName: brand.platformName,
+      tagline: brand.tagline,
+      companyName: brand.companyName,
+      supportEmail: brand.supportEmail,
       subject: dto.subject,
     });
 

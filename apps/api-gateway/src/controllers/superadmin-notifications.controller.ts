@@ -25,6 +25,7 @@ import {
 } from '@app/common';
 import { CurrentUser, JwtAuthGuard, Roles, RolesGuard, SuperAdminGuard, TenantGuard } from '@app/tenant-context';
 import { TAGS } from '../swagger/swagger-tags';
+import { IpAllowlistGuard } from '../guards/ip-allowlist.guard';
 
 /**
  * The Super Admin's notification bell and browser push. Preferences
@@ -32,7 +33,8 @@ import { TAGS } from '../swagger/swagger-tags';
  */
 @Controller('superadmin/notifications')
 @PlatformRoute()
-@UseGuards(JwtAuthGuard, TenantGuard, RolesGuard, SuperAdminGuard)
+// The Security tab's IP allowlist covers the whole Super Admin portal, this included.
+@UseGuards(JwtAuthGuard, TenantGuard, RolesGuard, SuperAdminGuard, IpAllowlistGuard)
 @Roles('superadmin')
 @ApiBearerAuth()
 @ApiTags(TAGS.SA_PROFILE)

@@ -7,10 +7,10 @@ export enum DomainStatus {
 }
 
 /**
- * Configured platform domain registry (e.g. hr.fuutura.com, careers.fuutura.com).
- * `sslEnabled`/`redirectHttpToHttps` are stored preferences only — no ACME/DNS
- * client or reverse-proxy integration exists in this codebase, so no
- * certificate is ever actually issued or verified from these values.
+ * Custom platform domains and the result of checking each one (DNS and certificate).
+ * The hosting provider issues the certificate and routes the domain;
+ * CustomDomainsService verifies both and records the result here.
+ * `sslEnabled` mirrors whether a valid certificate was found.
  */
 // `updatedAt: false` (rather than timestamps: false) — Sequelize must still
 // manage `createdAt`, which is the "Added On" column in the Domains table.
@@ -36,6 +36,31 @@ export class PlatformDomain extends Model {
   @Default(false)
   @Column
   declare redirectHttpToHttps: boolean;
+
+  /** pending (no record yet) | verified | misconfigured (points elsewhere). */
+  @Default('pending')
+  @Column({ type: DataType.STRING(20), allowNull: false })
+  declare dnsStatus: string;
+
+  @Column({ type: DataType.STRING(300), allowNull: true })
+  declare dnsDetail: string | null;
+
+  /** pending (no HTTPS yet) | valid | expiring | invalid. */
+  @Default('pending')
+  @Column({ type: DataType.STRING(20), allowNull: false })
+  declare sslStatus: string;
+
+  @Column({ type: DataType.STRING(300), allowNull: true })
+  declare sslDetail: string | null;
+
+  @Column({ type: DataType.STRING(120), allowNull: true })
+  declare sslIssuer: string | null;
+
+  @Column({ type: DataType.DATE, allowNull: true })
+  declare sslExpiresAt: Date | null;
+
+  @Column({ type: DataType.DATE, allowNull: true })
+  declare lastCheckedAt: Date | null;
 
   @CreatedAt
   declare createdAt: Date;

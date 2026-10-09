@@ -91,6 +91,7 @@ export const MESSAGE_PATTERNS = {
     GET_LAST_LOGINS: 'auth.get_last_logins',
     /** Whether an access token's session is still live (not logged out, revoked or expired). */
     GET_SESSION_STATE: 'auth.get_session_state',
+    TOUCH_SESSION: 'auth.touch_session',
   },
   TENANT: {
     GET_TENANT: 'tenant.get',
@@ -560,6 +561,7 @@ export const MESSAGE_PATTERNS = {
     GET_GENERAL: 'settings.get_general',
     UPDATE_GENERAL: 'settings.update_general',
     GET_SECURITY: 'settings.get_security',
+    VALIDATE_PASSWORD: 'settings.validate_password',
     UPDATE_SECURITY: 'settings.update_security',
     LIST_ALLOWED_IPS: 'settings.list_allowed_ips',
     ADD_ALLOWED_IP: 'settings.add_allowed_ip',
@@ -569,6 +571,7 @@ export const MESSAGE_PATTERNS = {
     ADD_DOMAIN: 'settings.add_domain',
     UPDATE_DOMAIN: 'settings.update_domain',
     REMOVE_DOMAIN: 'settings.remove_domain',
+    VERIFY_DOMAIN: 'settings.verify_domain',
     GET_MAINTENANCE: 'settings.get_maintenance',
     UPDATE_MAINTENANCE: 'settings.update_maintenance',
     GET_MAINTENANCE_STATE: 'settings.get_maintenance_state',

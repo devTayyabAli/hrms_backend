@@ -66,6 +66,9 @@ import {
   CurrentUser,
 } from '@app/tenant-context';
 import { IpAllowlistGuard } from '../guards/ip-allowlist.guard';
+import { MaintenanceModeGuard } from '../guards/maintenance-mode.guard';
+import { ExportPolicyGuard } from '../guards/export-policy.guard';
+import { sendFileResponse } from '../utils/file-response.helper';
 import { requestLocation } from '../utils/request-location';
 
 @Controller('superadmin')
@@ -77,7 +80,13 @@ export class SuperAdminController {
     @Inject(SERVICES.AUTH_SERVICE) private readonly authClient: ClientProxy,
     @Inject(SERVICES.TENANT_SERVICE) private readonly tenantClient: ResilientClientProxy,
     @Inject(SERVICES.USER_SERVICE) private readonly userClient: ClientProxy,
+    private readonly ipAllowlist: IpAllowlistGuard,
   ) { }
+
+  /** The address this request came from, as the allowlist sees it. */
+  private callerIp(req: Request): string {
+    return String(req.ip || req.socket?.remoteAddress || '').replace(/^::ffff:(?=\d)/i, '');
+  }
 
   @ApiTags(TAGS.SA_AUTH)
   @Post('login')
@@ -375,8 +384,11 @@ export class SuperAdminController {
   @Put('settings/general')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'SuperAdmin: Update General Settings' })
-  updateGeneralSettings(@Body() dto: UpdateGeneralSettingsDto) {
-    return this.authClient.send(MESSAGE_PATTERNS.SETTINGS.UPDATE_GENERAL, dto);
+  async updateGeneralSettings(@Body() dto: UpdateGeneralSettingsDto) {
+    const result = await firstValueFrom(this.authClient.send(MESSAGE_PATTERNS.SETTINGS.UPDATE_GENERAL, dto));
+    // The export switch applies on the next request.
+    ExportPolicyGuard.invalidateAll();
+    return result;
   }
 
   // ==========================================
@@ -397,16 +409,23 @@ export class SuperAdminController {
   @Post('settings/security/allowed-ips')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'SuperAdmin: Add an IP address/CIDR to the access allowlist' })
-  addAllowedIp(@Body() dto: AddAllowedIpDto) {
-    return this.authClient.send(MESSAGE_PATTERNS.SETTINGS.ADD_ALLOWED_IP, dto);
+  async addAllowedIp(@Body() dto: AddAllowedIpDto) {
+    const result = await firstValueFrom(this.authClient.send(MESSAGE_PATTERNS.SETTINGS.ADD_ALLOWED_IP, dto));
+    this.ipAllowlist.invalidate();
+    return result;
   }
 
   @ApiTags(TAGS.SA_SYSTEM)
   @Delete('settings/security/allowed-ips/:id')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'SuperAdmin: Remove an IP address/CIDR from the access allowlist' })
-  removeAllowedIp(@Param('id') id: string) {
-    return this.authClient.send(MESSAGE_PATTERNS.SETTINGS.REMOVE_ALLOWED_IP, { id });
+  async removeAllowedIp(@Param('id') id: string, @Req() req: Request) {
+    // The caller's address goes along so removing their own entry is refused.
+    const result = await firstValueFrom(
+      this.authClient.send(MESSAGE_PATTERNS.SETTINGS.REMOVE_ALLOWED_IP, { id, callerIp: this.callerIp(req) }),
+    );
+    this.ipAllowlist.invalidate();
+    return result;
   }
 
   @ApiTags(TAGS.SA_SYSTEM)
@@ -416,8 +435,10 @@ export class SuperAdminController {
     summary:
       'SuperAdmin: Get Security Settings (password policy, per-role 2FA flags, 2FA method, IP allowlist toggle)',
   })
-  getSecuritySettings() {
-    return this.authClient.send(MESSAGE_PATTERNS.SETTINGS.GET_SECURITY, {});
+  async getSecuritySettings(@Req() req: Request) {
+    const settings: any = await firstValueFrom(this.authClient.send(MESSAGE_PATTERNS.SETTINGS.GET_SECURITY, {}));
+    // So the screen can show "your IP" and offer to add it before the allowlist goes on.
+    return { ...settings, callerIp: this.callerIp(req) };
   }
 
   @ApiTags(TAGS.SA_SYSTEM)
@@ -425,10 +446,14 @@ export class SuperAdminController {
   @ApiBearerAuth()
   @ApiOperation({
     summary:
-      'SuperAdmin: Update Security Settings. Password policy + SuperAdmin 2FA requirement + IP allowlist are enforced for real; the other per-role 2FA flags are stored only (those login paths do not exist yet).',
+      'SuperAdmin: Update Security Settings — password policy and expiry, Super Admin 2FA, lockout, session idle timeout, IP allowlist. Turning the allowlist on is refused if it would shut out the caller.',
   })
-  updateSecuritySettings(@Body() dto: UpdateSecuritySettingsDto) {
-    return this.authClient.send(MESSAGE_PATTERNS.SETTINGS.UPDATE_SECURITY, dto);
+  async updateSecuritySettings(@Body() dto: UpdateSecuritySettingsDto, @Req() req: Request) {
+    const result = await firstValueFrom(
+      this.authClient.send(MESSAGE_PATTERNS.SETTINGS.UPDATE_SECURITY, { dto, callerIp: this.callerIp(req) }),
+    );
+    this.ipAllowlist.invalidate();
+    return result;
   }
 
   // ==========================================
@@ -463,6 +488,14 @@ export class SuperAdminController {
   }
 
   @ApiTags(TAGS.SA_SYSTEM)
+  @Post('settings/domains/:id/verify')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "SuperAdmin: Re-check a domain's DNS record and HTTPS certificate now" })
+  verifyDomain(@Param('id') id: string) {
+    return this.authClient.send(MESSAGE_PATTERNS.SETTINGS.VERIFY_DOMAIN, { id });
+  }
+
+  @ApiTags(TAGS.SA_SYSTEM)
   @Delete('settings/domains/:id')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'SuperAdmin: Remove a configured domain' })
@@ -489,8 +522,11 @@ export class SuperAdminController {
     summary:
       'SuperAdmin: Update Maintenance settings. Maintenance Mode is enforced for real (503 for non-SuperAdmin traffic); the System Update fields are stored preferences only.',
   })
-  updateMaintenanceSettings(@Body() dto: UpdateMaintenanceSettingsDto) {
-    return this.authClient.send(MESSAGE_PATTERNS.SETTINGS.UPDATE_MAINTENANCE, dto);
+  async updateMaintenanceSettings(@Body() dto: UpdateMaintenanceSettingsDto) {
+    const result = await firstValueFrom(this.authClient.send(MESSAGE_PATTERNS.SETTINGS.UPDATE_MAINTENANCE, dto));
+    // On or off takes effect on the next request, not after the guard's cache expires.
+    MaintenanceModeGuard.invalidateAll();
+    return result;
   }
 
   // ==========================================
@@ -532,7 +568,9 @@ export class SuperAdminController {
   @ApiTags(TAGS.SA_SYSTEM)
   @Post('backups')
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'SuperAdmin: Create Backup Now (real dump of the platform DB + every tenant DB)' })
+  @ApiOperation({
+    summary: 'SuperAdmin: Start a backup of the platform DB and every tenant DB. Returns at once with the in-progress record; poll the list for the result.',
+  })
   createBackupNow(@Req() req: any) {
     return this.tenantClient.send(MESSAGE_PATTERNS.BACKUP.CREATE_NOW, {
       triggeredBy: req?.user?.id || req?.user?.sub || 'superadmin',
@@ -545,6 +583,24 @@ export class SuperAdminController {
   @ApiOperation({ summary: 'SuperAdmin: Recent Backups table (paginated)' })
   listBackups(@Query() query: GetBackupsQueryDto) {
     return this.tenantClient.send(MESSAGE_PATTERNS.BACKUP.LIST, query);
+  }
+
+  @ApiTags(TAGS.SA_SYSTEM)
+  @Get('backups/:id/download')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'SuperAdmin: Download a completed backup (gzipped JSON of every database)' })
+  async downloadBackup(@Param('id') id: string, @Res() res: Response) {
+    const backup: any = await firstValueFrom(this.tenantClient.send(MESSAGE_PATTERNS.BACKUP.GET_ONE, { id }));
+    if (!backup?.fileId || backup.status !== 'SUCCESS') {
+      return res.status(404).json({ statusCode: 404, message: 'This backup has no file to download.' });
+    }
+    const file: any = await firstValueFrom(
+      this.authClient.send(MESSAGE_PATTERNS.FILE.DOWNLOAD_FILE, { fileId: backup.fileId, userTenantId: 'platform' }),
+    );
+    if (!file?.buffer) {
+      return res.status(404).json({ statusCode: 404, message: 'The backup file is no longer in storage.' });
+    }
+    return sendFileResponse(res, file, false);
   }
 
   @ApiTags(TAGS.SA_SYSTEM)

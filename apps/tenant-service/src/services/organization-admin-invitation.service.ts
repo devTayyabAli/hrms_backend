@@ -323,6 +323,20 @@ export class OrganizationAdminInvitationService {
     // Step 1: Validate Token
     await this.validateInvitationToken(data.token);
 
+    // The configured password policy (Security tab) is checked before the
+    // admin's user is created, not after — a refused password would otherwise
+    // leave a user with no way to sign in.
+    try {
+      await firstValueFrom(
+        this.authClient.send(MESSAGE_PATTERNS.SETTINGS.VALIDATE_PASSWORD, { password: data.password }).pipe(timeout(10000)),
+      );
+    } catch (error: any) {
+      throw new TenantException(
+        TenantErrorCode.INVALID_TENANT_CONTEXT,
+        error?.message || "The password doesn't meet the platform's password policy.",
+      );
+    }
+
     const tokenHash = this.hashToken(data.token);
     const invitation = await this.invitationModel.findOne({
       where: { tokenHash },

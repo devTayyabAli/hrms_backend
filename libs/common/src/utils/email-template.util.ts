@@ -7,6 +7,9 @@ export class EmailTemplateUtil {
     variables: Record<string, any>,
   ): { html: string; text: string } {
     const year = new Date().getFullYear();
+    // Branding comes from admin-editable settings, so it is escaped like any input.
+    const esc = (value: unknown) =>
+      String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
     const fromName = variables.fromName || 'HRMS Platform';
 
     let contentHtml = '';
@@ -108,6 +111,15 @@ export class EmailTemplateUtil {
         textFallback = variables.messageText || '';
         break;
 
+      // A plain announcement whose text may come from an administrator: escaped, line breaks kept.
+      case 'notice':
+        contentHtml = `
+          <h2 style="color: #1e293b; margin-top: 0;">${esc(variables.title || 'Notice')}</h2>
+          <p style="color: #334155; line-height: 1.6;">${esc(variables.message || '').replace(/\n/g, '<br>')}</p>
+        `;
+        textFallback = `${variables.title || 'Notice'}\n\n${variables.message || ''}`;
+        break;
+
       default:
         contentHtml = `
           <h2 style="color: #1e293b; margin-top: 0;">${variables.title || 'System Notification'}</h2>
@@ -127,11 +139,13 @@ export class EmailTemplateUtil {
       <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 40px 20px;">
         <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0; padding: 32px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
           <div style="border-bottom: 2px solid #2563eb; padding-bottom: 16px; margin-bottom: 24px;">
-            <span style="font-weight: bold; font-size: 20px; color: #0f172a;">${fromName}</span>
+            <span style="font-weight: bold; font-size: 20px; color: #0f172a;">${esc(fromName)}</span>
+            ${variables.tagline ? `<div style="font-size: 13px; color: #64748b; margin-top: 4px;">${esc(variables.tagline)}</div>` : ''}
           </div>
           ${contentHtml}
           <div style="margin-top: 32px; border-top: 1px solid #e2e8f0; padding-top: 16px; font-size: 12px; color: #94a3b8; text-align: center;">
-            © ${year} ${fromName}. All rights reserved.
+            © ${year} ${esc(variables.companyName || fromName)}. All rights reserved.
+            ${variables.supportEmail ? `<div style="margin-top: 6px;">Questions? Contact <a href="mailto:${esc(variables.supportEmail)}" style="color: #2563eb;">${esc(variables.supportEmail)}</a></div>` : ''}
           </div>
         </div>
       </body>

@@ -79,6 +79,16 @@ export class SecuritySettings extends Model {
   @Column
   declare maxFailedLoginAttempts: number;
 
+  /** Minutes without activity before a session is signed out. 0 = never. */
+  @Default(0)
+  @Column({ type: DataType.INTEGER, allowNull: false })
+  declare sessionIdleTimeoutMinutes: number;
+
+  /** Days before a password must be changed at the next sign-in. 0 = never. */
+  @Default(0)
+  @Column({ type: DataType.INTEGER, allowNull: false })
+  declare passwordExpiryDays: number;
+
   @CreatedAt
   declare createdAt: Date;
 
