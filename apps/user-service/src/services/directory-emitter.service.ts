@@ -43,7 +43,12 @@ export class DirectoryEmitterService {
 
   /** Flattens a user row (with roles loaded) into the projection's columns. */
   payloadFor(user: any): DirectoryPayload {
-    const primaryRole = user.roles?.[0];
+    // The highest-tier role, not whichever row came first: a person invited
+    // as HR also holds Employee, and an admin may hold either as well.
+    const roles: { name?: string }[] = user.roles ?? [];
+    const rank = (name?: string) =>
+      ({ ADMIN: 0, HR: 1, EMPLOYEE: 2 })[categorizeRoleName(name) as string] ?? 3;
+    const primaryRole = [...roles].sort((a, b) => rank(a?.name) - rank(b?.name))[0];
     return {
       name: [user.firstName, user.lastName].filter(Boolean).join(' ') || user.email,
       email: user.email,

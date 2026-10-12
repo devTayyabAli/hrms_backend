@@ -54,13 +54,15 @@ export class UserService {
     firstName?: string;
     lastName?: string;
   }): Promise<User> {
-    return this.tenantContextService.run({ tenantId: data.tenantId }, async () => {
+    let created = false;
+    const admin = await this.tenantContextService.run({ tenantId: data.tenantId }, async () => {
       const UserModel = await this.modelProvider.getUserModel();
       const RoleModel = await this.modelProvider.getRoleModel();
       const UserRoleModel = await this.modelProvider.getUserRoleModel();
 
       let user = await UserModel.findOne({ where: { email: data.email } });
       if (!user) {
+        created = true;
         user = await UserModel.create({
           email: data.email,
           firstName: data.firstName || 'Admin',
@@ -101,6 +103,23 @@ export class UserService {
 
       return user;
     });
+
+    // Without this the admin never reached the SuperAdmin Clients directory.
+    await this.emitDirectoryFor(data.tenantId, admin.id, created);
+    return admin;
+  }
+
+  /** Loads the user with roles and publishes it to the directory. Never throws. */
+  private async emitDirectoryFor(tenantId: string, userId: string, created: boolean): Promise<void> {
+    try {
+      await this.emitDirectory(
+        tenantId,
+        await this.getUserById(tenantId, userId),
+        created ? ProjectionEventType.CREATED : ProjectionEventType.UPDATED,
+      );
+    } catch {
+      // The account exists either way; the hourly sweep or a rebuild catches it up.
+    }
   }
 
   /**
@@ -118,13 +137,15 @@ export class UserService {
     lastName?: string;
     role: string;
   }): Promise<User> {
-    return this.tenantContextService.run({ tenantId: data.tenantId }, async () => {
+    let created = false;
+    const employee = await this.tenantContextService.run({ tenantId: data.tenantId }, async () => {
       const UserModel = await this.modelProvider.getUserModel();
       const RoleModel = await this.modelProvider.getRoleModel();
       const UserRoleModel = await this.modelProvider.getUserRoleModel();
 
       let user = await UserModel.findOne({ where: { email: data.email } });
       if (!user) {
+        created = true;
         user = await UserModel.create({
           email: data.email,
           firstName: data.firstName || 'Employee',
@@ -165,6 +186,9 @@ export class UserService {
 
       return user;
     });
+
+    await this.emitDirectoryFor(data.tenantId, employee.id, created);
+    return employee;
   }
 
   /**

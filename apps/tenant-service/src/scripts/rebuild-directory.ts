@@ -109,7 +109,14 @@ async function rebuildTenant(
                  FROM user_roles ur
                  JOIN roles r ON r.id = ur."roleId"
                 WHERE ur."userId" = u.id
-                ORDER BY r.name ASC
+                -- Highest tier first, as DirectoryEmitterService picks it:
+                -- an HR also holds Employee, and "Employee" sorts before "HR".
+                ORDER BY CASE
+                           WHEN UPPER(r.name) LIKE '%ADMIN%' THEN 0
+                           WHEN UPPER(r.name) LIKE '%HR%' THEN 1
+                           WHEN UPPER(r.name) LIKE '%EMPLOYEE%' THEN 2
+                           ELSE 3
+                         END, r.name ASC
                 LIMIT 1) AS "roleName"
          FROM users u`,
       { type: QueryTypes.SELECT },
