@@ -64,8 +64,15 @@ export class SupportTicket extends Model {
   @Column({ type: DataType.STRING, allowNull: true })
   declare createdByRole: string | null;
 
-  /** The organization that raised it; null for a Super Admin's own ticket. */
-  @Index
+  /**
+   * The organization that raised it; null for a Super Admin's own ticket.
+   *
+   * Deliberately not `@Index`ed: `sync()` creates a model's indexes before
+   * `PlatformSchemaService` adds its missing columns, so an index on a column
+   * added after the table existed fails on startup with the column absent —
+   * and takes the whole service down. A platform's tickets are few enough
+   * not to need one.
+   */
   @Column({ type: DataType.UUID, allowNull: true })
   declare tenantId: string | null;
 
