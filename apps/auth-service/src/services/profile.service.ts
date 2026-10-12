@@ -26,6 +26,8 @@ import { PlatformNotificationCategory } from '../models';
 
 /** Idle this long, a session recorded without an expiresAt is treated as expired (the default refresh-token lifetime). */
 const STALE_SESSION_MS = 7 * 24 * 60 * 60 * 1000;
+/** Seen within this long counts as "online" — a signed-in tab in use pings about once a minute. */
+const ONLINE_WINDOW_MS = 5 * 60 * 1000;
 /** Logged-out history returned to the Sessions screen. */
 const LOGGED_OUT_SESSIONS_SHOWN = 50;
 
@@ -516,19 +518,31 @@ export class ProfileService {
      * unless a geo-IP provider is wired up — see the session-creation comment
      * in AuthService.
      */
-    const toRow = (s: UserSession) => ({
-      id: s.id,
-      deviceBrowser: `${s.device || 'Unknown Device'} / ${s.browser || 'Unknown Browser'}`,
-      device: s.device || null,
-      browser: s.browser || null,
-      operatingSystem: s.operatingSystem || null,
-      location: s.location || null,
-      ipAddress: s.ipAddress || null,
-      lastActiveAt: s.lastActiveAt || s.createdAt,
-      status: s.status,
-      isCurrent: !!currentSessionId && s.id === currentSessionId,
-      loggedOutAt: s.status === 'active' ? null : s.revokedAt || s.updatedAt,
-    });
+    const now = Date.now();
+    const toRow = (s: UserSession) => {
+      // `lastActiveAt` only moves on a token refresh; the once-a-minute
+      // activity ping writes `lastInteractionAt`. The later of the two is
+      // when the device was last actually seen.
+      const seen = [s.lastInteractionAt, s.lastActiveAt, s.createdAt]
+        .filter(Boolean)
+        .map((value) => new Date(value as Date).getTime());
+      const lastSeen = seen.length ? new Date(Math.max(...seen)) : null;
+      return {
+        id: s.id,
+        deviceBrowser: `${s.device || 'Unknown Device'} / ${s.browser || 'Unknown Browser'}`,
+        device: s.device || null,
+        browser: s.browser || null,
+        operatingSystem: s.operatingSystem || null,
+        location: s.location || null,
+        ipAddress: s.ipAddress || null,
+        lastActiveAt: lastSeen,
+        status: s.status,
+        isCurrent: !!currentSessionId && s.id === currentSessionId,
+        isOnline:
+          s.status === 'active' && !!lastSeen && now - lastSeen.getTime() < ONLINE_WINDOW_MS,
+        loggedOutAt: s.status === 'active' ? null : s.revokedAt || s.updatedAt,
+      };
+    };
 
     const activeSessions = sessions.filter((s) => s.status === 'active').map(toRow);
     // History, not state: the most recent ones are what anyone reads.

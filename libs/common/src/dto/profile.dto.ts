@@ -10,6 +10,7 @@ import {
   IsDefined,
   ValidateNested,
   ValidateIf,
+  MaxLength,
 } from 'class-validator';
 
 /**
@@ -20,7 +21,7 @@ import {
  */
 const E164_PHONE = /^\+[1-9]\d{7,14}$/;
 const E164_MESSAGE = 'Enter a valid phone number in international format, e.g. +923001234567.';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsStrongPassword } from '../validators/strong-password.validator';
 
@@ -31,14 +32,21 @@ export enum NotificationFrequency {
 }
 
 export class UpdateProfileDto {
+  // Optional to send, but a name can't be cleared to blank.
   @ApiPropertyOptional({ example: 'Asma' })
   @IsOptional()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
+  @IsNotEmpty({ message: 'First name is required.' })
+  @MaxLength(50, { message: 'First name can be at most 50 characters.' })
   firstName?: string;
 
   @ApiPropertyOptional({ example: 'Aslam' })
   @IsOptional()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
+  @IsNotEmpty({ message: 'Last name is required.' })
+  @MaxLength(50, { message: 'Last name can be at most 50 characters.' })
   lastName?: string;
 
   @ApiPropertyOptional({ example: '+15551234567' })
