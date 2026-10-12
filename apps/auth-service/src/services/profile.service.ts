@@ -26,8 +26,12 @@ import { PlatformNotificationCategory } from '../models';
 
 /** Idle this long, a session recorded without an expiresAt is treated as expired (the default refresh-token lifetime). */
 const STALE_SESSION_MS = 7 * 24 * 60 * 60 * 1000;
-/** Seen within this long counts as "online" — a signed-in tab in use pings about once a minute. */
-const ONLINE_WINDOW_MS = 5 * 60 * 1000;
+/**
+ * Seen within this long counts as "online". Every open, signed-in tab sends
+ * a heartbeat about once a minute; the slack covers browsers that slow timers
+ * in background tabs.
+ */
+const ONLINE_WINDOW_MS = 3 * 60 * 1000;
 /** Logged-out history returned to the Sessions screen. */
 const LOGGED_OUT_SESSIONS_SHOWN = 50;
 

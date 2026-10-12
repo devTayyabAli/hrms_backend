@@ -625,7 +625,7 @@ export class AuthMicroserviceController {
   /** The browser saw the person use the app — moves the session's idle clock. */
   @MessagePattern(MESSAGE_PATTERNS.AUTH.TOUCH_SESSION)
   touchSession(@Payload() payload: SessionStateQueryDto) {
-    return this.authService.touchSession(payload.sessionId);
+    return this.authService.touchSession(payload.sessionId, payload.presenceOnly);
   }
 
   @MessagePattern(MESSAGE_PATTERNS.SETTINGS.UPDATE_SECURITY)

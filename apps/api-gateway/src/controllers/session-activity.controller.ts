@@ -33,4 +33,23 @@ export class SessionActivityController {
     }
     return { idleTimeoutMinutes: result.idleTimeoutMinutes, passwordExpired: Boolean(result.passwordExpired) };
   }
+
+  /**
+   * Sent about once a minute by every open, signed-in tab — touched or not —
+   * so the Sessions list can show which devices are online right now. It
+   * doesn't count as activity: an untouched tab still times out.
+   */
+  @Post('heartbeat')
+  @HttpCode(204)
+  @ApiOperation({ summary: 'Mark this device as present (online) without counting as activity' })
+  async heartbeat(@CurrentUser('sid') sessionId?: string) {
+    if (!sessionId) throw new UnauthorizedException('No session on this token.');
+    const result: { active: boolean } = await firstValueFrom(
+      this.authClient.send(MESSAGE_PATTERNS.AUTH.TOUCH_SESSION, { sessionId, presenceOnly: true }),
+    );
+    if (!result.active) {
+      JwtAuthGuard.forgetSession(sessionId);
+      throw new UnauthorizedException('This session has ended. Please sign in again.');
+    }
+  }
 }

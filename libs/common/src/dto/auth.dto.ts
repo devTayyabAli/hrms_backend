@@ -509,4 +509,13 @@ export class GetLastLoginsDto {
 export class SessionStateQueryDto {
   @IsUUID()
   sessionId: string;
+
+  /**
+   * `auth.touch_session` only: the tab is open, but nobody touched it. Marks
+   * the device as present for the Sessions list without counting as
+   * activity for the idle timeout.
+   */
+  @IsOptional()
+  @IsBoolean()
+  presenceOnly?: boolean;
 }

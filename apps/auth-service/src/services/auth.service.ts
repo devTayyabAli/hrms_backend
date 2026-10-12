@@ -288,7 +288,7 @@ export class AuthService implements OnModuleInit {
    * The browser reports that the person is using the app. Moves the idle
    * clock and answers with the timeout, so the page can sign out on time.
    */
-  async touchSession(sessionId: string): Promise<{
+  async touchSession(sessionId: string, presenceOnly = false): Promise<{
     active: boolean;
     idleTimeoutMinutes: number;
     passwordExpired: boolean;
@@ -302,8 +302,11 @@ export class AuthService implements OnModuleInit {
         idleTimeoutMinutes: sessionIdleTimeoutMinutes,
         passwordExpired: false,
       };
+    // A presence heartbeat (tab open, untouched) moves only `lastActiveAt`,
+    // so it shows the device as online without holding off the idle timeout,
+    // which reads `lastInteractionAt`.
     await this.userSessionModel.update(
-      { lastInteractionAt: new Date() },
+      presenceOnly ? { lastActiveAt: new Date() } : { lastInteractionAt: new Date() },
       { where: { id: sessionId, status: 'active' } },
     );
     return {
