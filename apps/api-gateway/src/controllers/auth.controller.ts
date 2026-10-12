@@ -1,4 +1,12 @@
-import { Controller, Post, Body, Inject, Req, Res, UnauthorizedException } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Body,
+  Inject,
+  Req,
+  Res,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { TAGS } from '../swagger/swagger-tags';
 import { ClientProxy } from '@nestjs/microservices';
@@ -10,7 +18,6 @@ import { requestLocation } from '../utils/request-location';
 import {
   SERVICES,
   MESSAGE_PATTERNS,
-  RegisterTenantDto,
   LoginDto,
   VerifyTwoFactorChallengeDto,
   RefreshTokenDto,
@@ -58,19 +65,21 @@ export class ApiGatewayAuthController {
     return withoutRefreshToken(result);
   }
 
-  @ApiTags(TAGS.ORG_AUTH)
-  @Post('register-tenant')
-  @Throttle({ default: { limit: 5, ttl: 60000 } })
-  @ApiOperation({ summary: 'Onboard organization via Auth Microservice' })
-  registerTenant(@Body() dto: RegisterTenantDto) {
-    return this.authClient.send(MESSAGE_PATTERNS.AUTH.REGISTER_TENANT, dto);
-  }
+  // There is deliberately no self-service "register tenant" route. It used to
+  // take the tenant id from the request and make the caller its Admin, which
+  // let anyone who knew an organization's id take it over. Organizations are
+  // created only by the Super Admin (superadmin/organizations/*), and their
+  // admins join through the emailed invitation.
 
   @ApiTags(TAGS.ORG_AUTH)
   @Post('login')
   @Throttle({ default: { limit: 5, ttl: 60000 } })
   @ApiOperation({ summary: 'Authenticate user via Auth Microservice' })
-  async login(@Body() dto: LoginDto, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
+  async login(
+    @Body() dto: LoginDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     const result = await firstValueFrom(
       this.authClient.send(MESSAGE_PATTERNS.AUTH.LOGIN, {
         dto,
@@ -127,7 +136,9 @@ export class ApiGatewayAuthController {
 
   @ApiTags(TAGS.ORG_AUTH)
   @Post('refresh')
-  @ApiOperation({ summary: 'Exchange the refresh token cookie for a new access token' })
+  @ApiOperation({
+    summary: 'Exchange the refresh token cookie for a new access token',
+  })
   async refreshToken(
     @Body() dto: RefreshTokenDto,
     @Req() req: Request,
@@ -137,7 +148,9 @@ export class ApiGatewayAuthController {
     if (!refreshToken) {
       // Distinguishable from a rejected token only by message — both are 401,
       // so a caller can't probe for whether a session exists.
-      throw new UnauthorizedException('No refresh token supplied. Please log in again.');
+      throw new UnauthorizedException(
+        'No refresh token supplied. Please log in again.',
+      );
     }
 
     try {
@@ -160,7 +173,9 @@ export class ApiGatewayAuthController {
 
   @ApiTags(TAGS.ORG_AUTH)
   @Post('logout')
-  @ApiOperation({ summary: 'Revoke the session tied to the refresh token cookie' })
+  @ApiOperation({
+    summary: 'Revoke the session tied to the refresh token cookie',
+  })
   async logout(
     @Body() dto: LogoutDto,
     @Req() req: Request,

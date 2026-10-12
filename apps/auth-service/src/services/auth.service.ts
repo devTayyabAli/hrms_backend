@@ -21,7 +21,6 @@ import * as bcrypt from 'bcrypt';
 import { randomUUID } from 'crypto';
 import { SuperAdmin, AuthCredential, UserSession } from '../models';
 import {
-  RegisterTenantDto,
   LoginDto,
   SuperAdminLoginDto,
   OnboardOrganizationDto,
@@ -289,9 +288,7 @@ export class AuthService implements OnModuleInit {
    * The browser reports that the person is using the app. Moves the idle
    * clock and answers with the timeout, so the page can sign out on time.
    */
-  async touchSession(
-    sessionId: string,
-  ): Promise<{
+  async touchSession(sessionId: string): Promise<{
     active: boolean;
     idleTimeoutMinutes: number;
     passwordExpired: boolean;
@@ -1030,46 +1027,6 @@ export class AuthService implements OnModuleInit {
     });
 
     return { message: 'Password reset successfully.' };
-  }
-
-  async registerTenant(dto: RegisterTenantDto) {
-    const existing = await this.credentialModel.findOne({
-      where: { email: dto.adminEmail },
-    });
-    if (existing) {
-      throw new BadRequestException('Email already registered');
-    }
-    await this.passwordPolicyService.validate(dto.password);
-
-    const passwordHash = await bcrypt.hash(dto.password, BCRYPT_SALT_ROUNDS);
-    const credential = await this.credentialModel.create({
-      email: dto.adminEmail,
-      passwordHash,
-      tenantId: dto.domain,
-      tenantName: dto.companyName,
-      role: 'Admin',
-      passwordHistory: [passwordHash],
-      passwordLastChangedAt: new Date(),
-    });
-
-    const { accessToken, refreshToken } = await this.issueTokenPair(
-      {
-        sub: credential.id,
-        id: credential.id,
-        email: credential.email,
-        tenantId: credential.tenantId,
-        role: 'Admin',
-        roles: ['Admin'],
-      },
-      { authCredentialId: credential.id },
-    );
-
-    return {
-      message: 'Tenant registered successfully',
-      accessToken,
-      refreshToken,
-      tenant: { id: credential.tenantId, name: credential.tenantName },
-    };
   }
 
   async login(

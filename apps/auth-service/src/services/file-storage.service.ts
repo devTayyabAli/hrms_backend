@@ -124,7 +124,8 @@ export class FileStorageService implements OnModuleInit {
 
   constructor(
     private readonly configService: ConfigService,
-    @InjectModel(FileMetadata) private readonly fileMetadataModel: typeof FileMetadata,
+    @InjectModel(FileMetadata)
+    private readonly fileMetadataModel: typeof FileMetadata,
   ) {}
 
   async onModuleInit() {
@@ -135,7 +136,12 @@ export class FileStorageService implements OnModuleInit {
     const s3Endpoint = this.configService.get<string>('AWS_S3_ENDPOINT');
     const providerOverride = this.configService.get<string>('STORAGE_PROVIDER');
 
-    if ((providerOverride === 's3' || (!providerOverride && s3Key && s3Bucket)) && s3Key && s3Secret && s3Bucket) {
+    if (
+      (providerOverride === 's3' || (!providerOverride && s3Key && s3Bucket)) &&
+      s3Key &&
+      s3Secret &&
+      s3Bucket
+    ) {
       this.activeProvider = new S3StorageProvider({
         accessKeyId: s3Key,
         secretAccessKey: s3Secret,
@@ -144,12 +150,19 @@ export class FileStorageService implements OnModuleInit {
         endpoint: s3Endpoint,
       });
       this.providerType = 's3';
-      this.logger.log(`FileStorageService initialized with AWS S3 provider (Bucket: ${s3Bucket}).`);
+      this.logger.log(
+        `FileStorageService initialized with AWS S3 provider (Bucket: ${s3Bucket}).`,
+      );
     } else {
-      const localPath = this.configService.get<string>('LOCAL_STORAGE_PATH', './uploads');
+      const localPath = this.configService.get<string>(
+        'LOCAL_STORAGE_PATH',
+        './uploads',
+      );
       this.activeProvider = new LocalStorageProvider(localPath);
       this.providerType = 'local';
-      this.logger.log(`FileStorageService initialized with Local Folder provider (Path: ${localPath}).`);
+      this.logger.log(
+        `FileStorageService initialized with Local Folder provider (Path: ${localPath}).`,
+      );
     }
   }
 
@@ -157,7 +170,12 @@ export class FileStorageService implements OnModuleInit {
    * Upload file, store binary in S3/Local, and record metadata in database
    */
   async uploadFile(
-    file: { buffer: Buffer; originalname: string; mimetype: string; size?: number },
+    file: {
+      buffer: Buffer;
+      originalname: string;
+      mimetype: string;
+      size?: number;
+    },
     payload: {
       tenantId?: string;
       uploadedBy: string;
@@ -173,17 +191,26 @@ export class FileStorageService implements OnModuleInit {
 
     const fileSize = file.size || file.buffer.length;
     if (fileSize > this.maxFileSizeBytes) {
-      throw new BadRequestException(`File size exceeds maximum allowed limit of ${this.maxFileSizeBytes / (1024 * 1024)}MB.`);
+      throw new BadRequestException(
+        `File size exceeds maximum allowed limit of ${this.maxFileSizeBytes / (1024 * 1024)}MB.`,
+      );
     }
 
     if (!this.allowedMimeTypes.has(file.mimetype)) {
-      throw new BadRequestException(`File MIME type '${file.mimetype}' is not permitted.`);
+      throw new BadRequestException(
+        `File MIME type '${file.mimetype}' is not permitted.`,
+      );
     }
 
     const ext = path.extname(file.originalname).toLowerCase() || '.bin';
     const safeExt = ext.replace(/[^a-z0-9.]/g, '');
-    const tenantFolder = payload.tenantId ? `tenant_${payload.tenantId}` : 'platform';
-    const categoryFolder = (payload.category || 'general').replace(/[^a-z0-9_-]/gi, '');
+    const tenantFolder = payload.tenantId
+      ? `tenant_${payload.tenantId}`
+      : 'platform';
+    const categoryFolder = (payload.category || 'general').replace(
+      /[^a-z0-9_-]/gi,
+      '',
+    );
     const randomName = `${Date.now()}_${crypto.randomBytes(8).toString('hex')}${safeExt}`;
     const storageKey = `${tenantFolder}/${categoryFolder}/${randomName}`;
 
@@ -363,8 +390,13 @@ export class FileStorageService implements OnModuleInit {
    * breakdown. Backup artifacts are uploaded under the 'backups' category
    * (see BackupService), so they're reported separately from user files.
    */
-  async getStorageBreakdown(): Promise<{ filesBytes: number; backupsBytes: number }> {
-    const rows = await this.fileMetadataModel.findAll({ attributes: ['category', 'size'] });
+  async getStorageBreakdown(): Promise<{
+    filesBytes: number;
+    backupsBytes: number;
+  }> {
+    const rows = await this.fileMetadataModel.findAll({
+      attributes: ['category', 'size'],
+    });
 
     let filesBytes = 0;
     let backupsBytes = 0;
@@ -384,13 +416,24 @@ export class FileStorageService implements OnModuleInit {
    * boot (a full round-trip to the bucket on every dashboard load would be a
    * poor trade).
    */
-  async checkHealth(): Promise<{ status: 'up' | 'down'; provider: string; error?: string }> {
+  async checkHealth(): Promise<{
+    status: 'up' | 'down';
+    provider: string;
+    error?: string;
+  }> {
     if (!this.activeProvider) {
-      return { status: 'down', provider: this.providerType, error: 'Storage provider is not initialised.' };
+      return {
+        status: 'down',
+        provider: this.providerType,
+        error: 'Storage provider is not initialised.',
+      };
     }
 
     if (this.providerType === 'local') {
-      const localPath = this.configService.get<string>('LOCAL_STORAGE_PATH', './uploads');
+      const localPath = this.configService.get<string>(
+        'LOCAL_STORAGE_PATH',
+        './uploads',
+      );
       try {
         await fs.mkdir(localPath, { recursive: true });
         await fs.access(localPath, fsConstants.W_OK);
@@ -406,12 +449,16 @@ export class FileStorageService implements OnModuleInit {
    * Enforce tenant isolation rules
    */
   private verifyTenantAccess(record: FileMetadata, userTenantId?: string) {
-    if (!userTenantId || userTenantId === 'platform') {
-      return; // Platform SuperAdmin bypasses tenant check
-    }
+    // Only the gateway's Super Admin routes and platform jobs pass 'platform'.
+    if (userTenantId === 'platform') return;
 
-    if (record.tenantId !== 'platform' && record.tenantId !== userTenantId) {
-      throw new ForbiddenException('Tenant Access Denied: You do not have permission to access this file.');
+    // No tenant is a refusal, never a bypass. And a tenant reaches only its
+    // own files — not platform ones (backups, Super Admin uploads); those that
+    // are meant to be seen are public and served by the public route.
+    if (!userTenantId || record.tenantId !== userTenantId) {
+      throw new ForbiddenException(
+        'You do not have permission to access this file.',
+      );
     }
   }
 }

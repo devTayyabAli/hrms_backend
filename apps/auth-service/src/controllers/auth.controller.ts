@@ -9,7 +9,6 @@ import {
   PlatformNotifyPayloadDto,
   PushSubscribePayloadDto,
   PushUnsubscribePayloadDto,
-  RegisterTenantDto,
   OnboardOrganizationDto,
   ForgotPasswordDto,
   VerifyOtpDto,
@@ -284,11 +283,6 @@ export class AuthMicroserviceController {
   @MessagePattern(MESSAGE_PATTERNS.AUTH.RESET_PASSWORD)
   resetPassword(@Payload() dto: ResetPasswordDto) {
     return this.authService.resetPassword(dto);
-  }
-
-  @MessagePattern(MESSAGE_PATTERNS.AUTH.REGISTER_TENANT)
-  registerTenant(@Payload() dto: RegisterTenantDto) {
-    return this.authService.registerTenant(dto);
   }
 
   @MessagePattern(MESSAGE_PATTERNS.AUTH.LOGIN)

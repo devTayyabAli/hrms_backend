@@ -202,6 +202,10 @@ export class LogoutDto {
     example: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',
     required: false,
   })
+  // Optional: the browser sends an empty body and the token rides in the
+  // httpOnly cookie. Without this, every sign-out failed validation with a
+  // 400 — the session stayed live and the cookie was never cleared.
+  @IsOptional()
   @IsString()
   refreshToken?: string;
 }

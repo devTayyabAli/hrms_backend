@@ -31,7 +31,8 @@
     "db:sync-tenant-columns": "ts-node --transpile-only -r tsconfig-paths/register apps/tenant-service/src/scripts/sync-tenant-columns.ts",
     "db:sync-platform-tenant-columns": "ts-node --transpile-only -r tsconfig-paths/register apps/tenant-service/src/scripts/sync-platform-tenant-columns.ts",
     "db:add-rbac-indexes": "ts-node --transpile-only -r tsconfig-paths/register apps/user-service/src/scripts/add-rbac-indexes.ts",
-    "db:rebuild-directory": "ts-node --transpile-only -r tsconfig-paths/register apps/tenant-service/src/scripts/rebuild-directory.ts"
+    "db:rotate-secrets": "ts-node --transpile-only -r tsconfig-paths/register apps/tenant-service/src/scripts/rotate-secrets.ts",
+    "db:rebuild-directory":"ts-node --transpile-only -r tsconfig-paths/register apps/tenant-service/src/scripts/rebuild-directory.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.131.0",
