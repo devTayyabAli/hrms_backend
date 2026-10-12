@@ -66,14 +66,17 @@ export class MyTeamService {
   }
 
   /**
-   * Whether the signed-in person leads anyone. Never throws — a login with no
-   * employee record (an organization admin) simply leads no one — because the
-   * sidebar asks on every page.
+   * Whether the signed-in person leads anyone, and whether they are an
+   * employee at all. Never throws — a login with no employee record (an
+   * organization admin) simply leads no one — because the sidebar asks on
+   * every page. `hasEmployeeProfile` is what decides whether the personal
+   * pages (My Attendance, Leave, Payslips…) exist for them: a management
+   * account has no attendance, leave balance or pay of its own.
    */
   async getLeadership(tenantId: string, userId: string, email?: string) {
     const me = await this.findMe(tenantId, userId, email);
-    if (!me) return { directReports: 0, departmentsHeaded: 0, isLead: false };
-    return this.leadershipOf(tenantId, me.id);
+    if (!me) return { directReports: 0, departmentsHeaded: 0, isLead: false, hasEmployeeProfile: false };
+    return { ...(await this.leadershipOf(tenantId, me.id)), hasEmployeeProfile: true };
   }
 
   /** The employee row for this login: user id first, then the same email. */

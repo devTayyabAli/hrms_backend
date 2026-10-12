@@ -67,6 +67,14 @@ describe('MyTeamService', () => {
         directReports: 0,
         departmentsHeaded: 0,
         isLead: false,
+        hasEmployeeProfile: false,
+      });
+    });
+
+    it('says an employee has a profile, and an admin without a record does not', async () => {
+      await expect(build().getLeadership(TENANT, 'u-sales')).resolves.toMatchObject({ hasEmployeeProfile: true });
+      await expect(build().getLeadership(TENANT, 'u-admin-without-record')).resolves.toMatchObject({
+        hasEmployeeProfile: false,
       });
     });
   });
