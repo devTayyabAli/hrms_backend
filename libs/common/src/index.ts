@@ -18,6 +18,8 @@ export * from './dto/employee-portal.dto';
 export * from './dto/hr-portal.dto';
 export * from './dto/attendance.dto';
 export * from './dto/leave.dto';
+export * from './dto/shift.dto';
+export * from './dto/chat.dto';
 export * from './dto/recruitment.dto';
 export * from './dto/onboarding.dto';
 export * from './dto/organization-departments.dto';
@@ -221,6 +223,39 @@ export const MESSAGE_PATTERNS = {
     CANCEL: 'leave_request.cancel',
     DELETE: 'leave_request.delete',
     EXPORT: 'leave_request.export',
+  },
+  /** Leave → Balances: every employee's balance per leave type, for one fiscal year. */
+  LEAVE_BALANCE: {
+    GET_ALL: 'leave_balance.get_all',
+    EXPORT: 'leave_balance.export',
+  },
+  /** Messages: one-to-one conversations between people in the organization. */
+  CHAT: {
+    GET_CONVERSATIONS: 'chat.get_conversations',
+    START_CONVERSATION: 'chat.start_conversation',
+    GET_CONVERSATION: 'chat.get_conversation',
+    GET_MESSAGES: 'chat.get_messages',
+    SEND_MESSAGE: 'chat.send_message',
+    MARK_READ: 'chat.mark_read',
+    DELETE_CONVERSATION: 'chat.delete_conversation',
+    GET_ATTACHMENT: 'chat.get_attachment',
+    GET_CONTACTS: 'chat.get_contacts',
+    HEARTBEAT: 'chat.heartbeat',
+    GET_UNREAD: 'chat.get_unread',
+    IDENTIFY: 'chat.identify',
+    GET_PEER: 'chat.get_peer',
+    GO_OFFLINE: 'chat.go_offline',
+  },
+  /** Attendance → Shifts: the organization's shifts and who works them. */
+  SHIFT: {
+    GET_ALL: 'shift.get_all',
+    GET_ONE: 'shift.get_one',
+    CREATE: 'shift.create',
+    UPDATE: 'shift.update',
+    DUPLICATE: 'shift.duplicate',
+    DELETE: 'shift.delete',
+    GET_EMPLOYEES: 'shift.get_employees',
+    SET_EMPLOYEES: 'shift.set_employees',
   },
   /** Recruitment screen: Job Openings table and requisition lifecycle. */
   JOB_OPENING: {

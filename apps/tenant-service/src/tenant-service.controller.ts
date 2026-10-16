@@ -101,6 +101,21 @@ import {
   TenantLeaveRequestIdDto,
   GetLeaveRequestsMessageDto,
   ExportLeaveRequestsMessageDto,
+  GetLeaveBalancesMessageDto,
+  ExportLeaveBalancesMessageDto,
+  GetShiftsMessageDto,
+  ShiftIdMessageDto,
+  CreateShiftMessageDto,
+  UpdateShiftMessageDto,
+  AssignShiftEmployeesMessageDto,
+  ChatCallerDto,
+  GetConversationsMessageDto,
+  StartConversationMessageDto,
+  ConversationIdMessageDto,
+  GetChatMessagesMessageDto,
+  SendChatMessageMessageDto,
+  ChatMessageIdMessageDto,
+  GetChatContactsMessageDto,
   CreateLeaveRequestMessageDto,
   UpdateLeaveRequestMessageDto,
   DecideLeaveRequestMessageDto,
@@ -287,6 +302,9 @@ import { EmployeeService } from './services/employee.service';
 import { AttendanceService } from './services/attendance.service';
 import { OrganizationDepartmentsService } from './services/organization-departments.service';
 import { LeaveRequestService } from './services/leave-request.service';
+import { LeaveBalanceService } from './services/leave-balance.service';
+import { ShiftService } from './services/shift.service';
+import { ChatService } from './services/chat.service';
 import { JobOpeningService } from './services/job-opening.service';
 import { WorkspaceTaskService } from './services/workspace-task.service';
 import { WorkspaceProjectService } from './services/workspace-project.service';
@@ -335,6 +353,9 @@ export class TenantServiceController {
     private attendanceService: AttendanceService,
     private departmentsService: OrganizationDepartmentsService,
     private leaveRequestService: LeaveRequestService,
+    private leaveBalanceService: LeaveBalanceService,
+    private shiftService: ShiftService,
+    private chatService: ChatService,
     private jobOpeningService: JobOpeningService,
     private workspaceTaskService: WorkspaceTaskService,
     private workspaceProjectService: WorkspaceProjectService,
@@ -1657,6 +1678,138 @@ export class TenantServiceController {
       payload.tenantId,
       payload.query,
     );
+  }
+
+  // ==========================================
+  // ADMIN: LEAVE BALANCES TABLE
+  // ==========================================
+
+  @MessagePattern(MESSAGE_PATTERNS.LEAVE_BALANCE.GET_ALL)
+  async handleGetLeaveBalances(@Payload() payload: GetLeaveBalancesMessageDto) {
+    return this.leaveBalanceService.getAll(payload.tenantId, payload.query);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.LEAVE_BALANCE.EXPORT)
+  async handleExportLeaveBalances(@Payload() payload: ExportLeaveBalancesMessageDto) {
+    return this.leaveBalanceService.getAllForExport(payload.tenantId, payload.query);
+  }
+
+  // ==========================================
+  // MESSAGES (one-to-one conversations)
+  // ==========================================
+
+  @MessagePattern(MESSAGE_PATTERNS.CHAT.GET_CONVERSATIONS)
+  async handleGetConversations(@Payload() payload: GetConversationsMessageDto) {
+    return this.chatService.getConversations(payload, payload.query);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.CHAT.START_CONVERSATION)
+  async handleStartConversation(@Payload() payload: StartConversationMessageDto) {
+    return this.chatService.startConversation(payload, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.CHAT.GET_CONVERSATION)
+  async handleGetConversation(@Payload() payload: ConversationIdMessageDto) {
+    return this.chatService.getConversation(payload, payload.conversationId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.CHAT.GET_MESSAGES)
+  async handleGetChatMessages(@Payload() payload: GetChatMessagesMessageDto) {
+    return this.chatService.getMessages(payload, payload.conversationId, payload.query);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.CHAT.SEND_MESSAGE)
+  async handleSendChatMessage(@Payload() payload: SendChatMessageMessageDto) {
+    return this.chatService.sendMessage(payload, payload.conversationId, payload.dto, payload.attachment);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.CHAT.MARK_READ)
+  async handleMarkChatRead(@Payload() payload: ConversationIdMessageDto) {
+    return this.chatService.markRead(payload, payload.conversationId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.CHAT.DELETE_CONVERSATION)
+  async handleDeleteConversation(@Payload() payload: ConversationIdMessageDto) {
+    return this.chatService.removeConversation(payload, payload.conversationId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.CHAT.GET_ATTACHMENT)
+  async handleGetChatAttachment(@Payload() payload: ChatMessageIdMessageDto) {
+    return this.chatService.getAttachment(payload, payload.messageId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.CHAT.GET_CONTACTS)
+  async handleGetChatContacts(@Payload() payload: GetChatContactsMessageDto) {
+    return this.chatService.getContacts(payload, payload.query);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.CHAT.HEARTBEAT)
+  async handleChatHeartbeat(@Payload() payload: ChatCallerDto) {
+    return this.chatService.heartbeat(payload);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.CHAT.IDENTIFY)
+  async handleChatIdentify(@Payload() payload: ChatCallerDto) {
+    return this.chatService.identifyForRealtime(payload);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.CHAT.GET_PEER)
+  async handleChatGetPeer(@Payload() payload: ConversationIdMessageDto) {
+    return this.chatService.getPeer(payload, payload.conversationId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.CHAT.GO_OFFLINE)
+  async handleChatGoOffline(@Payload() payload: ChatCallerDto) {
+    return this.chatService.goOffline(payload);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.CHAT.GET_UNREAD)
+  async handleGetChatUnread(@Payload() payload: ChatCallerDto) {
+    return this.chatService.getUnread(payload);
+  }
+
+  // ==========================================
+  // ADMIN: ATTENDANCE SHIFTS
+  // ==========================================
+
+  @MessagePattern(MESSAGE_PATTERNS.SHIFT.GET_ALL)
+  async handleGetShifts(@Payload() payload: GetShiftsMessageDto) {
+    return this.shiftService.getAll(payload.tenantId, payload.query);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.SHIFT.GET_ONE)
+  async handleGetShift(@Payload() payload: ShiftIdMessageDto) {
+    return this.shiftService.getOne(payload.tenantId, payload.shiftId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.SHIFT.CREATE)
+  async handleCreateShift(@Payload() payload: CreateShiftMessageDto) {
+    return this.shiftService.create(payload.tenantId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.SHIFT.UPDATE)
+  async handleUpdateShift(@Payload() payload: UpdateShiftMessageDto) {
+    return this.shiftService.update(payload.tenantId, payload.shiftId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.SHIFT.DUPLICATE)
+  async handleDuplicateShift(@Payload() payload: ShiftIdMessageDto) {
+    return this.shiftService.duplicate(payload.tenantId, payload.shiftId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.SHIFT.DELETE)
+  async handleDeleteShift(@Payload() payload: ShiftIdMessageDto) {
+    return this.shiftService.remove(payload.tenantId, payload.shiftId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.SHIFT.GET_EMPLOYEES)
+  async handleGetShiftEmployees(@Payload() payload: ShiftIdMessageDto) {
+    return this.shiftService.getEmployees(payload.tenantId, payload.shiftId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.SHIFT.SET_EMPLOYEES)
+  async handleSetShiftEmployees(@Payload() payload: AssignShiftEmployeesMessageDto) {
+    return this.shiftService.setEmployees(payload.tenantId, payload.shiftId, payload.dto);
   }
 
   // ==========================================

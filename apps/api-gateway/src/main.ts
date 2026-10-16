@@ -5,6 +5,7 @@ import { DocumentBuilder, SwaggerModule, type OpenAPIObject } from '@nestjs/swag
 import * as cookieParser from 'cookie-parser';
 
 import { AllExceptionsFilter } from './filters/rpc-exception.filter';
+import { ChatIoAdapter } from './realtime/chat-io.adapter';
 import {
   SHARED_TAGS,
   SWAGGER_PORTALS,
@@ -85,6 +86,10 @@ async function bootstrap() {
     );
     allowedOrigins.push('http://localhost:3000', 'http://localhost:3001');
   }
+
+  // Live chat: Socket.IO on the same origins and under the API prefix, so the
+  // proxy rule that already forwards /api/ only needs the Upgrade headers added.
+  app.useWebSocketAdapter(new ChatIoAdapter(app, allowedOrigins));
 
   app.enableCors({
     origin: allowedOrigins,

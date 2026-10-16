@@ -25,6 +25,11 @@ import { OrganizationProfileController } from './controllers/organization-profil
 import { OrganizationDepartmentsController } from './controllers/organization-departments.controller';
 import { EmployeesController } from './controllers/employees.controller';
 import { LeaveRequestsController } from './controllers/leave-requests.controller';
+import { LeaveBalancesController } from './controllers/leave-balances.controller';
+import { ShiftsController } from './controllers/shifts.controller';
+import { MessagesController } from './controllers/messages.controller';
+import { ChatGateway } from './realtime/chat.gateway';
+import { ChatRealtimeService } from './realtime/chat-realtime.service';
 import { RecruitmentController } from './controllers/recruitment.controller';
 import { OnboardingController } from './controllers/onboarding.controller';
 import { AttendanceController } from './controllers/attendance.controller';
@@ -131,6 +136,9 @@ import { ExportPolicyGuard } from './guards/export-policy.guard';
     OrganizationDepartmentsController,
     EmployeesController,
     LeaveRequestsController,
+    LeaveBalancesController,
+    ShiftsController,
+    MessagesController,
     RecruitmentController,
     OnboardingController,
     AttendanceController,
@@ -155,6 +163,8 @@ import { ExportPolicyGuard } from './guards/export-policy.guard';
     EmployeeActivationController,
   ],
   providers: [
+    ChatRealtimeService,
+    ChatGateway,
     {
       provide: APP_GUARD,
       useClass: ThrottlerGuard,
