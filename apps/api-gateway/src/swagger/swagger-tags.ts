@@ -38,6 +38,7 @@ export const TAGS = {
   ORG_HR_REPORTS: 'Organization: HR Reports',
   ORG_DEPARTMENTS: 'Organization: Departments',
   ORG_ATTENDANCE: 'Organization: Attendance',
+  ORG_MESSAGES: 'Organization: Messages',
   ORG_LEAVE: 'Organization: Leave Management',
   ORG_RECRUITMENT: 'Organization: Recruitment',
   ORG_WORKSPACE: 'Organization: Workspace (Tasks, Projects, Calendar)',
@@ -171,6 +172,11 @@ export const SWAGGER_TAG_GROUPS: ReadonlyArray<{
       "Attendance screen. KPI cards (Present / Late / Absent / On Leave today), the Attendance Overview trend chart, the Department Wise Attendance breakdown, Today's Attendance table, CSV export, and admin manual entry — single record create/correct/delete plus whole-day bulk marking. For HR: the whole screen in one call, the All Employees Attendance register (per-employee monthly summary, with CSV export), one employee's attendance calendar, and the list of employees still unmarked for a day. Present vs Late is derived from the tenant's attendance policy grace period against its configured working hours.",
   },
   {
+    name: TAGS.ORG_MESSAGES,
+    description:
+      'Messages screen: one-to-one conversations between people in the organization. Recent Conversations (search, unread filter, last message, unread count), a conversation\'s messages (paged, with polling), sending text and files, seen receipts, who is online, starting a conversation with an employee, deleting a conversation from your own list, and the unread badge. Needs the `notifications` (Announcements & Alerts) module.',
+  },
+  {
     name: TAGS.ORG_LEAVE,
     description:
       'Leave Management screen. KPI cards (Total Requests / Approved / Pending / Rejected with month-over-month growth), the Leave Requests table behind the All Requests / Pending / Approved / Rejected tabs, CSV export, Add Leave Request, and the approve / reject / cancel / delete row actions. Leave types are the Setup Wizard leave policies; overlapping leave for one employee is refused.',
@@ -289,6 +295,7 @@ export const SWAGGER_PORTALS: ReadonlyArray<{
       TAGS.ORG_PERFORMANCE,
       TAGS.ORG_PAYROLL,
       TAGS.ORG_WORKSPACE,
+      TAGS.ORG_MESSAGES,
     ],
   },
   {

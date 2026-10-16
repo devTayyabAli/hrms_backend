@@ -18,19 +18,21 @@ import { CsvColumn, ExportResult, csvFilename, toCsv } from '@app/common';
  * looks complete and silently is not, and nothing in a review would catch it.
  * Centralizing means truncation reporting cannot be forgotten by a new export.
  */
-export async function sendCsvExport<T>(
+export async function sendCsvExport<T, R extends ExportResult<T> = ExportResult<T>>(
   res: Response,
   client: ClientProxy,
   pattern: string,
   payload: unknown,
   filenamePrefix: string,
-  columns: CsvColumn<T>[],
+  // A function when the columns depend on the data — e.g. one column per leave type.
+  columns: CsvColumn<T>[] | ((result: R) => CsvColumn<T>[]),
 ): Promise<string> {
-  const result: ExportResult<T> = await firstValueFrom(
-    client.send(pattern, payload),
-  );
+  const result: R = await firstValueFrom(client.send(pattern, payload));
 
-  const csv = toCsv(result?.rows ?? [], columns);
+  const csv = toCsv(
+    result?.rows ?? [],
+    typeof columns === 'function' ? columns(result) : columns,
+  );
 
   // A capped export is reported in headers rather than silently handing back
   // a CSV that looks complete.

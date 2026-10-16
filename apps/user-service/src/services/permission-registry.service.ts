@@ -144,6 +144,11 @@ export const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
   { resource: 'documents', action: ModuleAction.EXPORT, description: 'Export the document list to CSV', moduleKey: HRMSModuleKey.DOCUMENTS },
   { resource: 'documents', action: ModuleAction.MANAGE, description: 'Full management of company documents', moduleKey: HRMSModuleKey.DOCUMENTS },
 
+  // MESSAGES
+  { resource: 'messages', action: ModuleAction.VIEW, description: 'Read your conversations in Messages', moduleKey: HRMSModuleKey.NOTIFICATIONS },
+  { resource: 'messages', action: ModuleAction.CREATE, description: 'Start conversations and send messages', moduleKey: HRMSModuleKey.NOTIFICATIONS },
+  { resource: 'messages', action: ModuleAction.MANAGE, description: 'Full access to Messages', moduleKey: HRMSModuleKey.NOTIFICATIONS },
+
   // EXTENSIBLE FUTURE MODULES
 
   { resource: 'expenses', action: ModuleAction.VIEW, description: 'View expense claims', moduleKey: HRMSModuleKey.EXPENSES },

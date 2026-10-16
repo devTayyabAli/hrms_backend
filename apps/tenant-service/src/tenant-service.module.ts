@@ -57,6 +57,9 @@ import { EmployeeService } from './services/employee.service';
 import { AttendanceService } from './services/attendance.service';
 import { OrganizationDepartmentsService } from './services/organization-departments.service';
 import { LeaveRequestService } from './services/leave-request.service';
+import { LeaveBalanceService } from './services/leave-balance.service';
+import { ShiftService } from './services/shift.service';
+import { ChatService } from './services/chat.service';
 import { JobOpeningService } from './services/job-opening.service';
 import { WorkspaceTaskService } from './services/workspace-task.service';
 import { WorkspaceProjectService } from './services/workspace-project.service';
@@ -229,6 +232,9 @@ import { PaymentProviderFactory } from './billing/providers/payment-provider.fac
     AttendanceAutoCheckoutScheduler,
     OrganizationDepartmentsService,
     LeaveRequestService,
+    LeaveBalanceService,
+    ShiftService,
+    ChatService,
     WorkspaceTaskService,
     WorkspaceProjectService,
     PlatformNotifierService,

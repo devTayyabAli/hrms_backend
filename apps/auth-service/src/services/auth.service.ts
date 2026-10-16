@@ -1084,7 +1084,13 @@ export class AuthService implements OnModuleInit {
           /admin/i.test(String(role ?? '')),
         );
       if (maintenance.enabled && !isAdmin) {
-        throw new ServiceUnavailableException(maintenance.message);
+        // Say who is let in, so a blocked employee knows it isn't their
+        // password or their account.
+        const who =
+          maintenance.allowedAdmins === 'ALL_ADMINS'
+            ? 'Sign-in is limited to organization administrators until maintenance is complete.'
+            : 'Sign-in is paused for everyone until maintenance is complete.';
+        throw new ServiceUnavailableException(`${maintenance.message.trim()} ${who}`);
       }
     }
 

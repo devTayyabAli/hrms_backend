@@ -11,6 +11,12 @@ import {
   Employee,
   AttendanceRecord,
   WorkingHours,
+  Shift,
+  EmployeeShift,
+  ChatConversation,
+  ChatParticipant,
+  ChatMessage,
+  ChatPresence,
   LeavePolicy,
   AttendancePolicy,
   OrganizationPolicy,
@@ -74,6 +80,14 @@ export const TENANT_OPERATIONAL_MODELS: Array<typeof Model> = [
   Employee,
   AttendanceRecord,
   WorkingHours,
+  // Shift before EmployeeShift, which FKs to it (and to employees, above).
+  Shift,
+  EmployeeShift,
+  // Messages: the conversation before the participants and messages that FK to it.
+  ChatConversation,
+  ChatParticipant,
+  ChatMessage,
+  ChatPresence,
   LeavePolicy,
   // LeaveRequest last of the three it depends on: it carries real FKs to
   // both employees and leave_policies, so both referenced tables have to
@@ -169,6 +183,30 @@ export class TenantModelProviderService extends BaseTenantModelProvider {
 
   getWorkingHoursModel(tenantId?: string): Promise<typeof WorkingHours> {
     return this.model<typeof WorkingHours>('WorkingHours', tenantId);
+  }
+
+  getShiftModel(tenantId?: string): Promise<typeof Shift> {
+    return this.model<typeof Shift>('Shift', tenantId);
+  }
+
+  getEmployeeShiftModel(tenantId?: string): Promise<typeof EmployeeShift> {
+    return this.model<typeof EmployeeShift>('EmployeeShift', tenantId);
+  }
+
+  getChatConversationModel(tenantId?: string): Promise<typeof ChatConversation> {
+    return this.model<typeof ChatConversation>('ChatConversation', tenantId);
+  }
+
+  getChatParticipantModel(tenantId?: string): Promise<typeof ChatParticipant> {
+    return this.model<typeof ChatParticipant>('ChatParticipant', tenantId);
+  }
+
+  getChatMessageModel(tenantId?: string): Promise<typeof ChatMessage> {
+    return this.model<typeof ChatMessage>('ChatMessage', tenantId);
+  }
+
+  getChatPresenceModel(tenantId?: string): Promise<typeof ChatPresence> {
+    return this.model<typeof ChatPresence>('ChatPresence', tenantId);
   }
 
   getLeavePolicyModel(tenantId?: string): Promise<typeof LeavePolicy> {

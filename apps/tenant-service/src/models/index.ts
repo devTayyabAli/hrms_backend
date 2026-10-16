@@ -17,6 +17,12 @@ export {
   InvitationStatus,
 } from './organization-admin-invitation.model';
 export { WorkingHours } from './working-hours.model';
+export { Shift } from './shift.model';
+export { EmployeeShift } from './employee-shift.model';
+export { ChatConversation } from './chat-conversation.model';
+export { ChatParticipant } from './chat-participant.model';
+export { ChatMessage } from './chat-message.model';
+export { ChatPresence } from './chat-presence.model';
 export {
   LeavePolicy,
   LeaveAccrualType,

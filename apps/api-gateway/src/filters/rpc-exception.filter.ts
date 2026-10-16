@@ -65,7 +65,13 @@ export class AllExceptionsFilter implements ExceptionFilter {
     }
 
     const statusCode = this.resolveStatusCode(exception);
-    const isCuratedClientError = statusCode < 500;
+    // 503 is the one 5xx the app raises on purpose: maintenance mode, the IP
+    // allowlist being unreadable. Its message tells the person why they can't
+    // continue ("We are currently under maintenance…"). Replaced with the
+    // generic text below, sign-in just said "unexpected error" and nobody
+    // could tell it was a switch someone had turned on. Real faults — a DB
+    // error, a dropped connection — resolve to 500, so they stay hidden.
+    const isCuratedClientError = statusCode < 500 || statusCode === HttpStatus.SERVICE_UNAVAILABLE;
 
     if (isCuratedClientError) {
       return response.status(statusCode).json({

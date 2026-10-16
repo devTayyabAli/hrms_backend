@@ -379,3 +379,87 @@ export class DecideLeaveRequestMessageDto extends TenantLeaveRequestIdDto {
   @IsUUID()
   decidedByUserId?: string;
 }
+
+// ==========================================
+// Leave Balances (organization-wide table)
+// ==========================================
+
+export const LEAVE_BALANCE_SORTABLE_FIELDS = ['employeeName', 'employeeCode', 'department'] as const;
+export type LeaveBalanceSortableField = (typeof LEAVE_BALANCE_SORTABLE_FIELDS)[number];
+
+/** The filters shared by the Balances table and its CSV export. */
+export class ExportLeaveBalancesQueryDto {
+  @ApiProperty({ required: false, description: 'Search by employee name, employee ID or email' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  search?: string;
+
+  @ApiProperty({ required: false, description: 'Only employees of this department' })
+  @IsOptional()
+  @IsUUID()
+  departmentId?: string;
+
+  @ApiProperty({
+    required: false,
+    example: 2026,
+    description: 'Fiscal year by its starting year (FY 2026-27 is 2026). Defaults to the current one.',
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(2000)
+  @Max(2100)
+  fiscalYear?: number;
+
+  @ApiProperty({ required: false, enum: LEAVE_BALANCE_SORTABLE_FIELDS, default: 'employeeName' })
+  @IsOptional()
+  @IsIn(LEAVE_BALANCE_SORTABLE_FIELDS)
+  sortBy?: LeaveBalanceSortableField = 'employeeName';
+
+  @ApiProperty({ required: false, enum: ['ASC', 'DESC'], default: 'ASC' })
+  @IsOptional()
+  @IsIn(['ASC', 'DESC'])
+  sortOrder?: 'ASC' | 'DESC' = 'ASC';
+}
+
+export class GetLeaveBalancesQueryDto extends ExportLeaveBalancesQueryDto {
+  @ApiProperty({ required: false, default: 1 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number = 1;
+
+  @ApiProperty({ required: false, default: 10 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  limit?: number = 10;
+}
+
+export class GetLeaveBalancesMessageDto {
+  @ApiProperty()
+  @IsUUID()
+  tenantId: string;
+
+  @ApiProperty({ type: GetLeaveBalancesQueryDto })
+  @ValidateNested()
+  @Type(() => GetLeaveBalancesQueryDto)
+  @IsDefined()
+  query: GetLeaveBalancesQueryDto;
+}
+
+export class ExportLeaveBalancesMessageDto {
+  @ApiProperty()
+  @IsUUID()
+  tenantId: string;
+
+  @ApiProperty({ type: ExportLeaveBalancesQueryDto })
+  @ValidateNested()
+  @Type(() => ExportLeaveBalancesQueryDto)
+  @IsDefined()
+  query: ExportLeaveBalancesQueryDto;
+}
