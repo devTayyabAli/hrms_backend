@@ -155,6 +155,10 @@ export const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
   { resource: 'expenses', action: ModuleAction.MANAGE, description: 'Approve and process expense claims', moduleKey: HRMSModuleKey.EXPENSES },
 
   { resource: 'assets', action: ModuleAction.VIEW, description: 'View company assets', moduleKey: HRMSModuleKey.ASSETS },
+  { resource: 'assets', action: ModuleAction.CREATE, description: 'Add assets and asset categories', moduleKey: HRMSModuleKey.ASSETS },
+  { resource: 'assets', action: ModuleAction.EDIT, description: 'Edit assets; assign, return, send for maintenance or dispose of them', moduleKey: HRMSModuleKey.ASSETS },
+  { resource: 'assets', action: ModuleAction.DELETE, description: 'Delete assets and asset categories', moduleKey: HRMSModuleKey.ASSETS },
+  { resource: 'assets', action: ModuleAction.EXPORT, description: 'Export the asset register', moduleKey: HRMSModuleKey.ASSETS },
   { resource: 'assets', action: ModuleAction.MANAGE, description: 'Manage asset allocations', moduleKey: HRMSModuleKey.ASSETS },
 
   { resource: 'tickets', action: ModuleAction.VIEW, description: 'View support tickets', moduleKey: HRMSModuleKey.TICKETS },

@@ -108,6 +108,18 @@ import {
   CreateShiftMessageDto,
   UpdateShiftMessageDto,
   AssignShiftEmployeesMessageDto,
+  AssetCategoryIdMessageDto,
+  AssetIdMessageDto,
+  AssetNoteMessageDto,
+  AssetTenantMessageDto,
+  AssignAssetMessageDto,
+  CreateAssetCategoryMessageDto,
+  CreateAssetMessageDto,
+  DisposeAssetMessageDto,
+  ExportAssetsMessageDto,
+  GetAssetsMessageDto,
+  UpdateAssetCategoryMessageDto,
+  UpdateAssetMessageDto,
   ChatCallerDto,
   GetConversationsMessageDto,
   StartConversationMessageDto,
@@ -305,6 +317,7 @@ import { LeaveRequestService } from './services/leave-request.service';
 import { LeaveBalanceService } from './services/leave-balance.service';
 import { ShiftService } from './services/shift.service';
 import { ChatService } from './services/chat.service';
+import { AssetService } from './services/asset.service';
 import { JobOpeningService } from './services/job-opening.service';
 import { WorkspaceTaskService } from './services/workspace-task.service';
 import { WorkspaceProjectService } from './services/workspace-project.service';
@@ -356,6 +369,7 @@ export class TenantServiceController {
     private leaveBalanceService: LeaveBalanceService,
     private shiftService: ShiftService,
     private chatService: ChatService,
+    private assetService: AssetService,
     private jobOpeningService: JobOpeningService,
     private workspaceTaskService: WorkspaceTaskService,
     private workspaceProjectService: WorkspaceProjectService,
@@ -1766,6 +1780,90 @@ export class TenantServiceController {
   @MessagePattern(MESSAGE_PATTERNS.CHAT.GET_UNREAD)
   async handleGetChatUnread(@Payload() payload: ChatCallerDto) {
     return this.chatService.getUnread(payload);
+  }
+
+  // ==========================================
+  // ASSETS
+  // ==========================================
+
+  @MessagePattern(MESSAGE_PATTERNS.ASSET.GET_SUMMARY)
+  async handleGetAssetSummary(@Payload() payload: AssetTenantMessageDto) {
+    return this.assetService.getSummary(payload.tenantId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ASSET.GET_ALL)
+  async handleGetAssets(@Payload() payload: GetAssetsMessageDto) {
+    return this.assetService.getAssets(payload.tenantId, payload.query);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ASSET.EXPORT)
+  async handleExportAssets(@Payload() payload: ExportAssetsMessageDto) {
+    return this.assetService.exportAssets(payload.tenantId, payload.query);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ASSET.GET_ONE)
+  async handleGetAsset(@Payload() payload: AssetIdMessageDto) {
+    return this.assetService.getAsset(payload.tenantId, payload.assetId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ASSET.CREATE)
+  async handleCreateAsset(@Payload() payload: CreateAssetMessageDto) {
+    return this.assetService.createAsset(payload, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ASSET.UPDATE)
+  async handleUpdateAsset(@Payload() payload: UpdateAssetMessageDto) {
+    return this.assetService.updateAsset(payload, payload.assetId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ASSET.DELETE)
+  async handleDeleteAsset(@Payload() payload: AssetIdMessageDto) {
+    return this.assetService.deleteAsset(payload, payload.assetId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ASSET.ASSIGN)
+  async handleAssignAsset(@Payload() payload: AssignAssetMessageDto) {
+    return this.assetService.assign(payload, payload.assetId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ASSET.RETURN)
+  async handleReturnAsset(@Payload() payload: AssetNoteMessageDto) {
+    return this.assetService.returnAsset(payload, payload.assetId, payload.dto.note);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ASSET.START_MAINTENANCE)
+  async handleStartAssetMaintenance(@Payload() payload: AssetNoteMessageDto) {
+    return this.assetService.startMaintenance(payload, payload.assetId, payload.dto.note);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ASSET.COMPLETE_MAINTENANCE)
+  async handleCompleteAssetMaintenance(@Payload() payload: AssetNoteMessageDto) {
+    return this.assetService.completeMaintenance(payload, payload.assetId, payload.dto.note);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ASSET.DISPOSE)
+  async handleDisposeAsset(@Payload() payload: DisposeAssetMessageDto) {
+    return this.assetService.dispose(payload, payload.assetId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ASSET.GET_CATEGORIES)
+  async handleGetAssetCategories(@Payload() payload: AssetTenantMessageDto) {
+    return this.assetService.getCategories(payload.tenantId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ASSET.CREATE_CATEGORY)
+  async handleCreateAssetCategory(@Payload() payload: CreateAssetCategoryMessageDto) {
+    return this.assetService.createCategory(payload, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ASSET.UPDATE_CATEGORY)
+  async handleUpdateAssetCategory(@Payload() payload: UpdateAssetCategoryMessageDto) {
+    return this.assetService.updateCategory(payload, payload.categoryId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ASSET.DELETE_CATEGORY)
+  async handleDeleteAssetCategory(@Payload() payload: AssetCategoryIdMessageDto) {
+    return this.assetService.deleteCategory(payload, payload.categoryId);
   }
 
   // ==========================================

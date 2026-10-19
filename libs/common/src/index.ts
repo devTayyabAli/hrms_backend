@@ -20,6 +20,7 @@ export * from './dto/attendance.dto';
 export * from './dto/leave.dto';
 export * from './dto/shift.dto';
 export * from './dto/chat.dto';
+export * from './dto/asset.dto';
 export * from './dto/recruitment.dto';
 export * from './dto/onboarding.dto';
 export * from './dto/organization-departments.dto';
@@ -256,6 +257,25 @@ export const MESSAGE_PATTERNS = {
     DELETE: 'shift.delete',
     GET_EMPLOYEES: 'shift.get_employees',
     SET_EMPLOYEES: 'shift.set_employees',
+  },
+  /** Assets: the organization's equipment, who has it and what state it is in. */
+  ASSET: {
+    GET_SUMMARY: 'asset.get_summary',
+    GET_ALL: 'asset.get_all',
+    EXPORT: 'asset.export',
+    GET_ONE: 'asset.get_one',
+    CREATE: 'asset.create',
+    UPDATE: 'asset.update',
+    DELETE: 'asset.delete',
+    ASSIGN: 'asset.assign',
+    RETURN: 'asset.return',
+    START_MAINTENANCE: 'asset.start_maintenance',
+    COMPLETE_MAINTENANCE: 'asset.complete_maintenance',
+    DISPOSE: 'asset.dispose',
+    GET_CATEGORIES: 'asset.get_categories',
+    CREATE_CATEGORY: 'asset.create_category',
+    UPDATE_CATEGORY: 'asset.update_category',
+    DELETE_CATEGORY: 'asset.delete_category',
   },
   /** Recruitment screen: Job Openings table and requisition lifecycle. */
   JOB_OPENING: {

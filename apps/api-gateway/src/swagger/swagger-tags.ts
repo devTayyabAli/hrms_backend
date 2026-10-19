@@ -39,6 +39,7 @@ export const TAGS = {
   ORG_DEPARTMENTS: 'Organization: Departments',
   ORG_ATTENDANCE: 'Organization: Attendance',
   ORG_MESSAGES: 'Organization: Messages',
+  ORG_ASSETS: 'Organization: Assets',
   ORG_LEAVE: 'Organization: Leave Management',
   ORG_RECRUITMENT: 'Organization: Recruitment',
   ORG_WORKSPACE: 'Organization: Workspace (Tasks, Projects, Calendar)',
@@ -172,6 +173,11 @@ export const SWAGGER_TAG_GROUPS: ReadonlyArray<{
       "Attendance screen. KPI cards (Present / Late / Absent / On Leave today), the Attendance Overview trend chart, the Department Wise Attendance breakdown, Today's Attendance table, CSV export, and admin manual entry — single record create/correct/delete plus whole-day bulk marking. For HR: the whole screen in one call, the All Employees Attendance register (per-employee monthly summary, with CSV export), one employee's attendance calendar, and the list of employees still unmarked for a day. Present vs Late is derived from the tenant's attendance policy grace period against its configured working hours.",
   },
   {
+    name: TAGS.ORG_ASSETS,
+    description:
+      'Assets screen: the organization\'s equipment register. The summary cards and status donut, the Categories panel (and managing categories), the asset table with search, filters, sorting, paging and CSV export, adding and editing assets, and the actions that move an asset between Available, In Use, Maintenance and Disposed (assign, return, start / finish maintenance, dispose) with each asset\'s history. Needs the `assets` module.',
+  },
+  {
     name: TAGS.ORG_MESSAGES,
     description:
       'Messages screen: one-to-one conversations between people in the organization. Recent Conversations (search, unread filter, last message, unread count), a conversation\'s messages (paged, with polling), sending text and files, seen receipts, who is online, starting a conversation with an employee, deleting a conversation from your own list, and the unread badge. Needs the `notifications` (Announcements & Alerts) module.',
@@ -296,6 +302,7 @@ export const SWAGGER_PORTALS: ReadonlyArray<{
       TAGS.ORG_PAYROLL,
       TAGS.ORG_WORKSPACE,
       TAGS.ORG_MESSAGES,
+      TAGS.ORG_ASSETS,
     ],
   },
   {

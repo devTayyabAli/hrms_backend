@@ -28,6 +28,7 @@ import { LeaveRequestsController } from './controllers/leave-requests.controller
 import { LeaveBalancesController } from './controllers/leave-balances.controller';
 import { ShiftsController } from './controllers/shifts.controller';
 import { MessagesController } from './controllers/messages.controller';
+import { AssetsController } from './controllers/assets.controller';
 import { ChatGateway } from './realtime/chat.gateway';
 import { ChatRealtimeService } from './realtime/chat-realtime.service';
 import { RecruitmentController } from './controllers/recruitment.controller';
@@ -139,6 +140,7 @@ import { ExportPolicyGuard } from './guards/export-policy.guard';
     LeaveBalancesController,
     ShiftsController,
     MessagesController,
+    AssetsController,
     RecruitmentController,
     OnboardingController,
     AttendanceController,

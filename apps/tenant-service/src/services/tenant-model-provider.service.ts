@@ -13,6 +13,9 @@ import {
   WorkingHours,
   Shift,
   EmployeeShift,
+  AssetCategory,
+  Asset,
+  AssetEvent,
   ChatConversation,
   ChatParticipant,
   ChatMessage,
@@ -83,6 +86,10 @@ export const TENANT_OPERATIONAL_MODELS: Array<typeof Model> = [
   // Shift before EmployeeShift, which FKs to it (and to employees, above).
   Shift,
   EmployeeShift,
+  // Assets: the category and the asset before the events that FK to the asset.
+  AssetCategory,
+  Asset,
+  AssetEvent,
   // Messages: the conversation before the participants and messages that FK to it.
   ChatConversation,
   ChatParticipant,
@@ -187,6 +194,18 @@ export class TenantModelProviderService extends BaseTenantModelProvider {
 
   getShiftModel(tenantId?: string): Promise<typeof Shift> {
     return this.model<typeof Shift>('Shift', tenantId);
+  }
+
+  getAssetCategoryModel(tenantId?: string): Promise<typeof AssetCategory> {
+    return this.model<typeof AssetCategory>('AssetCategory', tenantId);
+  }
+
+  getAssetModel(tenantId?: string): Promise<typeof Asset> {
+    return this.model<typeof Asset>('Asset', tenantId);
+  }
+
+  getAssetEventModel(tenantId?: string): Promise<typeof AssetEvent> {
+    return this.model<typeof AssetEvent>('AssetEvent', tenantId);
   }
 
   getEmployeeShiftModel(tenantId?: string): Promise<typeof EmployeeShift> {

@@ -39,6 +39,9 @@ import {
   WorkingHours,
   Shift,
   EmployeeShift,
+  AssetCategory,
+  Asset,
+  AssetEvent,
   ChatConversation,
   ChatParticipant,
   ChatMessage,
@@ -84,6 +87,10 @@ const OPERATIONAL_MODELS = [
   // Shifts: Shift before EmployeeShift, which FKs to it and to employees.
   Shift,
   EmployeeShift,
+  // Assets: the category and the asset before the events that FK to the asset.
+  AssetCategory,
+  Asset,
+  AssetEvent,
   // Messages: the conversation before the participants and messages that FK to it.
   ChatConversation,
   ChatParticipant,
