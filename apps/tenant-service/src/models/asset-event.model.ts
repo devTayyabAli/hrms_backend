@@ -47,7 +47,7 @@ export class AssetEvent extends Model {
   @BelongsTo(() => Asset, { foreignKey: 'assetId', onDelete: 'CASCADE' })
   declare asset: Asset;
 
-  /** CREATED, ASSIGNED, RETURNED, MAINTENANCE_STARTED, MAINTENANCE_COMPLETED, DISPOSED, UPDATED. */
+  /** CREATED, ASSIGNED, RETURNED, DAMAGED, LOST, MAINTENANCE_STARTED, MAINTENANCE_COMPLETED, DISPOSED. */
   @Column({ type: DataType.STRING(30), allowNull: false })
   declare type: string;
 
@@ -69,6 +69,10 @@ export class AssetEvent extends Model {
 
   @Column({ type: DataType.STRING(500), allowNull: true })
   declare note: string | null;
+
+  /** What was recorded with it: the handover checklist and date, or the condition on return. */
+  @Column({ type: DataType.JSONB, allowNull: true })
+  declare details: Record<string, unknown> | null;
 
   @Column({ type: DataType.STRING(64), allowNull: true })
   declare actorUserId: string | null;

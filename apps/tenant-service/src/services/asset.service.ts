@@ -2,8 +2,12 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import { Op, QueryTypes, Transaction, UniqueConstraintError, literal } from 'sequelize';
 import {
   AssetActorDto,
+  AssetCondition,
+  AssetMaintenanceType,
+  AssetSpecificationDto,
   AssetStatus,
   AssignAssetDto,
+  CompleteMaintenanceDto,
   CreateAssetCategoryDto,
   CreateAssetDto,
   DisposeAssetDto,
@@ -12,6 +16,9 @@ import {
   ExportAssetsQueryDto,
   ExportResult,
   GetAssetsQueryDto,
+  HandoverChecklistItemDto,
+  ReturnAssetDto,
+  StartMaintenanceDto,
   TenantErrorCode,
   TenantException,
   UpdateAssetCategoryDto,
@@ -24,6 +31,12 @@ const EMPLOYED = [EmployeeStatus.ACTIVE, EmployeeStatus.ON_LEAVE];
 const CODE_PREFIX = 'AST-';
 const CODE_RETRIES = 5;
 const NOTE_MAX = 500;
+/** An asset in one of these can be handed to someone (or taken from one holder and given to another). */
+const ASSIGNABLE: string[] = [AssetStatus.AVAILABLE, AssetStatus.IN_USE];
+/** An asset with a holder in one of these can be handed back. */
+const RETURNABLE: string[] = [AssetStatus.IN_USE, AssetStatus.DAMAGED, AssetStatus.LOST];
+/** Where an asset can be sent for maintenance or repair from. A lost asset cannot be repaired. */
+const SERVICEABLE: string[] = [AssetStatus.AVAILABLE, AssetStatus.IN_USE, AssetStatus.DAMAGED];
 
 /** The categories an organization starts with, the first time it opens Assets. */
 export const DEFAULT_ASSET_CATEGORIES: { name: string; icon: string }[] = [
@@ -35,6 +48,7 @@ export const DEFAULT_ASSET_CATEGORIES: { name: string; icon: string }[] = [
 ];
 
 const ESCAPE = (value: string) => value.replace(/[\\%_]/g, (character) => `\\${character}`);
+const todayUtc = () => new Date().toISOString().slice(0, 10);
 
 export interface AssetRow {
   id: string;
@@ -43,8 +57,15 @@ export interface AssetRow {
   category: { id: string; name: string; icon: string | null } | null;
   brand: string | null;
   serialNumber: string | null;
+  specifications: { key: string; value: string }[];
   status: AssetStatus;
-  assignedTo: { employeeId: string; name: string; employeeCode: string | null; avatarUrl: string | null } | null;
+  assignedTo: {
+    employeeId: string;
+    name: string;
+    employeeCode: string | null;
+    avatarUrl: string | null;
+    department: { id: string; name: string } | null;
+  } | null;
   assignedAt: Date | null;
   purchaseDate: string | null;
   purchaseCost: number | null;
@@ -65,8 +86,26 @@ export interface AssetHistoryRow {
   toStatus: string | null;
   employee: { employeeId: string | null; name: string } | null;
   note: string | null;
+  /** What was recorded with the event: the handover checklist and date, the condition on return, the maintenance job. */
+  details: Record<string, unknown> | null;
   by: string | null;
   at: Date;
+}
+
+export interface MaintenanceRow {
+  id: string;
+  type: string;
+  status: 'OPEN' | 'COMPLETED' | 'CANCELLED';
+  issue: string | null;
+  vendor: string | null;
+  estimatedCost: number | null;
+  cost: number | null;
+  startedOn: string;
+  expectedOn: string | null;
+  completedOn: string | null;
+  resolution: string | null;
+  startedBy: string | null;
+  completedBy: string | null;
 }
 
 interface EventInput {
@@ -76,19 +115,27 @@ interface EventInput {
   employeeId?: string | null;
   employeeName?: string | null;
   note?: string | null;
+  details?: Record<string, unknown> | null;
 }
 
 const fullName = (employee: any) => [employee?.firstName, employee?.lastName].filter(Boolean).join(' ');
+const toNumber = (value: unknown) => (value === null || value === undefined ? null : Number(value));
 
 /**
  * Assets: the company's equipment — what exists, who has it, what state it is in.
  *
- * An asset is AVAILABLE (in stock), IN_USE (an employee has it), in
- * MAINTENANCE (it keeps its holder, who will get it back) or DISPOSED
- * (finished: nobody has it and it cannot change any more). Moving between
- * those is done through explicit actions — assign, return, start / finish
- * maintenance, dispose — each of which writes a line in the asset's history,
+ * An asset is AVAILABLE (in stock), IN_USE (an employee has it), under
+ * MAINTENANCE, DAMAGED (broken, not yet being fixed), LOST, or DISPOSED
+ * (finished: nobody has it and it cannot change any more). Damaged, lost and
+ * maintenance keep the holder on record: it is their asset that broke or went
+ * missing, and they get it back after a repair. Moving between states is done
+ * through explicit actions, each of which writes a line in the asset's history,
  * which is also where the "since last month" figures on the page come from.
+ *
+ * Handing an asset over needs the handover checklist, fully ticked, and takes
+ * the day it was handed over. A return says what condition it came back in.
+ * Maintenance is a record of its own — the problem, the vendor, the cost, the
+ * dates — not just a status.
  */
 @Injectable()
 export class AssetService {
@@ -221,9 +268,16 @@ export class AssetService {
   private async includes(tenantId: string) {
     const Category = await this.modelProvider.getAssetCategoryModel(tenantId);
     const Employee = await this.modelProvider.getEmployeeModel(tenantId);
+    const Department = await this.modelProvider.getDepartmentModel(tenantId);
     return [
       { model: Category, as: 'category', attributes: ['id', 'name', 'icon'], required: false },
-      { model: Employee, as: 'assignee', attributes: ['id', 'firstName', 'lastName', 'employeeCode', 'avatarUrl'], required: false },
+      {
+        model: Employee,
+        as: 'assignee',
+        attributes: ['id', 'firstName', 'lastName', 'employeeCode', 'avatarUrl', 'departmentId'],
+        required: false,
+        include: [{ model: Department, as: 'department', attributes: ['id', 'name'], required: false }],
+      },
     ];
   }
 
@@ -236,13 +290,20 @@ export class AssetService {
       category: asset.category ? { id: asset.category.id, name: asset.category.name, icon: asset.category.icon ?? null } : null,
       brand: asset.brand ?? null,
       serialNumber: asset.serialNumber ?? null,
+      specifications: Array.isArray(asset.specifications) ? asset.specifications : [],
       status: asset.status,
       assignedTo: assignee
-        ? { employeeId: assignee.id, name: fullName(assignee), employeeCode: assignee.employeeCode ?? null, avatarUrl: assignee.avatarUrl ?? null }
+        ? {
+            employeeId: assignee.id,
+            name: fullName(assignee),
+            employeeCode: assignee.employeeCode ?? null,
+            avatarUrl: assignee.avatarUrl ?? null,
+            department: assignee.department ? { id: assignee.department.id, name: assignee.department.name } : null,
+          }
         : null,
       assignedAt: asset.assignedAt ?? null,
       purchaseDate: asset.purchaseDate ?? null,
-      purchaseCost: asset.purchaseCost === null || asset.purchaseCost === undefined ? null : Number(asset.purchaseCost),
+      purchaseCost: toNumber(asset.purchaseCost),
       warrantyExpiry: asset.warrantyExpiry ?? null,
       vendor: asset.vendor ?? null,
       location: asset.location ?? null,
@@ -259,6 +320,8 @@ export class AssetService {
     if (query.categoryId) where.categoryId = query.categoryId;
     if (query.status && query.status !== 'ALL') where.status = query.status;
     if (query.assignedEmployeeId) where.assignedEmployeeId = query.assignedEmployeeId;
+    // The department of whoever has it: an unassigned asset has none.
+    if (query.departmentId) where['$assignee.departmentId$'] = query.departmentId;
 
     const term = query.search?.trim();
     if (term) {
@@ -356,15 +419,41 @@ export class AssetService {
       toStatus: event.toStatus ?? null,
       employee: event.employeeName ? { employeeId: event.employeeId ?? null, name: event.employeeName } : null,
       note: event.note ?? null,
+      details: event.details ?? null,
       by: event.actorEmail ?? null,
       at: event.createdAt,
     }));
   }
 
-  /** One asset with everything on it and its history, newest first. */
+  private toMaintenanceRow(record: any): MaintenanceRow {
+    return {
+      id: record.id,
+      type: record.type,
+      status: record.status,
+      issue: record.issue ?? null,
+      vendor: record.vendor ?? null,
+      estimatedCost: toNumber(record.estimatedCost),
+      cost: toNumber(record.cost),
+      startedOn: record.startedOn,
+      expectedOn: record.expectedOn ?? null,
+      completedOn: record.completedOn ?? null,
+      resolution: record.resolution ?? null,
+      startedBy: record.startedBy ?? null,
+      completedBy: record.completedBy ?? null,
+    };
+  }
+
+  /** The asset's maintenance and repair jobs, the one in progress (if any) first and then newest. */
+  private async maintenance(tenantId: string, assetId: string): Promise<MaintenanceRow[]> {
+    const Maintenance = await this.modelProvider.getAssetMaintenanceModel(tenantId);
+    const records = (await Maintenance.findAll({ where: { tenantId, assetId }, order: [['startedOn', 'DESC'], ['createdAt', 'DESC']], limit: 100 })) as any[];
+    const rows = records.map((record) => this.toMaintenanceRow(record));
+    return [...rows.filter((row) => row.status === 'OPEN'), ...rows.filter((row) => row.status !== 'OPEN')];
+  }
+
+  /** One asset with everything on it, its maintenance jobs and its history, newest first. */
   async getAsset(tenantId: string, assetId: string) {
-    const asset = await this.loadFull(tenantId, assetId);
-    return { ...this.toRow(asset), history: await this.history(tenantId, assetId) };
+    return this.serialize(tenantId, assetId);
   }
 
   // ==========================================
@@ -399,7 +488,7 @@ export class AssetService {
   }
 
   /**
-   * The four cards, the status donut and the Categories panel in one call.
+   * The cards, the status donut and the Categories panel in one call.
    * "Last month" is the state at the start of this month, so the change shown
    * is what happened since then.
    */
@@ -417,22 +506,31 @@ export class AssetService {
       this.getCategories(tenantId),
     ]);
 
-    const now_ = new Map(current.map((row) => [row.status, Number(row.count)]));
-    const count = (status: AssetStatus) => now_.get(status) ?? 0;
+    const nowCounts = new Map(current.map((row) => [row.status, Number(row.count)]));
+    const count = (status: AssetStatus) => nowCounts.get(status) ?? 0;
     const before = (status: AssetStatus) => previous.get(status) ?? 0;
-    const total = [...now_.values()].reduce((sum, value) => sum + value, 0);
+    const total = [...nowCounts.values()].reduce((sum, value) => sum + value, 0);
     const totalBefore = [...previous.values()].reduce((sum, value) => sum + value, 0);
 
     return {
       stats: {
         total: this.change(total, totalBefore),
         inUse: this.change(count(AssetStatus.IN_USE), before(AssetStatus.IN_USE)),
-        maintenance: this.change(count(AssetStatus.MAINTENANCE), before(AssetStatus.MAINTENANCE)),
-        disposed: this.change(count(AssetStatus.DISPOSED), before(AssetStatus.DISPOSED)),
         available: this.change(count(AssetStatus.AVAILABLE), before(AssetStatus.AVAILABLE)),
+        maintenance: this.change(count(AssetStatus.MAINTENANCE), before(AssetStatus.MAINTENANCE)),
+        damaged: this.change(count(AssetStatus.DAMAGED), before(AssetStatus.DAMAGED)),
+        lost: this.change(count(AssetStatus.LOST), before(AssetStatus.LOST)),
+        disposed: this.change(count(AssetStatus.DISPOSED), before(AssetStatus.DISPOSED)),
       },
       // The donut: every status with its share.
-      statusBreakdown: [AssetStatus.IN_USE, AssetStatus.MAINTENANCE, AssetStatus.DISPOSED, AssetStatus.AVAILABLE].map((status) => ({
+      statusBreakdown: [
+        AssetStatus.IN_USE,
+        AssetStatus.AVAILABLE,
+        AssetStatus.MAINTENANCE,
+        AssetStatus.DAMAGED,
+        AssetStatus.LOST,
+        AssetStatus.DISPOSED,
+      ].map((status) => ({
         status,
         count: count(status),
         percent: total > 0 ? Math.round((count(status) / total) * 1000) / 10 : 0,
@@ -488,6 +586,39 @@ export class AssetService {
     return employee;
   }
 
+  /** Specifications are a list of name / value pairs; the same name twice is a mistake, not two specs. */
+  private cleanSpecifications(specifications: AssetSpecificationDto[] | undefined) {
+    if (specifications === undefined) return undefined;
+    const seen = new Set<string>();
+    return specifications.map(({ key, value }) => {
+      const name = key.trim();
+      if (seen.has(name.toLowerCase())) this.fail(HttpStatus.BAD_REQUEST, `The specification '${name}' is listed twice.`);
+      seen.add(name.toLowerCase());
+      return { key: name, value: value.trim() };
+    });
+  }
+
+  /**
+   * The rules for handing an asset over: every item on the checklist ticked,
+   * and a handover day that is not in the future. Returns the moment to record
+   * as "assigned at" — now for today, otherwise the start of that day.
+   */
+  private assertHandover(checklist: HandoverChecklistItemDto[] | undefined, assignedOn: string | null | undefined) {
+    if (!checklist?.length) {
+      this.fail(HttpStatus.BAD_REQUEST, 'Complete the handover checklist before handing the asset over.');
+    }
+    const unticked = checklist.filter((item) => !item.checked).map((item) => item.item.trim());
+    if (unticked.length) {
+      this.fail(HttpStatus.BAD_REQUEST, `Tick every item on the handover checklist (still open: ${unticked.join('; ')}).`);
+    }
+    const day = assignedOn || todayUtc();
+    if (day > todayUtc()) this.fail(HttpStatus.BAD_REQUEST, 'The handover date cannot be in the future.');
+    return {
+      assignedAt: day === todayUtc() ? new Date() : new Date(`${day}T00:00:00.000Z`),
+      details: { assignedOn: day, checklist: checklist.map((item) => ({ item: item.item.trim(), checked: true })) },
+    };
+  }
+
   /**
    * History lines for one action. Their timestamps are spaced a millisecond
    * apart so "the latest event" is unambiguous when an action writes several.
@@ -505,6 +636,7 @@ export class AssetService {
         employeeId: event.employeeId ?? null,
         employeeName: event.employeeName ?? null,
         note: event.note ? event.note.slice(0, NOTE_MAX) : null,
+        details: event.details ?? null,
         actorUserId: actor.userId ?? null,
         actorEmail: actor.email ?? null,
         createdAt: new Date(base + index),
@@ -527,8 +659,26 @@ export class AssetService {
     return employee ? fullName(employee) : null;
   }
 
+  /** The job the asset is away for, if it is away. */
+  private async openJob(tenantId: string, assetId: string, transaction: Transaction) {
+    const Maintenance = await this.modelProvider.getAssetMaintenanceModel(tenantId);
+    return (await Maintenance.findOne({ where: { tenantId, assetId, status: 'OPEN' }, transaction })) as any;
+  }
+
+  /** A job that ends because the asset was written off or lost, not because it was fixed. */
+  private async cancelOpenJob(tenantId: string, assetId: string, actor: AssetActorDto, reason: string, transaction: Transaction) {
+    const job = await this.openJob(tenantId, assetId, transaction);
+    if (job) {
+      await job.update({ status: 'CANCELLED', completedOn: todayUtc(), resolution: reason, completedBy: actor.email ?? null }, { transaction });
+    }
+  }
+
   private async serialize(tenantId: string, assetId: string) {
-    return { ...this.toRow(await this.loadFull(tenantId, assetId)), history: await this.history(tenantId, assetId) };
+    return {
+      ...this.toRow(await this.loadFull(tenantId, assetId)),
+      maintenance: await this.maintenance(tenantId, assetId),
+      history: await this.history(tenantId, assetId),
+    };
   }
 
   // ==========================================
@@ -539,13 +689,15 @@ export class AssetService {
     const { tenantId } = actor;
     await this.assertCategory(tenantId, dto.categoryId);
     await this.assertSerialFree(tenantId, dto.serialNumber);
+    const specifications = this.cleanSpecifications(dto.specifications);
     const assignee = dto.assignedEmployeeId ? await this.loadAssignee(tenantId, dto.assignedEmployeeId) : null;
+    // Giving it to someone from the start is still a handover: same checklist, same date rules.
+    const handover = assignee ? this.assertHandover(dto.checklist, dto.assignedOn) : null;
 
     const Asset = await this.modelProvider.getAssetModel(tenantId);
     for (let attempt = 1; ; attempt++) {
       try {
         const id = await Asset.sequelize!.transaction(async (transaction) => {
-          const now = new Date();
           const status = assignee ? AssetStatus.IN_USE : AssetStatus.AVAILABLE;
           const created: any = await Asset.create(
             {
@@ -555,9 +707,10 @@ export class AssetService {
               categoryId: dto.categoryId,
               brand: dto.brand ?? null,
               serialNumber: dto.serialNumber ?? null,
+              specifications: specifications ?? null,
               status,
               assignedEmployeeId: assignee?.id ?? null,
-              assignedAt: assignee ? now : null,
+              assignedAt: handover?.assignedAt ?? null,
               purchaseDate: dto.purchaseDate ?? null,
               purchaseCost: dto.purchaseCost ?? null,
               warrantyExpiry: dto.warrantyExpiry ?? null,
@@ -575,7 +728,14 @@ export class AssetService {
             [
               { type: 'CREATED', fromStatus: null, toStatus: AssetStatus.AVAILABLE },
               ...(assignee
-                ? [{ type: 'ASSIGNED', fromStatus: AssetStatus.AVAILABLE, toStatus: AssetStatus.IN_USE, employeeId: assignee.id, employeeName: fullName(assignee) }]
+                ? [{
+                    type: 'ASSIGNED',
+                    fromStatus: AssetStatus.AVAILABLE,
+                    toStatus: AssetStatus.IN_USE,
+                    employeeId: assignee.id,
+                    employeeName: fullName(assignee),
+                    details: handover!.details,
+                  }]
                 : []),
             ],
             transaction,
@@ -610,6 +770,7 @@ export class AssetService {
       if ((dto as any)[field] !== undefined) patch[field] = (dto as any)[field];
     }
     if (dto.name !== undefined) patch.name = dto.name.trim();
+    if (dto.specifications !== undefined) patch.specifications = this.cleanSpecifications(dto.specifications);
 
     try {
       await asset.update(patch);
@@ -637,16 +798,24 @@ export class AssetService {
   // Writing: actions that change where an asset is
   // ==========================================
 
-  /** Gives the asset to an employee. If someone else had it, it is taken from them first. */
+  /** Gives the asset to an employee, on the checklist and day given. If someone else had it, it is taken from them first. */
   async assign(actor: AssetActorDto, assetId: string, dto: AssignAssetDto) {
     const { tenantId } = actor;
     const employee = await this.loadAssignee(tenantId, dto.employeeId);
+    const handover = this.assertHandover(dto.checklist, dto.assignedOn);
     const Asset = await this.modelProvider.getAssetModel(tenantId);
 
     await Asset.sequelize!.transaction(async (transaction) => {
       const asset = await this.loadForAction(tenantId, assetId, transaction);
-      if (asset.status === AssetStatus.DISPOSED) this.fail(HttpStatus.CONFLICT, 'A disposed asset cannot be assigned.');
-      if (asset.status === AssetStatus.MAINTENANCE) this.fail(HttpStatus.CONFLICT, 'This asset is under maintenance. Finish the maintenance before assigning it.');
+      if (!ASSIGNABLE.includes(asset.status)) {
+        const reason: Record<string, string> = {
+          [AssetStatus.DISPOSED]: 'A disposed asset cannot be assigned.',
+          [AssetStatus.MAINTENANCE]: 'This asset is under maintenance. Finish the maintenance before assigning it.',
+          [AssetStatus.DAMAGED]: 'This asset is damaged. Repair it before assigning it.',
+          [AssetStatus.LOST]: 'This asset is lost, so it cannot be assigned.',
+        };
+        this.fail(HttpStatus.CONFLICT, reason[asset.status] ?? 'This asset cannot be assigned right now.');
+      }
       if (asset.assignedEmployeeId === employee.id) this.fail(HttpStatus.CONFLICT, `${fullName(employee)} already has this asset.`);
 
       const events: EventInput[] = [];
@@ -667,52 +836,145 @@ export class AssetService {
         employeeId: employee.id,
         employeeName: fullName(employee),
         note: dto.note,
+        details: handover.details,
       });
 
-      await asset.update({ status: AssetStatus.IN_USE, assignedEmployeeId: employee.id, assignedAt: new Date() }, { transaction });
+      await asset.update({ status: AssetStatus.IN_USE, assignedEmployeeId: employee.id, assignedAt: handover.assignedAt }, { transaction });
       await this.record(tenantId, actor, assetId, events, transaction);
     });
     return this.serialize(tenantId, assetId);
   }
 
-  /** The employee hands it back: it is in stock again. */
-  async returnAsset(actor: AssetActorDto, assetId: string, note?: string | null) {
+  /**
+   * The employee hands it back, and says what state it is in: good or fair, it
+   * is in stock again; damaged, it is Damaged until it has been repaired. A lost
+   * asset that turns up is returned the same way.
+   */
+  async returnAsset(actor: AssetActorDto, assetId: string, dto: ReturnAssetDto) {
     const { tenantId } = actor;
     const Asset = await this.modelProvider.getAssetModel(tenantId);
 
     await Asset.sequelize!.transaction(async (transaction) => {
       const asset = await this.loadForAction(tenantId, assetId, transaction);
-      if (asset.status !== AssetStatus.IN_USE || !asset.assignedEmployeeId) {
-        this.fail(HttpStatus.CONFLICT, 'Only an asset that is in use can be returned.');
+      if (!RETURNABLE.includes(asset.status) || !asset.assignedEmployeeId) {
+        this.fail(HttpStatus.CONFLICT, 'Only an asset that someone has can be returned.');
       }
+      const next = dto.condition === AssetCondition.DAMAGED ? AssetStatus.DAMAGED : AssetStatus.AVAILABLE;
       await this.record(
         tenantId,
         actor,
         assetId,
         [{
           type: 'RETURNED',
-          fromStatus: AssetStatus.IN_USE,
-          toStatus: AssetStatus.AVAILABLE,
+          fromStatus: asset.status,
+          toStatus: next,
+          employeeId: asset.assignedEmployeeId,
+          employeeName: await this.holderName(tenantId, asset.assignedEmployeeId),
+          note: dto.note,
+          details: { condition: dto.condition },
+        }],
+        transaction,
+      );
+      await asset.update({ status: next, assignedEmployeeId: null, assignedAt: null }, { transaction });
+    });
+    return this.serialize(tenantId, assetId);
+  }
+
+  /** Reported broken. Whoever has it keeps it on record until it is returned or repaired. */
+  async markDamaged(actor: AssetActorDto, assetId: string, note?: string | null) {
+    const { tenantId } = actor;
+    const Asset = await this.modelProvider.getAssetModel(tenantId);
+
+    await Asset.sequelize!.transaction(async (transaction) => {
+      const asset = await this.loadForAction(tenantId, assetId, transaction);
+      if (asset.status === AssetStatus.DAMAGED) this.fail(HttpStatus.CONFLICT, 'This asset is already marked as damaged.');
+      if (![AssetStatus.AVAILABLE, AssetStatus.IN_USE].includes(asset.status)) {
+        this.fail(HttpStatus.CONFLICT, `An asset that is ${asset.status === AssetStatus.MAINTENANCE ? 'under maintenance' : asset.status.toLowerCase()} cannot be marked as damaged.`);
+      }
+      await this.record(
+        tenantId,
+        actor,
+        assetId,
+        [{
+          type: 'DAMAGED',
+          fromStatus: asset.status,
+          toStatus: AssetStatus.DAMAGED,
           employeeId: asset.assignedEmployeeId,
           employeeName: await this.holderName(tenantId, asset.assignedEmployeeId),
           note,
         }],
         transaction,
       );
-      await asset.update({ status: AssetStatus.AVAILABLE, assignedEmployeeId: null, assignedAt: null }, { transaction });
+      await asset.update({ status: AssetStatus.DAMAGED }, { transaction });
     });
     return this.serialize(tenantId, assetId);
   }
 
-  /** Sent for repair. Whoever had it still has it on record — they get it back afterwards. */
-  async startMaintenance(actor: AssetActorDto, assetId: string, note?: string | null) {
+  /** Cannot be found. Whoever had it stays on record, so the loss can be followed up. */
+  async markLost(actor: AssetActorDto, assetId: string, note?: string | null) {
     const { tenantId } = actor;
     const Asset = await this.modelProvider.getAssetModel(tenantId);
 
     await Asset.sequelize!.transaction(async (transaction) => {
       const asset = await this.loadForAction(tenantId, assetId, transaction);
+      if (asset.status === AssetStatus.LOST) this.fail(HttpStatus.CONFLICT, 'This asset is already marked as lost.');
+      if (asset.status === AssetStatus.DISPOSED) this.fail(HttpStatus.CONFLICT, 'A disposed asset cannot be marked as lost.');
+      await this.record(
+        tenantId,
+        actor,
+        assetId,
+        [{
+          type: 'LOST',
+          fromStatus: asset.status,
+          toStatus: AssetStatus.LOST,
+          employeeId: asset.assignedEmployeeId,
+          employeeName: await this.holderName(tenantId, asset.assignedEmployeeId),
+          note,
+        }],
+        transaction,
+      );
+      if (asset.status === AssetStatus.MAINTENANCE) {
+        await this.cancelOpenJob(tenantId, assetId, actor, 'Asset was reported lost', transaction);
+      }
+      await asset.update({ status: AssetStatus.LOST }, { transaction });
+    });
+    return this.serialize(tenantId, assetId);
+  }
+
+  // ==========================================
+  // Writing: maintenance
+  // ==========================================
+
+  /** Sent for service or repair: opens a job with what is wrong, who is fixing it and what it should cost. The holder, if any, stays on record. */
+  async startMaintenance(actor: AssetActorDto, assetId: string, dto: StartMaintenanceDto) {
+    const { tenantId } = actor;
+    const startedOn = dto.startedOn || todayUtc();
+    if (startedOn > todayUtc()) this.fail(HttpStatus.BAD_REQUEST, 'The start date cannot be in the future.');
+    if (dto.expectedOn && dto.expectedOn < startedOn) this.fail(HttpStatus.BAD_REQUEST, 'The expected return date cannot be before the start date.');
+    const Asset = await this.modelProvider.getAssetModel(tenantId);
+    const Maintenance = await this.modelProvider.getAssetMaintenanceModel(tenantId);
+
+    await Asset.sequelize!.transaction(async (transaction) => {
+      const asset = await this.loadForAction(tenantId, assetId, transaction);
       if (asset.status === AssetStatus.MAINTENANCE) this.fail(HttpStatus.CONFLICT, 'This asset is already under maintenance.');
-      if (asset.status === AssetStatus.DISPOSED) this.fail(HttpStatus.CONFLICT, 'A disposed asset cannot go for maintenance.');
+      if (!SERVICEABLE.includes(asset.status)) {
+        this.fail(HttpStatus.CONFLICT, `${asset.status === AssetStatus.DISPOSED ? 'A disposed' : 'A lost'} asset cannot go for maintenance.`);
+      }
+      const job: any = await Maintenance.create(
+        {
+          tenantId,
+          assetId,
+          type: dto.type ?? AssetMaintenanceType.REPAIR,
+          status: 'OPEN',
+          issue: dto.issue ?? null,
+          vendor: dto.vendor ?? null,
+          estimatedCost: dto.estimatedCost ?? null,
+          startedOn,
+          expectedOn: dto.expectedOn ?? null,
+          startedBy: actor.email ?? null,
+        } as any,
+        { transaction },
+      );
       await this.record(
         tenantId,
         actor,
@@ -723,7 +985,8 @@ export class AssetService {
           toStatus: AssetStatus.MAINTENANCE,
           employeeId: asset.assignedEmployeeId,
           employeeName: await this.holderName(tenantId, asset.assignedEmployeeId),
-          note,
+          note: dto.issue,
+          details: { maintenanceId: job.id, type: job.type, vendor: dto.vendor ?? null },
         }],
         transaction,
       );
@@ -732,14 +995,26 @@ export class AssetService {
     return this.serialize(tenantId, assetId);
   }
 
-  /** Back from repair: with its holder it is in use again, otherwise it goes back to stock. */
-  async completeMaintenance(actor: AssetActorDto, assetId: string, note?: string | null) {
+  /** Back from service: closes the job with what was done and what it cost. With its holder the asset is in use again, otherwise it goes back to stock. */
+  async completeMaintenance(actor: AssetActorDto, assetId: string, dto: CompleteMaintenanceDto) {
     const { tenantId } = actor;
+    const completedOn = dto.completedOn || todayUtc();
+    if (completedOn > todayUtc()) this.fail(HttpStatus.BAD_REQUEST, 'The completion date cannot be in the future.');
     const Asset = await this.modelProvider.getAssetModel(tenantId);
 
     await Asset.sequelize!.transaction(async (transaction) => {
       const asset = await this.loadForAction(tenantId, assetId, transaction);
       if (asset.status !== AssetStatus.MAINTENANCE) this.fail(HttpStatus.CONFLICT, 'This asset is not under maintenance.');
+
+      const job = await this.openJob(tenantId, assetId, transaction);
+      if (job && completedOn < job.startedOn) this.fail(HttpStatus.BAD_REQUEST, 'The completion date cannot be before the maintenance started.');
+      if (job) {
+        await job.update(
+          { status: 'COMPLETED', completedOn, cost: dto.cost ?? null, resolution: dto.resolution ?? null, completedBy: actor.email ?? null },
+          { transaction },
+        );
+      }
+
       const next = asset.assignedEmployeeId ? AssetStatus.IN_USE : AssetStatus.AVAILABLE;
       await this.record(
         tenantId,
@@ -751,7 +1026,8 @@ export class AssetService {
           toStatus: next,
           employeeId: asset.assignedEmployeeId,
           employeeName: await this.holderName(tenantId, asset.assignedEmployeeId),
-          note,
+          note: dto.resolution,
+          details: { maintenanceId: job?.id ?? null, cost: dto.cost ?? null },
         }],
         transaction,
       );
@@ -782,6 +1058,9 @@ export class AssetService {
         }],
         transaction,
       );
+      if (asset.status === AssetStatus.MAINTENANCE) {
+        await this.cancelOpenJob(tenantId, assetId, actor, 'Asset was disposed of', transaction);
+      }
       await asset.update(
         {
           status: AssetStatus.DISPOSED,

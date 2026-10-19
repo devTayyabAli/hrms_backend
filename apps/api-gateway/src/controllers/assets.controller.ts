@@ -20,14 +20,18 @@ import {
   AssetNoteDto,
   AssignAssetDto,
   CreateAssetCategoryDto,
+  CompleteMaintenanceDto,
   CreateAssetDto,
+  DEFAULT_HANDOVER_CHECKLIST,
   DisposeAssetDto,
   ExportAssetsQueryDto,
   GetAssetsQueryDto,
   HRMSModuleKey,
   MESSAGE_PATTERNS,
   ModuleAction,
+  ReturnAssetDto,
   SERVICES,
+  StartMaintenanceDto,
   UpdateAssetCategoryDto,
   UpdateAssetDto,
   type CsvColumn,
@@ -52,7 +56,7 @@ type AssetExportRow = {
   brand: string | null;
   serialNumber: string | null;
   status: string;
-  assignedTo: { name: string; employeeCode: string | null } | null;
+  assignedTo: { name: string; employeeCode: string | null; department: { name: string } | null } | null;
   assignedAt: Date | null;
   purchaseDate: string | null;
   purchaseCost: number | null;
@@ -65,6 +69,8 @@ const STATUS_LABEL: Record<string, string> = {
   AVAILABLE: 'Available',
   IN_USE: 'In Use',
   MAINTENANCE: 'In Maintenance',
+  DAMAGED: 'Damaged',
+  LOST: 'Lost',
   DISPOSED: 'Disposed',
 };
 
@@ -77,6 +83,7 @@ const ASSET_CSV_COLUMNS: CsvColumn<AssetExportRow>[] = [
   { header: 'Status', value: (row) => STATUS_LABEL[row.status] ?? row.status },
   { header: 'Assigned To', value: (row) => row.assignedTo?.name ?? '' },
   { header: 'Employee Code', value: (row) => row.assignedTo?.employeeCode ?? '' },
+  { header: 'Department', value: (row) => row.assignedTo?.department?.name ?? '' },
   { header: 'Assigned On', value: (row) => (row.assignedAt ? new Date(row.assignedAt).toISOString().slice(0, 10) : '') },
   { header: 'Purchase Date', value: (row) => row.purchaseDate ?? '' },
   { header: 'Purchase Cost', value: (row) => row.purchaseCost ?? '' },
@@ -169,6 +176,14 @@ export class AssetsController {
     return this.tenantClient.send(MESSAGE_PATTERNS.ASSET.DELETE_CATEGORY, { ...this.actor(tenantId, userId, email), categoryId });
   }
 
+  @Get('handover-checklist')
+  @RequireModule(HRMSModuleKey.ASSETS, ModuleAction.VIEW)
+  @RequirePermissions('assets.view', 'assets.manage')
+  @ApiOperation({ summary: 'The standard handover checklist the assign form starts from. Every item has to be ticked to hand an asset over' })
+  getHandoverChecklist() {
+    return { data: DEFAULT_HANDOVER_CHECKLIST.map((item) => ({ item, checked: false })) };
+  }
+
   @Get('export')
   @RequireModule(HRMSModuleKey.ASSETS, ModuleAction.EXPORT)
   @RequirePermissions('assets.export', 'assets.manage')
@@ -255,13 +270,13 @@ export class AssetsController {
   @RequireModule(HRMSModuleKey.ASSETS, ModuleAction.EDIT)
   @RequirePermissions('assets.edit', 'assets.manage')
   @ApiParam({ name: 'assetId' })
-  @ApiOperation({ summary: 'The employee hands the asset back (it becomes Available)' })
+  @ApiOperation({ summary: 'The employee hands the asset back, saying what condition it is in (Good / Fair: Available again; Damaged: Damaged)' })
   returnAsset(
     @Headers('x-tenant-id') tenantId: string,
     @CurrentUser('id') userId: string,
     @CurrentUser('email') email: string,
     @Param('assetId', ParseUUIDPipe) assetId: string,
-    @Body() dto: AssetNoteDto,
+    @Body() dto: ReturnAssetDto,
   ) {
     return this.tenantClient.send(MESSAGE_PATTERNS.ASSET.RETURN, { ...this.actor(tenantId, userId, email), assetId, dto });
   }
@@ -270,13 +285,13 @@ export class AssetsController {
   @RequireModule(HRMSModuleKey.ASSETS, ModuleAction.EDIT)
   @RequirePermissions('assets.edit', 'assets.manage')
   @ApiParam({ name: 'assetId' })
-  @ApiOperation({ summary: 'Send the asset for maintenance. It keeps its holder' })
+  @ApiOperation({ summary: 'Send the asset for maintenance or repair and open a job (problem, vendor, dates, estimated cost). It keeps its holder' })
   startMaintenance(
     @Headers('x-tenant-id') tenantId: string,
     @CurrentUser('id') userId: string,
     @CurrentUser('email') email: string,
     @Param('assetId', ParseUUIDPipe) assetId: string,
-    @Body() dto: AssetNoteDto,
+    @Body() dto: StartMaintenanceDto,
   ) {
     return this.tenantClient.send(MESSAGE_PATTERNS.ASSET.START_MAINTENANCE, { ...this.actor(tenantId, userId, email), assetId, dto });
   }
@@ -285,15 +300,45 @@ export class AssetsController {
   @RequireModule(HRMSModuleKey.ASSETS, ModuleAction.EDIT)
   @RequirePermissions('assets.edit', 'assets.manage')
   @ApiParam({ name: 'assetId' })
-  @ApiOperation({ summary: 'Maintenance is done: In Use again if it has a holder, otherwise Available' })
+  @ApiOperation({ summary: 'Maintenance is done: close the job (what was done, actual cost, date). In Use again if it has a holder, otherwise Available' })
   completeMaintenance(
+    @Headers('x-tenant-id') tenantId: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('email') email: string,
+    @Param('assetId', ParseUUIDPipe) assetId: string,
+    @Body() dto: CompleteMaintenanceDto,
+  ) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.ASSET.COMPLETE_MAINTENANCE, { ...this.actor(tenantId, userId, email), assetId, dto });
+  }
+
+  @Post(':assetId/damaged')
+  @RequireModule(HRMSModuleKey.ASSETS, ModuleAction.EDIT)
+  @RequirePermissions('assets.edit', 'assets.manage')
+  @ApiParam({ name: 'assetId' })
+  @ApiOperation({ summary: 'Report the asset as damaged. Whoever has it stays on record' })
+  markDamaged(
     @Headers('x-tenant-id') tenantId: string,
     @CurrentUser('id') userId: string,
     @CurrentUser('email') email: string,
     @Param('assetId', ParseUUIDPipe) assetId: string,
     @Body() dto: AssetNoteDto,
   ) {
-    return this.tenantClient.send(MESSAGE_PATTERNS.ASSET.COMPLETE_MAINTENANCE, { ...this.actor(tenantId, userId, email), assetId, dto });
+    return this.tenantClient.send(MESSAGE_PATTERNS.ASSET.MARK_DAMAGED, { ...this.actor(tenantId, userId, email), assetId, dto });
+  }
+
+  @Post(':assetId/lost')
+  @RequireModule(HRMSModuleKey.ASSETS, ModuleAction.EDIT)
+  @RequirePermissions('assets.edit', 'assets.manage')
+  @ApiParam({ name: 'assetId' })
+  @ApiOperation({ summary: 'Report the asset as lost. Whoever had it stays on record. If it turns up, return it' })
+  markLost(
+    @Headers('x-tenant-id') tenantId: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('email') email: string,
+    @Param('assetId', ParseUUIDPipe) assetId: string,
+    @Body() dto: AssetNoteDto,
+  ) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.ASSET.MARK_LOST, { ...this.actor(tenantId, userId, email), assetId, dto });
   }
 
   @Post(':assetId/dispose')

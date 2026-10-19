@@ -22,6 +22,7 @@ export { EmployeeShift } from './employee-shift.model';
 export { AssetCategory } from './asset-category.model';
 export { Asset } from './asset.model';
 export { AssetEvent } from './asset-event.model';
+export { AssetMaintenance } from './asset-maintenance.model';
 export { ChatConversation } from './chat-conversation.model';
 export { ChatParticipant } from './chat-participant.model';
 export { ChatMessage } from './chat-message.model';
