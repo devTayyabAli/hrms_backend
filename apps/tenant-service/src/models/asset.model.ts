@@ -18,7 +18,7 @@ import { AssetCategory } from './asset-category.model';
  * how it got there is `asset_events`.
  *
  * `status` is a plain string validated by the service (AVAILABLE, IN_USE,
- * MAINTENANCE, DISPOSED) rather than a database enum, so adding a status later
+ * MAINTENANCE, DAMAGED, LOST, DISPOSED) rather than a database enum, so adding a status later
  * does not need an ALTER TYPE on every organization's database.
  *
  * The category cannot be deleted while assets use it (no cascade); the
@@ -65,6 +65,10 @@ export class Asset extends Model {
   /** Unique when given (several assets without one are fine). */
   @Column({ type: DataType.STRING(100), allowNull: true })
   declare serialNumber: string | null;
+
+  /** Free-form specs as name / value pairs: [{ key: 'RAM', value: '16 GB' }]. */
+  @Column({ type: DataType.JSONB, allowNull: true })
+  declare specifications: { key: string; value: string }[] | null;
 
   @Column({ type: DataType.STRING(20), allowNull: false, defaultValue: 'AVAILABLE' })
   declare status: string;

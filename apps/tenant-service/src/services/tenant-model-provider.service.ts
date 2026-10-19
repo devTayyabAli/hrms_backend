@@ -16,6 +16,7 @@ import {
   AssetCategory,
   Asset,
   AssetEvent,
+  AssetMaintenance,
   ChatConversation,
   ChatParticipant,
   ChatMessage,
@@ -90,6 +91,7 @@ export const TENANT_OPERATIONAL_MODELS: Array<typeof Model> = [
   AssetCategory,
   Asset,
   AssetEvent,
+  AssetMaintenance,
   // Messages: the conversation before the participants and messages that FK to it.
   ChatConversation,
   ChatParticipant,
@@ -202,6 +204,10 @@ export class TenantModelProviderService extends BaseTenantModelProvider {
 
   getAssetModel(tenantId?: string): Promise<typeof Asset> {
     return this.model<typeof Asset>('Asset', tenantId);
+  }
+
+  getAssetMaintenanceModel(tenantId?: string): Promise<typeof AssetMaintenance> {
+    return this.model<typeof AssetMaintenance>('AssetMaintenance', tenantId);
   }
 
   getAssetEventModel(tenantId?: string): Promise<typeof AssetEvent> {

@@ -42,6 +42,7 @@ import {
   AssetCategory,
   Asset,
   AssetEvent,
+  AssetMaintenance,
   ChatConversation,
   ChatParticipant,
   ChatMessage,
@@ -91,6 +92,7 @@ const OPERATIONAL_MODELS = [
   AssetCategory,
   Asset,
   AssetEvent,
+  AssetMaintenance,
   // Messages: the conversation before the participants and messages that FK to it.
   ChatConversation,
   ChatParticipant,

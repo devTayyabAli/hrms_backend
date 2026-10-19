@@ -111,6 +111,9 @@ import {
   AssetCategoryIdMessageDto,
   AssetIdMessageDto,
   AssetNoteMessageDto,
+  CompleteMaintenanceMessageDto,
+  ReturnAssetMessageDto,
+  StartMaintenanceMessageDto,
   AssetTenantMessageDto,
   AssignAssetMessageDto,
   CreateAssetCategoryMessageDto,
@@ -1827,18 +1830,28 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.ASSET.RETURN)
-  async handleReturnAsset(@Payload() payload: AssetNoteMessageDto) {
-    return this.assetService.returnAsset(payload, payload.assetId, payload.dto.note);
+  async handleReturnAsset(@Payload() payload: ReturnAssetMessageDto) {
+    return this.assetService.returnAsset(payload, payload.assetId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ASSET.MARK_DAMAGED)
+  async handleMarkAssetDamaged(@Payload() payload: AssetNoteMessageDto) {
+    return this.assetService.markDamaged(payload, payload.assetId, payload.dto.note);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ASSET.MARK_LOST)
+  async handleMarkAssetLost(@Payload() payload: AssetNoteMessageDto) {
+    return this.assetService.markLost(payload, payload.assetId, payload.dto.note);
   }
 
   @MessagePattern(MESSAGE_PATTERNS.ASSET.START_MAINTENANCE)
-  async handleStartAssetMaintenance(@Payload() payload: AssetNoteMessageDto) {
-    return this.assetService.startMaintenance(payload, payload.assetId, payload.dto.note);
+  async handleStartAssetMaintenance(@Payload() payload: StartMaintenanceMessageDto) {
+    return this.assetService.startMaintenance(payload, payload.assetId, payload.dto);
   }
 
   @MessagePattern(MESSAGE_PATTERNS.ASSET.COMPLETE_MAINTENANCE)
-  async handleCompleteAssetMaintenance(@Payload() payload: AssetNoteMessageDto) {
-    return this.assetService.completeMaintenance(payload, payload.assetId, payload.dto.note);
+  async handleCompleteAssetMaintenance(@Payload() payload: CompleteMaintenanceMessageDto) {
+    return this.assetService.completeMaintenance(payload, payload.assetId, payload.dto);
   }
 
   @MessagePattern(MESSAGE_PATTERNS.ASSET.DISPOSE)

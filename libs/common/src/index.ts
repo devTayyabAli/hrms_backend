@@ -272,6 +272,8 @@ export const MESSAGE_PATTERNS = {
     START_MAINTENANCE: 'asset.start_maintenance',
     COMPLETE_MAINTENANCE: 'asset.complete_maintenance',
     DISPOSE: 'asset.dispose',
+    MARK_DAMAGED: 'asset.mark_damaged',
+    MARK_LOST: 'asset.mark_lost',
     GET_CATEGORIES: 'asset.get_categories',
     CREATE_CATEGORY: 'asset.create_category',
     UPDATE_CATEGORY: 'asset.update_category',
