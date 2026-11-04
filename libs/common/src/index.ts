@@ -56,6 +56,8 @@ export * from './dto/employee-assignment.dto';
 export * from './dto/department-checklist.dto';
 export * from './dto/performance-cycle.dto';
 export * from './dto/performance-plan.dto';
+export * from './dto/performance-evaluator.dto';
+export * from './dto/performance-improvement.dto';
 export * from './dto/offboarding.dto';
 export * from './dto/final-settlement.dto';
 export * from './dto/role-dashboard.dto';
@@ -972,6 +974,45 @@ export const MESSAGE_PATTERNS = {
     REOPEN_STAGE: 'offboarding.reopen_stage',
     GET_WAITING_ON_ME: 'offboarding.get_waiting_on_me',
     CLEAR_AS_MANAGER: 'offboarding.clear_as_manager',
+  },
+  PERFORMANCE_EVALUATOR: {
+    LIST: 'performance_evaluator.list',
+    SET: 'performance_evaluator.set',
+    CONSOLIDATE: 'performance_evaluator.consolidate',
+  },
+  PERFORMANCE_PIP: {
+    LIST: 'performance_pip.list',
+    GET: 'performance_pip.get',
+    CREATE: 'performance_pip.create',
+    UPDATE: 'performance_pip.update',
+    APPROVE: 'performance_pip.approve',
+    REJECT: 'performance_pip.reject',
+    CHECK_IN: 'performance_pip.check_in',
+    CLOSE: 'performance_pip.close',
+    MINE: 'performance_pip.mine',
+    PROPOSE: 'performance_pip.propose',
+    GET_OWN: 'performance_pip.get_own',
+    UPDATE_OWN: 'performance_pip.update_own',
+    CHECK_IN_OWN: 'performance_pip.check_in_own',
+    MY_PLANS: 'performance_pip.my_plans',
+  },
+  PERFORMANCE_DEVELOPMENT: {
+    LIST: 'performance_development.list',
+    CREATE: 'performance_development.create',
+    UPDATE: 'performance_development.update',
+    REMOVE: 'performance_development.remove',
+    MY_LIST: 'performance_development.my_list',
+    MY_CREATE: 'performance_development.my_create',
+    MY_UPDATE: 'performance_development.my_update',
+    MY_ACCEPT: 'performance_development.my_accept',
+    MY_DISMISS: 'performance_development.my_dismiss',
+    FOR_TEAM_MEMBER: 'performance_development.for_team_member',
+    CREATE_FOR_TEAM_MEMBER: 'performance_development.create_for_team_member',
+  },
+  PERFORMANCE_ACK: {
+    LIST: 'performance_ack.list',
+    ACKNOWLEDGE_REVIEW: 'performance_ack.acknowledge_review',
+    ACKNOWLEDGE_PIP: 'performance_ack.acknowledge_pip',
   },
   PERFORMANCE_SYNC: {
     PENDING: 'performance_sync.pending',

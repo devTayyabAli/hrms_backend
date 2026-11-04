@@ -80,6 +80,8 @@ export class PerformancePlanService {
       measurement: kpi.measurement as string,
       category: (kpi.category ?? null) as string | null,
       source: kpi.source as string,
+      roleLabel: (kpi.roleLabel ?? null) as string | null,
+      evaluatorEmployeeId: (kpi.evaluatorEmployeeId ?? null) as string | null,
       ...(withResults ? { actual: (kpi.actual ?? null) as string | null, score: asNumber(kpi.score), comment: (kpi.comment ?? null) as string | null } : {}),
     };
   }

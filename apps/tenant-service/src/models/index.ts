@@ -15,6 +15,8 @@ export { EmployeeAssignment } from './employee-assignment.model';
 export { DepartmentChecklistItem } from './department-checklist-item.model';
 export { PerformanceCycle } from './performance-cycle.model';
 export { KpiTemplate, ReviewKpi } from './performance-kpi.model';
+export { ReviewEvaluator } from './review-evaluator.model';
+export { ImprovementPlan, DevelopmentItem, PerformanceAcknowledgement } from './performance-improvement.model';
 export { Designation } from './designation.model';
 export { Employee } from './employee.model';
 export {

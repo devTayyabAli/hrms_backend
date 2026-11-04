@@ -135,4 +135,12 @@ export class ReviewKpi extends Model {
   /** Set when the plan is shown to the employee. */
   @Column({ type: DataType.DATE, allowNull: true })
   declare publishedAt: Date | null;
+
+  /** The role this KPI belongs to, for someone with more than one: "Primary role", "Project Manager". */
+  @Column({ type: DataType.STRING(120), allowNull: true })
+  declare roleLabel: string | null;
+
+  /** Who scores it, when that is not the lead reviewer (the manager of an additional role). */
+  @Column({ type: DataType.UUID, allowNull: true })
+  declare evaluatorEmployeeId: string | null;
 }

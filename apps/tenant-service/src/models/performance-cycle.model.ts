@@ -55,6 +55,10 @@ export class PerformanceCycle extends Model {
   @Column({ type: DataType.UUID, allowNull: true })
   declare fallbackReviewerId: string | null;
 
+  /** { includeAdditionalRoles: boolean }: whether people with additional roles get KPIs and evaluators for them. */
+  @Column({ type: DataType.JSONB, allowNull: false, defaultValue: {} })
+  declare roleRules: Record<string, any>;
+
   @Column({ type: DataType.DATE, allowNull: true })
   declare launchedAt: Date | null;
 

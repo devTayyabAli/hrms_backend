@@ -26,6 +26,8 @@ import { EmployeePortalService } from './employee-portal.service';
 import { PerformanceDashboardService } from './performance-dashboard.service';
 import { PerformanceCycleService } from './performance-cycle.service';
 import { PerformanceSyncService } from './performance-sync.service';
+import { PerformanceEvaluatorService } from './performance-evaluator.service';
+import { PerformancePipService } from './performance-pip.service';
 import { OrganizationHierarchyService } from './organization-hierarchy.service';
 import { WorkspaceTaskService } from './workspace-task.service';
 
@@ -134,6 +136,8 @@ export class EmployeeService {
     @Optional() private readonly performance?: PerformanceDashboardService,
     @Optional() private readonly performanceCycles?: PerformanceCycleService,
     @Optional() private readonly performanceSync?: PerformanceSyncService,
+    @Optional() private readonly performanceEvaluators?: PerformanceEvaluatorService,
+    @Optional() private readonly performancePips?: PerformancePipService,
   ) {}
 
   // ==========================================
@@ -974,12 +978,28 @@ export class EmployeeService {
         this.logger.warn(`Reimbursements waiting on ${employeeId} could not be handed on: ${error?.message ?? error}`);
       }
     }
+    // Reviews they evaluate with others: their share goes to the lead.
+    if (this.performanceEvaluators) {
+      try {
+        await this.performanceEvaluators.onEvaluatorLeft(tenantId, employeeId);
+      } catch (error: any) {
+        this.logger.warn(`Reviews ${employeeId} evaluated with others could not be updated: ${error?.message ?? error}`);
+      }
+    }
     // Their own open reviews are closed (kept, not deleted).
     if (this.performanceSync) {
       try {
         await this.performanceSync.closeForExit(tenantId, employeeId);
       } catch (error: any) {
         this.logger.warn(`Open reviews of ${employeeId} could not be closed: ${error?.message ?? error}`);
+      }
+    }
+    // A plan that was proposed or running is closed as cancelled (kept).
+    if (this.performancePips) {
+      try {
+        await this.performancePips.onEmployeeLeft(tenantId, employeeId);
+      } catch (error: any) {
+        this.logger.warn(`The improvement plan of ${employeeId} could not be closed: ${error?.message ?? error}`);
       }
     }
     // Reviews they were to complete go to the reviewed person's manager, or HR.
@@ -1158,12 +1178,18 @@ export class EmployeeService {
     if (!employeeIds.length) return;
     const Review = await this.modelProvider.getPerformanceReviewModel(tenantId);
     const Goal = await this.modelProvider.getPerformanceGoalModel(tenantId);
-    const [reviews, goals] = await Promise.all([
+    const Plan = await this.modelProvider.getImprovementPlanModel?.(tenantId);
+    const [reviews, goals, plans] = await Promise.all([
       Review.count({ where: { tenantId, employeeId: { [Op.in]: employeeIds } } }),
       Goal.count({ where: { tenantId, employeeId: { [Op.in]: employeeIds } } }),
+      Plan ? Plan.count({ where: { tenantId, employeeId: { [Op.in]: employeeIds } } }) : Promise.resolve(0),
     ]);
-    if (!reviews && !goals) return;
-    const parts = [reviews ? `${reviews} performance review${reviews === 1 ? '' : 's'}` : null, goals ? `${goals} goal${goals === 1 ? '' : 's'}` : null].filter(Boolean);
+    if (!reviews && !goals && !plans) return;
+    const parts = [
+      reviews ? `${reviews} performance review${reviews === 1 ? '' : 's'}` : null,
+      goals ? `${goals} goal${goals === 1 ? '' : 's'}` : null,
+      plans ? `${plans} improvement plan${plans === 1 ? '' : 's'}` : null,
+    ].filter(Boolean);
     this.conflict(
       `${employeeIds.length === 1 ? 'This employee has' : 'Some of these employees have'} ${parts.join(' and ')} in Performance. Their history is kept, so they cannot be deleted. Mark them Resigned instead.`,
     );

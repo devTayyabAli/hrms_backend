@@ -104,6 +104,11 @@ import { PerformanceCycleService } from './services/performance-cycle.service';
 import { KpiTemplateService } from './services/kpi-template.service';
 import { PerformancePlanService } from './services/performance-plan.service';
 import { PerformanceSyncService } from './services/performance-sync.service';
+import { ReviewRolesService } from './services/review-roles.service';
+import { PerformanceEvaluatorService } from './services/performance-evaluator.service';
+import { PerformancePipService } from './services/performance-pip.service';
+import { PerformanceDevelopmentService } from './services/performance-development.service';
+import { PerformanceAcknowledgementService } from './services/performance-acknowledgement.service';
 import { OffboardingService } from './services/offboarding.service';
 import { FinalSettlementService } from './services/final-settlement.service';
 import { RoleDashboardService } from './services/role-dashboard.service';
@@ -307,6 +312,11 @@ import { PaymentProviderFactory } from './billing/providers/payment-provider.fac
     KpiTemplateService,
     PerformancePlanService,
     PerformanceSyncService,
+    ReviewRolesService,
+    PerformanceEvaluatorService,
+    PerformancePipService,
+    PerformanceDevelopmentService,
+    PerformanceAcknowledgementService,
     OffboardingService,
     FinalSettlementService,
     RoleDashboardService,

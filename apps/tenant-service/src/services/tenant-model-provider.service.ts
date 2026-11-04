@@ -14,6 +14,10 @@ import {
   PerformanceCycle,
   KpiTemplate,
   ReviewKpi,
+  ReviewEvaluator,
+  ImprovementPlan,
+  DevelopmentItem,
+  PerformanceAcknowledgement,
   Designation,
   Employee,
   HierarchyChange,
@@ -127,6 +131,12 @@ export const TENANT_OPERATIONAL_MODELS: Array<typeof Model> = [
   // KPI templates and the KPIs of a review. No FKs.
   KpiTemplate,
   ReviewKpi,
+  // The evaluators of a review that has more than one. No FKs.
+  ReviewEvaluator,
+  // Improvement plans, development items and acknowledgements. No FKs.
+  ImprovementPlan,
+  DevelopmentItem,
+  PerformanceAcknowledgement,
   AttendanceRecord,
   WorkingHours,
   // Shift before EmployeeShift, which FKs to it (and to employees, above).
@@ -559,6 +569,22 @@ export class TenantModelProviderService extends BaseTenantModelProvider {
 
   getOffboardingClearanceModel(tenantId?: string): Promise<typeof OffboardingClearance> {
     return this.model<typeof OffboardingClearance>('OffboardingClearance', tenantId);
+  }
+
+  getImprovementPlanModel(tenantId?: string): Promise<typeof ImprovementPlan> {
+    return this.model<typeof ImprovementPlan>('ImprovementPlan', tenantId);
+  }
+
+  getDevelopmentItemModel(tenantId?: string): Promise<typeof DevelopmentItem> {
+    return this.model<typeof DevelopmentItem>('DevelopmentItem', tenantId);
+  }
+
+  getPerformanceAcknowledgementModel(tenantId?: string): Promise<typeof PerformanceAcknowledgement> {
+    return this.model<typeof PerformanceAcknowledgement>('PerformanceAcknowledgement', tenantId);
+  }
+
+  getReviewEvaluatorModel(tenantId?: string): Promise<typeof ReviewEvaluator> {
+    return this.model<typeof ReviewEvaluator>('ReviewEvaluator', tenantId);
   }
 
   getKpiTemplateModel(tenantId?: string): Promise<typeof KpiTemplate> {

@@ -127,6 +127,11 @@ export class CreatePerformanceCycleDto {
   @IsOptional()
   @IsUUID()
   fallbackReviewerId?: string;
+
+  @ApiProperty({ required: false, default: false, description: 'People with an additional role get KPIs for it too, and the manager of that role evaluates it. Each role takes an equal share' })
+  @IsOptional()
+  @IsBoolean()
+  includeAdditionalRoles?: boolean;
 }
 
 export class UpdatePerformanceCycleDto {
@@ -168,6 +173,11 @@ export class UpdatePerformanceCycleDto {
   @IsOptional()
   @IsUUID()
   fallbackReviewerId?: string | null;
+
+  @ApiProperty({ required: false, description: 'Applies to people enrolled from now on' })
+  @IsOptional()
+  @IsBoolean()
+  includeAdditionalRoles?: boolean;
 }
 
 export class EnrolInCycleDto {

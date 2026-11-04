@@ -24,6 +24,7 @@ import {
   CreatePerformanceReviewDto,
   ReviewChangeDecisionDto,
   SavePerformancePlanDto,
+  SetReviewEvaluatorsDto,
   SetReviewAccessDto,
   DashboardLimitDto,
   GetPerformanceTrendQueryDto,
@@ -193,6 +194,33 @@ export class PerformanceController {
     @CurrentUser('email') email: string,
   ) {
     return this.tenantClient.send(MESSAGE_PATTERNS.PERFORMANCE.PUBLISH_REVIEW, { tenantId, reviewId, email });
+  }
+
+  @Get('reviews/:reviewId/reviewers')
+  @RequireModule(HRMSModuleKey.PERFORMANCE, ModuleAction.VIEW)
+  @RequirePermissions('performance.view', 'performance.manage')
+  @ApiParam({ name: 'reviewId', description: 'Performance Review ID' })
+  @ApiOperation({ summary: 'The evaluators of a review with more than one: who, as what, their share, and what each has submitted' })
+  getReviewers(@Headers('x-tenant-id') tenantId: string, @Param('reviewId', ParseUUIDPipe) reviewId: string) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.PERFORMANCE_EVALUATOR.LIST, { tenantId, reviewId });
+  }
+
+  @Put('reviews/:reviewId/reviewers')
+  @RequireModule(HRMSModuleKey.PERFORMANCE, ModuleAction.EDIT)
+  @RequirePermissions('performance.edit', 'performance.manage')
+  @ApiParam({ name: 'reviewId', description: 'Performance Review ID' })
+  @ApiOperation({ summary: 'Set the evaluators of a review: two to eight, one the lead, shares adding up to 100. An empty list goes back to one reviewer' })
+  setReviewers(@Headers('x-tenant-id') tenantId: string, @Param('reviewId', ParseUUIDPipe) reviewId: string, @Body() dto: SetReviewEvaluatorsDto) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.PERFORMANCE_EVALUATOR.SET, { tenantId, reviewId, dto });
+  }
+
+  @Post('reviews/:reviewId/consolidate')
+  @RequireModule(HRMSModuleKey.PERFORMANCE, ModuleAction.EDIT)
+  @RequirePermissions('performance.manage')
+  @ApiParam({ name: 'reviewId', description: 'Performance Review ID' })
+  @ApiOperation({ summary: 'Complete a review with several evaluators now, from the evaluations that are in. It completes by itself when the last one submits' })
+  consolidate(@Headers('x-tenant-id') tenantId: string, @Param('reviewId', ParseUUIDPipe) reviewId: string) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.PERFORMANCE_EVALUATOR.CONSOLIDATE, { tenantId, reviewId });
   }
 
   @Get('changes')

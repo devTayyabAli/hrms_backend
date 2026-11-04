@@ -26,6 +26,7 @@ import { currentRpcActor } from '@app/tenant-context';
 import { writePayrollAudit as writeAudit } from './payroll-access';
 import { buildReviewSnapshot } from './performance-snapshot';
 import { KpiTemplateService } from './kpi-template.service';
+import { ReviewRolesService } from './review-roles.service';
 import { involvedProjectIds, seesConfidentialProjects, todayIso } from './workspace-shared';
 
 /** What a reader sees in place of a confidential project they have no access to. */
@@ -82,6 +83,7 @@ export class PerformanceDashboardService {
     private readonly modelProvider: TenantModelProviderService,
     @Optional() private readonly dataScope?: DataScopeService,
     @Optional() private readonly kpiTemplates?: KpiTemplateService,
+    @Optional() private readonly roles?: ReviewRolesService,
   ) {}
 
   /** `{}` for organization-wide callers; otherwise limits `field` to visible employees. */
@@ -271,6 +273,7 @@ export class PerformanceDashboardService {
       reviewerSetBy: review.reviewerPinned ? 'HR' : 'REPORTING_MANAGER',
       /** The person's department, designation, manager and reviewer when the review was made. */
       cycleId: review.cycleId ?? null,
+      multiReviewer: Boolean(review.multiReviewer),
       planStatus: review.planPublishedAt ? 'PUBLISHED' : 'DRAFT',
       kpiScore: asNumber(review.kpiScore),
       /** Set when the person changed and HR has yet to decide what happens to this review. */
@@ -844,7 +847,7 @@ export class PerformanceDashboardService {
   async enrolInCycle(
     tenantId: string,
     employee: any,
-    cycle: { id: string; name: string; fallbackReviewerId?: string | null },
+    cycle: { id: string; name: string; fallbackReviewerId?: string | null; roleRules?: Record<string, any> | null },
   ): Promise<{ id: string; reviewerId: string | null } | null> {
     const Review = await this.modelProvider.getPerformanceReviewModel(tenantId);
     const wanted = cycle.name.trim().toLowerCase();
@@ -876,6 +879,10 @@ export class PerformanceDashboardService {
     });
     // The KPIs that fit the person, as their own copy, and the reviewer's goal-setting action.
     const assigned = this.kpiTemplates ? await this.kpiTemplates.assignToReview(tenantId, { id: created.id, employeeId: employee.id, cycleId: cycle.id }, employee) : { templateId: null, count: 0 };
+    // Someone with more than one role: KPIs for each, and an evaluator for each additional role that has a manager.
+    if (cycle.roleRules?.includeAdditionalRoles === true && this.roles) {
+      await this.roles.enrolRoles(tenantId, { id: created.id, employeeId: employee.id, cycleId: cycle.id }, employee, reviewerId, assigned.templateId);
+    }
     await this.notifyEmployee(tenantId, employee.id, `Self-assessment requested: ${cycle.name.trim()}`, `Your ${cycle.name.trim()} performance review has started. Open My Performance to add your own assessment.`);
     await this.tellReviewer(tenantId, reviewerId, employee, cycle.name.trim());
     if (reviewerId) {
@@ -992,7 +999,7 @@ export class PerformanceDashboardService {
    */
   async followManagerChange(tenantId: string, employeeId: string): Promise<number> {
     const Review = await this.modelProvider.getPerformanceReviewModel(tenantId);
-    const open = ((await Review.findAll({ where: { tenantId, employeeId, status: { [Op.ne]: PerformanceReviewStatus.COMPLETED }, reviewerPinned: false } as any })) as any[]).filter((row) => !row.publishedAt && !row.closedAt);
+    const open = ((await Review.findAll({ where: { tenantId, employeeId, status: { [Op.ne]: PerformanceReviewStatus.COMPLETED }, reviewerPinned: false } as any })) as any[]).filter((row) => !row.publishedAt && !row.closedAt && !row.multiReviewer);
     if (!open.length) return 0;
     const Employee = await this.modelProvider.getEmployeeModel(tenantId);
     const employee: any = await Employee.findOne({ where: { id: employeeId, tenantId } });
@@ -1018,7 +1025,7 @@ export class PerformanceDashboardService {
    */
   async releaseReviewer(tenantId: string, reviewerId: string): Promise<number> {
     const Review = await this.modelProvider.getPerformanceReviewModel(tenantId);
-    const open = ((await Review.findAll({ where: { tenantId, reviewerId, status: { [Op.ne]: PerformanceReviewStatus.COMPLETED } } as any })) as any[]).filter((row) => !row.publishedAt && !row.closedAt);
+    const open = ((await Review.findAll({ where: { tenantId, reviewerId, status: { [Op.ne]: PerformanceReviewStatus.COMPLETED } } as any })) as any[]).filter((row) => !row.publishedAt && !row.closedAt && !row.multiReviewer);
     let moved = 0;
     for (const review of open) {
       const Employee = await this.modelProvider.getEmployeeModel(tenantId);

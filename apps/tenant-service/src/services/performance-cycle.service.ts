@@ -122,6 +122,7 @@ export class PerformanceCycleService {
       enrolmentMode: cycle.enrolmentMode as string,
       eligibility: this.rulesOf(cycle),
       fallbackReviewerId: (cycle.fallbackReviewerId ?? null) as string | null,
+      includeAdditionalRoles: cycle.roleRules?.includeAdditionalRoles === true,
       launchedAt: cycle.launchedAt ?? null,
       closedAt: cycle.closedAt ?? null,
       createdBy: (cycle.createdByEmail ?? null) as string | null,
@@ -206,6 +207,7 @@ export class PerformanceCycleService {
       enrolmentMode: dto.enrolmentMode ?? CycleEnrolmentMode.AUTO_ENROL,
       eligibility: rules,
       fallbackReviewerId: dto.fallbackReviewerId ?? null,
+      roleRules: { includeAdditionalRoles: dto.includeAdditionalRoles === true },
       createdByEmail: currentRpcActor()?.email ?? null,
     } as any);
     await writeAudit(this.modelProvider, this.logger, tenantId, 'performance_cycles', created.id, 'CREATE', { name: { from: null, to: created.name } });
@@ -241,6 +243,7 @@ export class PerformanceCycleService {
       await this.checkFallback(tenantId, dto.fallbackReviewerId);
       patch.fallbackReviewerId = dto.fallbackReviewerId ?? null;
     }
+    if (dto.includeAdditionalRoles !== undefined) patch.roleRules = { ...(cycle.roleRules ?? {}), includeAdditionalRoles: dto.includeAdditionalRoles };
     if (Object.keys(patch).length) {
       await cycle.update(patch);
       await writeAudit(this.modelProvider, this.logger, tenantId, 'performance_cycles', id, 'UPDATE', { fields: { from: null, to: Object.keys(patch).join(',') } });

@@ -1,4 +1,4 @@
-import { HttpStatus, Injectable, Logger } from '@nestjs/common';
+import { HttpStatus, Injectable, Logger, Optional } from '@nestjs/common';
 import { Op } from 'sequelize';
 import {
   PerformanceActorDto,
@@ -13,6 +13,7 @@ import { TenantModelProviderService } from './tenant-model-provider.service';
 import { writePayrollAudit as writeAudit } from './payroll-access';
 import { buildReviewSnapshot } from './performance-snapshot';
 import { applyKpiScores } from './performance-kpi';
+import { PerformanceEvaluatorService } from './performance-evaluator.service';
 
 const METRICS = ['professionalism', 'communication', 'qualityOfWork', 'teamwork', 'leadership'] as const;
 type Metric = (typeof METRICS)[number];
@@ -37,7 +38,10 @@ const goalStatusFor = (progress: number): PerformanceGoalStatus =>
 export class PerformanceSelfService {
   private readonly logger = new Logger(PerformanceSelfService.name);
 
-  constructor(private readonly modelProvider: TenantModelProviderService) {}
+  constructor(
+    private readonly modelProvider: TenantModelProviderService,
+    @Optional() private readonly evaluators?: PerformanceEvaluatorService,
+  ) {}
 
   private fail(status: HttpStatus, message: string): never {
     throw new TenantException(TenantErrorCode.INVALID_TENANT_CONTEXT, message, status);
@@ -95,7 +99,8 @@ export class PerformanceSelfService {
       order: [['createdAt', 'DESC'], ['id', 'ASC']],
       limit: 100,
     })) as any[];
-    const data = rows.map((row) => this.reviewRow(row));
+    const acks = await this.acknowledgements(tenantId, rows.filter((row) => row.publishedAt).map((row) => row.id));
+    const data = rows.map((row) => ({ ...this.reviewRow(row), acknowledgement: acks.get(row.id) ?? null }));
     return {
       data,
       summary: {
@@ -108,7 +113,22 @@ export class PerformanceSelfService {
 
   async getReview(actor: PerformanceActorDto, reviewId: string) {
     const employee = await this.me(actor);
-    return this.reviewRow(await this.findReview(actor.tenantId, employee.id, reviewId));
+    const review = await this.findReview(actor.tenantId, employee.id, reviewId);
+    const acks = await this.acknowledgements(actor.tenantId, review.publishedAt ? [review.id] : []);
+    return { ...this.reviewRow(review), acknowledgement: acks.get(review.id) ?? null };
+  }
+
+  /** What I said when I acknowledged each of these reviews (best effort: a missing table must not hide the reviews). */
+  private async acknowledgements(tenantId: string, reviewIds: string[]): Promise<Map<string, { at: Date; agreement: string; comment: string | null }>> {
+    if (!reviewIds.length || !this.modelProvider.getPerformanceAcknowledgementModel) return new Map();
+    try {
+      const Ack = await this.modelProvider.getPerformanceAcknowledgementModel(tenantId);
+      const rows = (await Ack.findAll({ where: { tenantId, kind: 'REVIEW', recordId: { [Op.in]: reviewIds } } })) as any[];
+      return new Map(rows.map((row) => [row.recordId, { at: row.acknowledgedAt as Date, agreement: row.agreement as string, comment: (row.comment ?? null) as string | null }]));
+    } catch (error: any) {
+      this.logger.warn(`Acknowledgements could not be read: ${error?.message ?? error}`);
+      return new Map();
+    }
   }
 
   /**
@@ -177,7 +197,7 @@ export class PerformanceSelfService {
   // Reviews I complete for others
   // ==========================================
 
-  private reviewingRow(review: any, employee: any) {
+  private reviewingRow(review: any, employee: any, info?: any) {
     const metrics = {} as Record<Metric, number | null>;
     for (const metric of METRICS) metrics[metric] = asNumber(review[metric]);
     return {
@@ -194,6 +214,10 @@ export class PerformanceSelfService {
       kpiScore: asNumber(review.kpiScore),
       planStatus: review.planPublishedAt ? 'PUBLISHED' : 'DRAFT',
       cycleId: (review.cycleId ?? null) as string | null,
+      // More than one evaluator: my own evaluation, and (for the lead) who has submitted. Never what the others wrote.
+      multiReviewer: Boolean(review.multiReviewer),
+      myEvaluation: info?.myEvaluation ?? null,
+      evaluators: info?.evaluators ?? null,
       closed: review.closedAt ? { reason: (review.closedReason ?? null) as string | null, at: review.closedAt } : null,
       pendingChange: review.pendingChange ?? null,
       // Once the result is published to the employee it is HR's to unpublish before anyone changes it.
@@ -212,9 +236,16 @@ export class PerformanceSelfService {
     const { tenantId } = actor;
     const me = await this.me(actor);
     const Review = await this.modelProvider.getPerformanceReviewModel(tenantId);
-    const rows: any[] = (await Review.findAll({ where: { tenantId, reviewerId: me.id }, order: [['createdAt', 'DESC'], ['id', 'ASC']], limit: 200 })) as any[];
+    // The ones I am the reviewer of, and the ones I am one of several evaluators of.
+    let evaluating: string[] = [];
+    if (this.evaluators) {
+      const Evaluator = await this.modelProvider.getReviewEvaluatorModel(tenantId);
+      evaluating = ((await Evaluator.findAll({ where: { tenantId, employeeId: me.id }, attributes: ['reviewId'], raw: true })) as unknown as { reviewId: string }[]).map((row) => row.reviewId);
+    }
+    const rows: any[] = (await Review.findAll({ where: { tenantId, [Op.or]: [{ reviewerId: me.id }, ...(evaluating.length ? [{ id: { [Op.in]: evaluating } }] : [])] } as any, order: [['createdAt', 'DESC'], ['id', 'ASC']], limit: 200 })) as any[];
     const people = await this.employeesOf(tenantId, rows.map((row) => row.employeeId));
-    const data = rows.map((row) => this.reviewingRow(row, people.get(row.employeeId)));
+    const infos = this.evaluators ? await this.evaluators.infoFor(tenantId, rows, me.id) : new Map<string, any>();
+    const data = rows.map((row) => this.reviewingRow(row, people.get(row.employeeId), infos.get(row.id)));
     const open = data.filter((row) => row.status !== PerformanceReviewStatus.COMPLETED && !row.closed);
     return {
       data: [...open, ...data.filter((row) => !open.includes(row))],
@@ -224,7 +255,9 @@ export class PerformanceSelfService {
 
   private async findReviewing(tenantId: string, reviewerId: string, reviewId: string) {
     const Review = await this.modelProvider.getPerformanceReviewModel(tenantId);
-    const review: any = await Review.findOne({ where: { id: reviewId, tenantId, reviewerId } });
+    let review: any = await Review.findOne({ where: { id: reviewId, tenantId, reviewerId } });
+    // One of several evaluators of the review.
+    if (!review && this.evaluators && (await this.evaluators.isEvaluator(tenantId, reviewId, reviewerId))) review = await Review.findOne({ where: { id: reviewId, tenantId } });
     if (!review) this.fail(HttpStatus.NOT_FOUND, `Performance review '${reviewId}' is not one you review.`);
     return review;
   }
@@ -232,7 +265,13 @@ export class PerformanceSelfService {
   async getReviewingOne(actor: PerformanceActorDto, reviewId: string) {
     const me = await this.me(actor);
     const review = await this.findReviewing(actor.tenantId, me.id, reviewId);
-    return this.reviewingRow(review, (await this.employeesOf(actor.tenantId, [review.employeeId])).get(review.employeeId));
+    const info = this.evaluators ? (await this.evaluators.infoFor(actor.tenantId, [review], me.id)).get(review.id) : undefined;
+    const row: any = this.reviewingRow(review, (await this.employeesOf(actor.tenantId, [review.employeeId])).get(review.employeeId), info);
+    // The KPIs this evaluator is the one to score.
+    if (review.multiReviewer && this.evaluators && info?.myEvaluation) {
+      row.myKpis = (await this.evaluators.kpisFor(actor.tenantId, review.id, me.id, Boolean(info.myEvaluation.isLead))).map((kpi) => ({ id: kpi.id, title: kpi.title, weight: Number(kpi.weight), target: kpi.target ?? null, roleLabel: kpi.roleLabel ?? null, actual: kpi.actual ?? null, score: asNumber(kpi.score), comment: kpi.comment ?? null }));
+    }
+    return row;
   }
 
   /**
@@ -247,6 +286,11 @@ export class PerformanceSelfService {
     const review = await this.findReviewing(tenantId, me.id, reviewId);
     if (review.publishedAt) this.fail(HttpStatus.CONFLICT, 'This review is published to the employee. Ask HR to unpublish it before changing it.');
     if (review.closedAt) this.fail(HttpStatus.CONFLICT, 'This review was closed (the person left, or was taken out of the cycle), so it can no longer be evaluated.');
+    // More than one evaluator: this goes on my own evaluation, and the review completes when all are in.
+    if (review.multiReviewer && this.evaluators) {
+      await this.evaluators.submit(tenantId, review, me.id, dto);
+      return this.getReviewingOne(actor, reviewId);
+    }
 
     const patch: Record<string, unknown> = {};
     for (const metric of METRICS) if (dto[metric] !== undefined) patch[metric] = dto[metric];

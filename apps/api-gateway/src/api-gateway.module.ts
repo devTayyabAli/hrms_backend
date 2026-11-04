@@ -34,6 +34,7 @@ import { MyAssetsController } from './controllers/my-assets.controller';
 import { LearningController } from './controllers/learning.controller';
 import { MyLearningController } from './controllers/my-learning.controller';
 import { MyPerformanceController } from './controllers/my-performance.controller';
+import { MyPerformanceImprovementController, PerformanceImprovementController } from './controllers/performance-improvement.controller';
 import { MyPoliciesController } from './controllers/my-policies.controller';
 import { ApprovalPoliciesController } from './controllers/approval-policies.controller';
 import { MyApprovalsController } from './controllers/my-approvals.controller';
@@ -164,6 +165,8 @@ import { ExportPolicyGuard } from './guards/export-policy.guard';
     LearningController,
     MyLearningController,
     MyPerformanceController,
+    MyPerformanceImprovementController,
+    PerformanceImprovementController,
     MyPoliciesController,
     ApprovalPoliciesController,
     MyApprovalsController,
@@ -224,6 +227,9 @@ import { ExportPolicyGuard } from './guards/export-policy.guard';
       ) =>
         new ResilientClientProxy(client, {
           serviceName: 'Auth service',
+          // Login waits on user-service, which may be warming a cold tenant
+          // connection; must exceed auth-service's own 40s user-service wait.
+          timeoutMs: 45000,
           getCorrelationId: () => tenantContext.getContext()?.requestId,
           // Signs every outgoing message, so the receiving service can tell
           // a call that came through this gateway from one sent straight to

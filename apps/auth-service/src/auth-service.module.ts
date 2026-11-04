@@ -136,6 +136,10 @@ import {
       ) =>
         new ResilientClientProxy(client, {
           serviceName: 'User service',
+          // First sign-in after a restart/idle sweep opens a cold tenant DB
+          // connection and runs the schema sync (many round trips); that can
+          // pass the 15s default on a remote dev DB.
+          timeoutMs: 40000,
           getCorrelationId: () => tenantContext.getContext()?.requestId,
           signPayload: (data) => signing.signInPlace(data),
         }),

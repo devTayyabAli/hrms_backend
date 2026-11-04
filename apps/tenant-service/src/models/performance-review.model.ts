@@ -128,6 +128,10 @@ export class PerformanceReview extends Model {
   @Column({ type: DataType.DATE, allowNull: true })
   declare closedAt: Date | null;
 
+  /** True when more than one person evaluates it (see ReviewEvaluator): its rating is then their evaluations put together. */
+  @Column({ type: DataType.BOOLEAN, allowNull: false, defaultValue: false })
+  declare multiReviewer: boolean;
+
   /**
    * Employees HR has let read this review although they would not otherwise
    * (a manager newly assigned to the person does not see earlier confidential

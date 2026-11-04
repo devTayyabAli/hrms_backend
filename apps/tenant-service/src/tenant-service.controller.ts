@@ -450,6 +450,10 @@ import { PerformanceCycleService } from './services/performance-cycle.service';
 import { KpiTemplateService } from './services/kpi-template.service';
 import { PerformancePlanService } from './services/performance-plan.service';
 import { PerformanceSyncService } from './services/performance-sync.service';
+import { PerformanceEvaluatorService } from './services/performance-evaluator.service';
+import { PerformancePipService } from './services/performance-pip.service';
+import { PerformanceDevelopmentService } from './services/performance-development.service';
+import { PerformanceAcknowledgementService } from './services/performance-acknowledgement.service';
 import { OffboardingService } from './services/offboarding.service';
 import { FinalSettlementService } from './services/final-settlement.service';
 import { RoleDashboardService } from './services/role-dashboard.service';
@@ -526,6 +530,10 @@ export class TenantServiceController {
     private kpiTemplateService: KpiTemplateService,
     private performancePlanService: PerformancePlanService,
     private performanceSyncService: PerformanceSyncService,
+    private performanceEvaluatorService: PerformanceEvaluatorService,
+    private performancePipService: PerformancePipService,
+    private performanceDevelopmentService: PerformanceDevelopmentService,
+    private performanceAcknowledgementService: PerformanceAcknowledgementService,
     private offboardingService: OffboardingService,
     private finalSettlementService: FinalSettlementService,
     private roleDashboardService: RoleDashboardService,
@@ -4683,6 +4691,165 @@ export class TenantServiceController {
   @MessagePattern(MESSAGE_PATTERNS.OFFBOARDING.CLEAR_AS_MANAGER)
   handleClearOffboardingAsManager(@Payload() payload: ClearMyOffboardingMessageDto) {
     return this.offboardingService.clearAsManager(payload.tenantId, payload.userId, payload.email, payload.caseId, payload.dto.note, payload.dto.stage);
+  }
+
+  // ── Reviews with more than one evaluator ──────────────────────────────────
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_EVALUATOR.LIST)
+  handleListEvaluators(@Payload() payload: { tenantId: string; reviewId: string }) {
+    return this.performanceEvaluatorService.list(payload.tenantId, payload.reviewId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_EVALUATOR.SET)
+  handleSetEvaluators(@Payload() payload: { tenantId: string; reviewId: string; dto: any }) {
+    return this.performanceEvaluatorService.set(payload.tenantId, payload.reviewId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_EVALUATOR.CONSOLIDATE)
+  handleConsolidateReview(@Payload() payload: { tenantId: string; reviewId: string }) {
+    return this.performanceEvaluatorService.consolidateNow(payload.tenantId, payload.reviewId);
+  }
+
+  // ── Improvement plans, development, acknowledgements ──────────────────────
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_PIP.LIST)
+  handleListPips(@Payload() payload: { tenantId: string; query: any }) {
+    return this.performancePipService.list(payload.tenantId, payload.query);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_PIP.GET)
+  handleGetPip(@Payload() payload: { tenantId: string; id: string }) {
+    return this.performancePipService.get(payload.tenantId, payload.id);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_PIP.CREATE)
+  handleCreatePip(@Payload() payload: { tenantId: string; dto: any }) {
+    return this.performancePipService.createFromAdmin(payload.tenantId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_PIP.UPDATE)
+  handleUpdatePip(@Payload() payload: { tenantId: string; id: string; dto: any }) {
+    return this.performancePipService.update(payload.tenantId, payload.id, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_PIP.APPROVE)
+  handleApprovePip(@Payload() payload: { tenantId: string; id: string; email?: string }) {
+    return this.performancePipService.approve(payload.tenantId, payload.id, payload.email);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_PIP.REJECT)
+  handleRejectPip(@Payload() payload: { tenantId: string; id: string; dto: any }) {
+    return this.performancePipService.reject(payload.tenantId, payload.id, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_PIP.CHECK_IN)
+  handleCheckInPip(@Payload() payload: { tenantId: string; id: string; dto: any }) {
+    return this.performancePipService.checkIn(payload.tenantId, payload.id, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_PIP.CLOSE)
+  handleClosePip(@Payload() payload: { tenantId: string; id: string; dto: any }) {
+    return this.performancePipService.close(payload.tenantId, payload.id, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_PIP.MINE)
+  handleMyProposedPips(@Payload() payload: { tenantId: string; userId: string; email?: string }) {
+    return this.performancePipService.mine(payload.tenantId, payload.userId, payload.email);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_PIP.PROPOSE)
+  handleProposePip(@Payload() payload: { tenantId: string; userId: string; email?: string; dto: any }) {
+    return this.performancePipService.proposeAsManager(payload.tenantId, payload.userId, payload.email, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_PIP.GET_OWN)
+  handleGetOwnPip(@Payload() payload: { tenantId: string; userId: string; email?: string; id: string }) {
+    return this.performancePipService.getAsProposer(payload.tenantId, payload.userId, payload.email, payload.id);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_PIP.UPDATE_OWN)
+  handleUpdateOwnPip(@Payload() payload: { tenantId: string; userId: string; email?: string; id: string; dto: any }) {
+    return this.performancePipService.updateAsProposer(payload.tenantId, payload.userId, payload.email, payload.id, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_PIP.CHECK_IN_OWN)
+  handleCheckInOwnPip(@Payload() payload: { tenantId: string; userId: string; email?: string; id: string; dto: any }) {
+    return this.performancePipService.checkInAsProposer(payload.tenantId, payload.userId, payload.email, payload.id, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_PIP.MY_PLANS)
+  handleMyPips(@Payload() payload: { tenantId: string; userId: string; email?: string }) {
+    return this.performancePipService.myPlans(payload.tenantId, payload.userId, payload.email);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_DEVELOPMENT.LIST)
+  handleListDevelopment(@Payload() payload: { tenantId: string; query: any }) {
+    return this.performanceDevelopmentService.list(payload.tenantId, payload.query);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_DEVELOPMENT.CREATE)
+  handleCreateDevelopment(@Payload() payload: { tenantId: string; dto: any }) {
+    return this.performanceDevelopmentService.create(payload.tenantId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_DEVELOPMENT.UPDATE)
+  handleUpdateDevelopment(@Payload() payload: { tenantId: string; id: string; dto: any }) {
+    return this.performanceDevelopmentService.update(payload.tenantId, payload.id, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_DEVELOPMENT.REMOVE)
+  handleRemoveDevelopment(@Payload() payload: { tenantId: string; id: string }) {
+    return this.performanceDevelopmentService.remove(payload.tenantId, payload.id);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_DEVELOPMENT.MY_LIST)
+  handleMyDevelopment(@Payload() payload: { tenantId: string; userId: string; email?: string; query: any }) {
+    return this.performanceDevelopmentService.myList(payload.tenantId, payload.userId, payload.email, payload.query ?? {});
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_DEVELOPMENT.MY_CREATE)
+  handleMyCreateDevelopment(@Payload() payload: { tenantId: string; userId: string; email?: string; dto: any }) {
+    return this.performanceDevelopmentService.myCreate(payload.tenantId, payload.userId, payload.email, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_DEVELOPMENT.MY_UPDATE)
+  handleMyUpdateDevelopment(@Payload() payload: { tenantId: string; userId: string; email?: string; id: string; dto: any }) {
+    return this.performanceDevelopmentService.myUpdate(payload.tenantId, payload.userId, payload.email, payload.id, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_DEVELOPMENT.MY_ACCEPT)
+  handleMyAcceptDevelopment(@Payload() payload: { tenantId: string; userId: string; email?: string; id: string }) {
+    return this.performanceDevelopmentService.myAccept(payload.tenantId, payload.userId, payload.email, payload.id);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_DEVELOPMENT.MY_DISMISS)
+  handleMyDismissDevelopment(@Payload() payload: { tenantId: string; userId: string; email?: string; id: string }) {
+    return this.performanceDevelopmentService.myDismiss(payload.tenantId, payload.userId, payload.email, payload.id);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_DEVELOPMENT.FOR_TEAM_MEMBER)
+  handleTeamDevelopment(@Payload() payload: { tenantId: string; userId: string; email?: string; employeeId: string }) {
+    return this.performanceDevelopmentService.forTeamMember(payload.tenantId, payload.userId, payload.email, payload.employeeId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_DEVELOPMENT.CREATE_FOR_TEAM_MEMBER)
+  handleCreateTeamDevelopment(@Payload() payload: { tenantId: string; userId: string; email?: string; employeeId: string; dto: any }) {
+    return this.performanceDevelopmentService.createForTeamMember(payload.tenantId, payload.userId, payload.email, payload.employeeId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_ACK.LIST)
+  handleListAcknowledgements(@Payload() payload: { tenantId: string; query: any }) {
+    return this.performanceAcknowledgementService.list(payload.tenantId, payload.query ?? {});
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_ACK.ACKNOWLEDGE_REVIEW)
+  handleAcknowledgeReview(@Payload() payload: { tenantId: string; userId: string; email?: string; reviewId: string; dto: any }) {
+    return this.performanceAcknowledgementService.acknowledgeReview(payload.tenantId, payload.userId, payload.email, payload.reviewId, payload.dto ?? {});
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_ACK.ACKNOWLEDGE_PIP)
+  handleAcknowledgePip(@Payload() payload: { tenantId: string; userId: string; email?: string; planId: string; dto: any }) {
+    return this.performanceAcknowledgementService.acknowledgePip(payload.tenantId, payload.userId, payload.email, payload.planId, payload.dto ?? {});
   }
 
   // ── Changes to a person with an open review ───────────────────────────────
