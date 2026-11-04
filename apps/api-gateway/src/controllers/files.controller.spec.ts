@@ -268,7 +268,7 @@ describe('FilesController', () => {
       ).rejects.toThrow(NotFoundException);
     });
 
-    it('lets a category permission holder read company documents, and an org admin read anything', async () => {
+    it('lets a category permission holder read company documents, `.manage` included', async () => {
       metaThen(
         { uploadedBy: OTHER, category: 'documents' },
         { buffer: Buffer.from('x') },
@@ -278,13 +278,34 @@ describe('FilesController', () => {
         { ...employee, permissions: ['documents.view'] },
         res as any,
       );
-      metaThen({ uploadedBy: OTHER }, { buffer: Buffer.from('x') });
+      metaThen({ uploadedBy: OTHER, category: 'documents' }, { buffer: Buffer.from('x') });
       await controller.downloadFile(
         'f-1',
-        { ...employee, isFullAccess: true },
+        { ...employee, permissions: ['documents.manage'] },
         res as any,
       );
       expect(res.send).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not let an organization admin open a receipt without payroll access', async () => {
+      const admin = {
+        ...employee,
+        roles: ['ORGANIZATION_ADMIN'],
+        permissions: ['user_management.manage', 'settings.manage'],
+      };
+      // Only the metadata lookup happens before the refusal.
+      send.mockReturnValueOnce(
+        of({ data: { tenantId: TENANT, uploadedBy: OTHER, category: 'reimbursement-receipt', storageKey: 'k' } }),
+      );
+      await expect(controller.downloadFile('f-1', admin, res as any)).rejects.toThrow(ForbiddenException);
+
+      metaThen({ uploadedBy: OTHER, category: 'reimbursement-receipt' }, { buffer: Buffer.from('x') });
+      await controller.downloadFile(
+        'f-1',
+        { ...admin, permissions: [...admin.permissions, 'payroll.view'] },
+        res as any,
+      );
+      expect(res.send).toHaveBeenCalledTimes(1);
     });
 
     it('lets the Super Admin reach any file through the platform scope', async () => {
@@ -302,13 +323,13 @@ describe('FilesController', () => {
   });
 
   describe('listing and deleting', () => {
-    it('lists files only for an administrator', () => {
+    it('lists files only for whoever manages organization settings', () => {
       expect(() => controller.queryFiles({} as any, employee)).toThrow(
         ForbiddenException,
       );
       controller.queryFiles({ category: 'documents' } as any, {
         ...employee,
-        isFullAccess: true,
+        permissions: ['settings.manage'],
       });
       expect(send).toHaveBeenCalledWith(
         MESSAGE_PATTERNS.FILE.QUERY_FILES,

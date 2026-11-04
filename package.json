@@ -29,6 +29,7 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json --passWithNoTests",
     "db:sync-tenant-columns": "ts-node --transpile-only -r tsconfig-paths/register apps/tenant-service/src/scripts/sync-tenant-columns.ts",
+    "db:backfill-review-reviewers": "ts-node --transpile-only -r tsconfig-paths/register apps/tenant-service/src/scripts/backfill-review-reviewers.ts",
     "db:sync-platform-tenant-columns": "ts-node --transpile-only -r tsconfig-paths/register apps/tenant-service/src/scripts/sync-platform-tenant-columns.ts",
     "db:add-rbac-indexes": "ts-node --transpile-only -r tsconfig-paths/register apps/user-service/src/scripts/add-rbac-indexes.ts",
     "db:rotate-secrets": "ts-node --transpile-only -r tsconfig-paths/register apps/tenant-service/src/scripts/rotate-secrets.ts",

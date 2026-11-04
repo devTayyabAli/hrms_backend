@@ -16,6 +16,7 @@ import {
   type CsvColumn,
 } from '@app/common';
 import { COMPLIANCE_TEMPLATES } from '../data/compliance-templates';
+import { DataScopeService } from './data-scope.service';
 import {
   ComplianceRuleStatus,
   ComplianceRuleType,
@@ -134,7 +135,16 @@ export class PayrollComplianceService {
     @Optional()
     @Inject(SERVICES.AUTH_SERVICE)
     private readonly authClient?: ClientProxy,
+    @Optional() private readonly dataScope?: DataScopeService,
   ) {}
+
+  private scopeWhere(tenantId: string, field = 'employeeId'): Promise<Record<string, unknown>> {
+    return this.dataScope ? this.dataScope.employeeWhere(tenantId, field) : Promise.resolve({});
+  }
+
+  private async assertEmployee(tenantId: string, employeeId: string | null | undefined) {
+    if (this.dataScope) await this.dataScope.assertCanSee(tenantId, employeeId, 'Employee');
+  }
 
   private require(
     permission:
@@ -731,7 +741,7 @@ export class PayrollComplianceService {
     const Profile =
       await this.modelProvider.getEmployeeTaxProfileModel(tenantId);
     const employees = (await Employee.findAll({
-      where: { tenantId, status: { [Op.in]: ['ACTIVE', 'ON_LEAVE'] } },
+      where: { tenantId, status: { [Op.in]: ['ACTIVE', 'ON_LEAVE'] }, ...(await this.scopeWhere(tenantId, 'id')) },
       include: await this.employeeInclude(tenantId),
       order: [['firstName', 'ASC']],
     })) as any[];
@@ -763,6 +773,7 @@ export class PayrollComplianceService {
         `Employee '${employeeId}' not found in this organization.`,
         HttpStatus.NOT_FOUND,
       );
+    await this.assertEmployee(tenantId, employeeId);
     const Profile =
       await this.modelProvider.getEmployeeTaxProfileModel(tenantId);
     const rows = (await Profile.findAll({
@@ -785,6 +796,7 @@ export class PayrollComplianceService {
     dto: Record<string, any>,
   ) {
     this.require('payroll.tax.manage', 'edit tax profiles');
+    await this.assertEmployee(tenantId, employeeId);
     if (!Number.isInteger(taxYear) || taxYear < 2000 || taxYear > 2100)
       payrollError('Choose a valid tax year.', HttpStatus.BAD_REQUEST);
     const Employee = await this.modelProvider.getEmployeeModel(tenantId);
@@ -886,11 +898,12 @@ export class PayrollComplianceService {
     if (!runs.length) return [];
     const runOf = new Map(runs.map((run) => [run.id, run]));
 
+    if (filters.employeeId) await this.assertEmployee(tenantId, filters.employeeId);
     const records = (await Record.findAll({
       where: {
         tenantId,
         payrollRunId: { [Op.in]: runs.map((run) => run.id) },
-        ...(filters.employeeId ? { employeeId: filters.employeeId } : {}),
+        ...(filters.employeeId ? { employeeId: filters.employeeId } : await this.scopeWhere(tenantId)),
       },
       include: [
         {
@@ -1142,6 +1155,7 @@ export class PayrollComplianceService {
 
   async getTaxSummary(tenantId: string, employeeId: string, taxYear: number) {
     this.require('payroll.tax.view', 'view tax summaries');
+    await this.assertEmployee(tenantId, employeeId);
     const employee = await this.employee(tenantId, employeeId);
     return {
       employee: {
@@ -1210,6 +1224,7 @@ export class PayrollComplianceService {
     taxYear: number,
   ) {
     this.require('payroll.tax.manage', 'issue tax certificates');
+    await this.assertEmployee(tenantId, employeeId);
     const employee = await this.employee(tenantId, employeeId);
     const summary = await this.annualSummary(tenantId, employeeId, taxYear);
     if (!summary.months.length)
@@ -1292,13 +1307,14 @@ export class PayrollComplianceService {
     filters: { taxYear?: number; employeeId?: string } = {},
   ) {
     this.require('payroll.tax.view', 'view tax certificates');
+    if (filters.employeeId) await this.assertEmployee(tenantId, filters.employeeId);
     const Certificate =
       await this.modelProvider.getTaxCertificateModel(tenantId);
     const rows = await Certificate.findAll({
       where: {
         tenantId,
         ...(filters.taxYear ? { taxYear: filters.taxYear } : {}),
-        ...(filters.employeeId ? { employeeId: filters.employeeId } : {}),
+        ...(filters.employeeId ? { employeeId: filters.employeeId } : await this.scopeWhere(tenantId)),
       },
       order: [['sequence', 'DESC']],
     });
@@ -1333,6 +1349,7 @@ export class PayrollComplianceService {
     });
     if (!certificate)
       payrollError('Tax certificate not found.', HttpStatus.NOT_FOUND);
+    await this.assertEmployee(tenantId, certificate.employeeId);
     return this.certificatePdf(tenantId, certificate);
   }
 

@@ -130,3 +130,62 @@ describe('role data scopes', () => {
     expect(widestDataScope([])).toBe(DataScope.ORGANIZATION);
   });
 });
+
+describe('DataScopeService: branch scope', () => {
+  const TENANT = 'tenant-1';
+  const people = [
+    { id: 'bhead', email: 'bhead@x.com', branchId: 'lhe', reportingManagerId: null },
+    { id: 'a', email: 'a@x.com', branchId: 'lhe', reportingManagerId: 'bhead' },
+    { id: 'b', email: 'b@x.com', branchId: 'lhe', reportingManagerId: null },
+    { id: 'c', email: 'c@x.com', branchId: 'khi', reportingManagerId: null },
+    { id: 'floater', email: 'floater@x.com', branchId: null, reportingManagerId: null },
+    { id: 'floater-report', email: 'fr@x.com', branchId: 'khi', reportingManagerId: 'floater' },
+    { id: 'old-head', email: 'oldhead@x.com', branchId: 'closed', reportingManagerId: null },
+    { id: 'old-member', email: 'oldmember@x.com', branchId: 'closed', reportingManagerId: null },
+  ];
+  const branches = [
+    { id: 'lhe', headEmployeeId: 'bhead', isActive: true },
+    { id: 'khi', headEmployeeId: null, isActive: true },
+    { id: 'closed', headEmployeeId: 'old-head', isActive: false },
+  ];
+  const inList = (value: any, rowValue: any) => (value && typeof value === 'object' && Op.in in value ? value[Op.in].includes(rowValue) : value === rowValue);
+
+  const service = new DataScopeService({
+    getEmployeeModel: jest.fn().mockResolvedValue({
+      findOne: jest.fn(async ({ where }: any) => people.find((p) => p.email === String(where.email[Op.iLike]).toLowerCase()) ?? null),
+      findAll: jest.fn(async ({ where }: any) =>
+        people.filter(
+          (p) => (where.reportingManagerId === undefined || inList(where.reportingManagerId, p.reportingManagerId)) && (where.branchId === undefined || inList(where.branchId, p.branchId)),
+        ),
+      ),
+    }),
+    getBranchModel: jest.fn().mockResolvedValue({
+      findAll: jest.fn(async ({ where }: any) => branches.filter((b) => b.headEmployeeId === where.headEmployeeId && b.isActive === where.isActive)),
+    }),
+  } as any);
+  const actor = (email: string) => ({ roles: [], isSuperAdmin: false, email, dataScope: DataScope.BRANCH });
+  const visible = (email: string) => runAsRpcActor(actor(email) as any, () => service.visibleEmployeeIds(TENANT));
+
+  it('lets the head of a branch see everyone who works there', async () => {
+    expect((await visible('bhead@x.com'))!.sort()).toEqual(['a', 'b', 'bhead']);
+  });
+
+  it('lets anyone else see the branch they work in', async () => {
+    expect((await visible('a@x.com'))!.sort()).toEqual(['a', 'b', 'bhead']);
+    expect((await visible('c@x.com'))!.sort()).toEqual(['c', 'floater-report']);
+  });
+
+  it('gives someone with no branch themselves and their own reports', async () => {
+    expect((await visible('floater@x.com'))!.sort()).toEqual(['floater', 'floater-report']);
+  });
+
+  it('ignores a branch that is no longer active as something to head, and falls back to where they work', async () => {
+    expect((await visible('oldhead@x.com'))!.sort()).toEqual(['old-head', 'old-member']);
+  });
+
+  it('is narrower than the organization and wider than a department or a team', () => {
+    expect(widestDataScope([DataScope.BRANCH, DataScope.DEPARTMENT, DataScope.TEAM])).toBe(DataScope.BRANCH);
+    expect(widestDataScope([DataScope.ORGANIZATION, DataScope.BRANCH])).toBe(DataScope.ORGANIZATION);
+    expect(effectiveRoleScope({ name: 'Branch Manager', dataScope: 'BRANCH' })).toBe(DataScope.BRANCH);
+  });
+});

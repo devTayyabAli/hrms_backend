@@ -1,4 +1,5 @@
 import { HttpStatus, Injectable, Logger, Optional } from '@nestjs/common';
+import { Op } from 'sequelize';
 import { PlatformNotifierService } from './platform-notifier.service';
 import {
   Tenant,
@@ -18,11 +19,13 @@ import {
   CreateLeavePolicyDto,
   UpdateLeavePolicyDto,
   UpdateAttendancePolicyDto,
+  UpdateApprovalFlowDto,
   TenantException,
   TenantErrorCode,
 } from '@app/common';
 import { TenantService } from './tenant.service';
 import { TenantModelProviderService } from './tenant-model-provider.service';
+import { OrganizationHierarchyService } from './organization-hierarchy.service';
 
 export interface SetupProgressResult {
   tenantId: string;
@@ -58,6 +61,7 @@ export class OrganizationSetupService {
     private tenantService: TenantService,
     private readonly modelProvider: TenantModelProviderService,
     @Optional() private readonly platformNotifier?: PlatformNotifierService,
+    @Optional() private readonly hierarchy?: OrganizationHierarchyService,
   ) { }
 
   /**
@@ -245,9 +249,41 @@ export class OrganizationSetupService {
     }
   }
 
-  async getDepartments(tenantId: string) {
+  /**
+   * The branches a department works from, checked: each is real, and none is
+   * listed twice. An empty list means it is not tied to a branch.
+   */
+  private async validateBranchIds(tenantId: string, branchIds: string[]): Promise<string[]> {
+    const unique = [...new Set(branchIds)];
+    if (!unique.length) return [];
+    const Branch = await this.modelProvider.getBranchModel(tenantId);
+    const found = await Branch.count({ where: { tenantId, id: { [Op.in]: unique } } as any });
+    if (found !== unique.length) {
+      throw new TenantException(TenantErrorCode.INVALID_TENANT_CONTEXT, 'A selected branch was not found in this organization.');
+    }
+    return unique;
+  }
+
+  /** Departments, each with the branches it works from. `branchId` keeps only the departments that work from that branch. */
+  async getDepartments(tenantId: string, branchId?: string) {
     const departmentModel = await this.modelProvider.getDepartmentModel(tenantId);
-    return departmentModel.findAll({ where: { tenantId } });
+    const rows = (await departmentModel.findAll({ where: { tenantId, ...(branchId ? { branchIds: { [Op.contains]: [branchId] } } : {}) } as any })) as any[];
+    const wanted = [...new Set(rows.flatMap((row) => (Array.isArray(row.branchIds) ? row.branchIds : [])))] as string[];
+    const names = new Map<string, string>();
+    if (wanted.length) {
+      try {
+        const Branch = await this.modelProvider.getBranchModel(tenantId);
+        const branches = (await Branch.findAll({ where: { tenantId, id: { [Op.in]: wanted } } as any, attributes: ['id', 'name'], raw: true })) as unknown as { id: string; name: string }[];
+        for (const branch of branches) names.set(branch.id, branch.name);
+      } catch {
+        /* branches unreadable: the ids still show */
+      }
+    }
+    return rows.map((row) => {
+      const plain = typeof row.toJSON === 'function' ? row.toJSON() : { ...row };
+      const ids: string[] = Array.isArray(plain.branchIds) ? plain.branchIds : [];
+      return { ...plain, branchIds: ids, branches: ids.filter((id) => names.has(id)).map((id) => ({ id, name: names.get(id) as string })) };
+    });
   }
 
   async createDepartment(tenantId: string, dto: CreateDepartmentDto) {
@@ -267,7 +303,8 @@ export class OrganizationSetupService {
       await this.validateParentDepartment(departmentModel, tenantId, null, dto.parentDepartmentId);
     }
 
-    return departmentModel.create({ ...dto, tenantId });
+    const branchIds = await this.validateBranchIds(tenantId, dto.branchIds ?? []);
+    return departmentModel.create({ ...dto, branchIds, tenantId });
   }
 
   async updateDepartment(tenantId: string, departmentId: string, dto: UpdateDepartmentDto) {
@@ -283,7 +320,16 @@ export class OrganizationSetupService {
       await this.validateParentDepartment(departmentModel, tenantId, departmentId, dto.parentDepartmentId);
     }
 
-    return dept.update(dto);
+    const previousParentId = dept.parentDepartmentId ?? null;
+    const patch: Record<string, unknown> = { ...dto };
+    if (dto.branchIds !== undefined) patch.branchIds = await this.validateBranchIds(tenantId, dto.branchIds);
+    const updated = await dept.update(patch);
+    if (dto.parentDepartmentId !== undefined) {
+      // Moving a department under a new parent is a structure change, so it
+      // goes into the hierarchy history like a head or manager change.
+      await this.hierarchy?.recordParentDepartment(tenantId, departmentId, previousParentId, dto.parentDepartmentId);
+    }
+    return updated;
   }
 
   async deleteDepartment(tenantId: string, departmentId: string) {
@@ -568,5 +614,24 @@ export class OrganizationSetupService {
       setupStatus: TenantSetupStatus.COMPLETED,
       provisioningStatus: TenantProvisioningStatus.READY,
     };
+  }
+
+  /**
+   * How employee requests are approved. No saved row means a single step —
+   * organizations created before this setting keep the behaviour they had.
+   */
+  async getApprovalFlow(tenantId: string): Promise<{ flow: 'SINGLE' | 'MANAGER_THEN_HR' }> {
+    const Setting = await this.modelProvider.getApprovalSettingModel(tenantId);
+    const row = await Setting.findOne({ where: { tenantId } });
+    return { flow: row?.flow === 'MANAGER_THEN_HR' ? 'MANAGER_THEN_HR' : 'SINGLE' };
+  }
+
+  async updateApprovalFlow(tenantId: string, dto: UpdateApprovalFlowDto) {
+    await this.tenantService.getTenantById(tenantId);
+    const Setting = await this.modelProvider.getApprovalSettingModel(tenantId);
+    const existing = await Setting.findOne({ where: { tenantId } });
+    if (existing) await existing.update({ flow: dto.flow });
+    else await Setting.create({ tenantId, flow: dto.flow });
+    return { flow: dto.flow };
   }
 }

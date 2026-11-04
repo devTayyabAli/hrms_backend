@@ -1,8 +1,10 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { HttpStatus, Injectable, Logger, Optional } from '@nestjs/common';
 import { Op, QueryTypes, Transaction, UniqueConstraintError, literal } from 'sequelize';
 import {
   AssetActorDto,
   AssetCondition,
+  AssetDeductionReason,
+  AssetDeductionStatus,
   AssetMaintenanceType,
   AssetSpecificationDto,
   AssetStatus,
@@ -12,6 +14,7 @@ import {
   CreateAssetDto,
   DisposeAssetDto,
   EXPORT_MAX_ROWS,
+  EmployeeNotificationKind,
   EmployeeStatus,
   ExportAssetsQueryDto,
   ExportResult,
@@ -25,6 +28,7 @@ import {
   UpdateAssetDto,
 } from '@app/common';
 import { TenantModelProviderService } from './tenant-model-provider.service';
+import { DataScopeService } from './data-scope.service';
 
 /** Who can be given an asset: people still employed. */
 const EMPLOYED = [EmployeeStatus.ACTIVE, EmployeeStatus.ON_LEAVE];
@@ -67,6 +71,8 @@ export interface AssetRow {
     department: { id: string; name: string } | null;
   } | null;
   assignedAt: Date | null;
+  /** Whether the holder has signed to say they received it in working order. Null when nobody has it. */
+  handover: { accepted: boolean; acceptedAt: Date | null; signedName: string | null } | null;
   purchaseDate: string | null;
   purchaseCost: number | null;
   warrantyExpiry: string | null;
@@ -139,7 +145,31 @@ const toNumber = (value: unknown) => (value === null || value === undefined ? nu
  */
 @Injectable()
 export class AssetService {
-  constructor(private readonly modelProvider: TenantModelProviderService) {}
+  private readonly logger = new Logger(AssetService.name);
+
+  constructor(
+    private readonly modelProvider: TenantModelProviderService,
+    @Optional() private readonly dataScope?: DataScopeService,
+  ) {}
+
+  /**
+   * Unassigned stock stays visible — it is inventory, not someone's record.
+   * An asset already with a person is visible only when that person is.
+   */
+  /** `null` when the caller sees every asset. Otherwise unassigned stock plus assets held by visible people. */
+  private async assignmentWhere(tenantId: string): Promise<Record<string, unknown> | null> {
+    if (!this.dataScope) return null;
+    const ids = await this.dataScope.visibleEmployeeIds(tenantId);
+    if (ids === null) return null;
+    if (ids.length === 0) return { assignedEmployeeId: null };
+    return { [Op.or]: [{ assignedEmployeeId: null }, { assignedEmployeeId: { [Op.in]: ids } }] };
+  }
+
+  private async hideOutsideScope(tenantId: string, asset: any) {
+    if (!this.dataScope || !asset?.assignedEmployeeId) return asset;
+    if (await this.dataScope.canSee(tenantId, asset.assignedEmployeeId)) return asset;
+    this.notFound(asset.id);
+  }
 
   // ==========================================
   // Errors
@@ -302,6 +332,9 @@ export class AssetService {
           }
         : null,
       assignedAt: asset.assignedAt ?? null,
+      handover: assignee
+        ? { accepted: Boolean(asset.acceptedAt), acceptedAt: asset.acceptedAt ?? null, signedName: asset.acceptedSignature ?? null }
+        : null,
       purchaseDate: asset.purchaseDate ?? null,
       purchaseCost: toNumber(asset.purchaseCost),
       warrantyExpiry: asset.warrantyExpiry ?? null,
@@ -366,8 +399,10 @@ export class AssetService {
     const page = query.page && query.page > 0 ? query.page : 1;
     const limit = query.limit && query.limit > 0 ? Math.min(query.limit, 100) : 10;
 
+    const scope = await this.assignmentWhere(tenantId);
+    const where = scope ? { [Op.and]: [this.buildWhere(tenantId, query), scope] } : this.buildWhere(tenantId, query);
     const { rows, count } = await Asset.findAndCountAll({
-      where: this.buildWhere(tenantId, query) as any,
+      where: where as any,
       include: await this.includes(tenantId),
       order: this.buildOrder(query),
       limit,
@@ -387,8 +422,10 @@ export class AssetService {
   /** Every asset matching the filters, up to the export cap. */
   async exportAssets(tenantId: string, query: ExportAssetsQueryDto = {}): Promise<ExportResult<AssetRow>> {
     const Asset = await this.modelProvider.getAssetModel(tenantId);
+    const scope = await this.assignmentWhere(tenantId);
+    const where = scope ? { [Op.and]: [this.buildWhere(tenantId, query), scope] } : this.buildWhere(tenantId, query);
     const { rows, count } = await Asset.findAndCountAll({
-      where: this.buildWhere(tenantId, query) as any,
+      where: where as any,
       include: await this.includes(tenantId),
       order: this.buildOrder(query),
       limit: EXPORT_MAX_ROWS,
@@ -406,7 +443,7 @@ export class AssetService {
     const Asset = await this.modelProvider.getAssetModel(tenantId);
     const asset = await Asset.findOne({ where: { id: assetId, tenantId }, include: await this.includes(tenantId) });
     if (!asset) this.notFound(assetId);
-    return asset;
+    return this.hideOutsideScope(tenantId, asset);
   }
 
   private async history(tenantId: string, assetId: string): Promise<AssetHistoryRow[]> {
@@ -460,8 +497,24 @@ export class AssetService {
   // The page header and side panels
   // ==========================================
 
+  /** SQL that keeps unassigned stock and assets held by people this caller may see. */
+  private async holderSql(tenantId: string, column = '"assignedEmployeeId"') {
+    if (!this.dataScope) return { sql: '', replacements: {} as Record<string, unknown> };
+    const ids = await this.dataScope.visibleEmployeeIds(tenantId);
+    if (ids === null) return { sql: '', replacements: {} };
+    if (ids.length === 0) return { sql: ` AND ${column} IS NULL`, replacements: {} };
+    return {
+      sql: ` AND (${column} IS NULL OR ${column} IN (:scopeIds))`,
+      replacements: { scopeIds: ids } as Record<string, unknown>,
+    };
+  }
+
   /** Status counts as they stood at a moment, worked out from the history. */
-  private async statusCountsAt(tenantId: string, moment: Date): Promise<Map<string, number>> {
+  private async statusCountsAt(
+    tenantId: string,
+    moment: Date,
+    holder: { sql: string; replacements: Record<string, unknown> } = { sql: '', replacements: {} },
+  ): Promise<Map<string, number>> {
     const Event = await this.modelProvider.getAssetEventModel(tenantId);
     const rows = (await Event.sequelize!.query(
       `SELECT latest."toStatus" AS "status", COUNT(*)::int AS "count"
@@ -472,8 +525,9 @@ export class AssetService {
             ORDER BY "assetId", "createdAt" DESC, id DESC
          ) latest
          JOIN assets a ON a.id = latest."assetId"
+        WHERE 1 = 1${holder.sql.replace(/"assignedEmployeeId"/g, 'a."assignedEmployeeId"')}
         GROUP BY latest."toStatus"`,
-      { replacements: { tenantId, moment }, type: QueryTypes.SELECT },
+      { replacements: { tenantId, moment, ...holder.replacements }, type: QueryTypes.SELECT },
     )) as { status: string; count: number }[];
     return new Map(rows.map((row) => [row.status, Number(row.count)]));
   }
@@ -497,12 +551,13 @@ export class AssetService {
     const now = new Date();
     const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
 
+    const holder = await this.holderSql(tenantId);
     const [current, previous, categories] = await Promise.all([
       Asset.sequelize!.query(
-        `SELECT status, COUNT(*)::int AS "count" FROM assets WHERE "tenantId" = :tenantId GROUP BY status`,
-        { replacements: { tenantId }, type: QueryTypes.SELECT },
+        `SELECT status, COUNT(*)::int AS "count" FROM assets WHERE "tenantId" = :tenantId${holder.sql} GROUP BY status`,
+        { replacements: { tenantId, ...holder.replacements }, type: QueryTypes.SELECT },
       ) as Promise<{ status: string; count: number }[]>,
-      this.statusCountsAt(tenantId, monthStart),
+      this.statusCountsAt(tenantId, monthStart, holder),
       this.getCategories(tenantId),
     ]);
 
@@ -649,7 +704,7 @@ export class AssetService {
     const Asset = await this.modelProvider.getAssetModel(tenantId);
     const asset: any = await Asset.findOne({ where: { id: assetId, tenantId }, transaction, lock: transaction.LOCK.UPDATE });
     if (!asset) this.notFound(assetId);
-    return asset;
+    return this.hideOutsideScope(tenantId, asset);
   }
 
   private async holderName(tenantId: string, employeeId: string | null) {
@@ -677,8 +732,73 @@ export class AssetService {
     return {
       ...this.toRow(await this.loadFull(tenantId, assetId)),
       maintenance: await this.maintenance(tenantId, assetId),
+      deductions: await this.deductionsOf(tenantId, assetId),
       history: await this.history(tenantId, assetId),
     };
+  }
+
+  /**
+   * An asset lost, or damaged, while someone had it may cost them: raise a
+   * deduction for payroll to decide on. Nothing is taken until it is approved,
+   * and the same loss or damage is not raised twice.
+   */
+  private async raiseDeduction(
+    tenantId: string,
+    actor: AssetActorDto,
+    asset: any,
+    reason: AssetDeductionReason,
+    note: string | null | undefined,
+    transaction: Transaction,
+  ) {
+    if (!asset.assignedEmployeeId) return;
+    const Flag = await this.modelProvider.getAssetDeductionFlagModel(tenantId);
+    const open = await Flag.findOne({
+      where: {
+        tenantId,
+        assetId: asset.id,
+        employeeId: asset.assignedEmployeeId,
+        reason,
+        status: { [Op.in]: [AssetDeductionStatus.PENDING, AssetDeductionStatus.APPROVED] },
+      },
+      attributes: ['id'],
+      transaction,
+    });
+    if (open) return;
+    await Flag.create(
+      {
+        tenantId,
+        assetId: asset.id,
+        employeeId: asset.assignedEmployeeId,
+        reason,
+        status: AssetDeductionStatus.PENDING,
+        suggestedAmount: asset.purchaseCost ?? null,
+        note: note ? note.slice(0, NOTE_MAX) : null,
+        raisedBy: actor.email ?? null,
+      } as any,
+      { transaction },
+    );
+  }
+
+  /** The deductions raised on this asset, newest first. */
+  private async deductionsOf(tenantId: string, assetId: string) {
+    const Flag = await this.modelProvider.getAssetDeductionFlagModel(tenantId);
+    const Employee = await this.modelProvider.getEmployeeModel(tenantId);
+    const flags = (await Flag.findAll({
+      where: { tenantId, assetId },
+      include: [{ model: Employee, as: 'employee', attributes: ['id', 'firstName', 'lastName'], required: false }],
+      order: [['createdAt', 'DESC']],
+      limit: 50,
+    })) as any[];
+    return flags.map((flag) => ({
+      id: flag.id,
+      reason: flag.reason,
+      status: flag.status,
+      employee: flag.employee ? { employeeId: flag.employee.id, name: fullName(flag.employee) } : null,
+      suggestedAmount: toNumber(flag.suggestedAmount),
+      amount: toNumber(flag.amount),
+      payrollPeriod: flag.payrollPeriod ?? null,
+      raisedAt: flag.createdAt,
+    }));
   }
 
   // ==========================================
@@ -742,7 +862,9 @@ export class AssetService {
           );
           return created.id as string;
         });
-        return this.serialize(tenantId, id);
+        const created = await this.serialize(tenantId, id);
+        if (assignee) await this.notifyAssigned(tenantId, assignee.id, created.assetCode, created.name);
+        return created;
       } catch (error) {
         if (error instanceof UniqueConstraintError) {
           const fields = Object.keys((error as any).fields ?? {});
@@ -801,12 +923,15 @@ export class AssetService {
   /** Gives the asset to an employee, on the checklist and day given. If someone else had it, it is taken from them first. */
   async assign(actor: AssetActorDto, assetId: string, dto: AssignAssetDto) {
     const { tenantId } = actor;
+    if (this.dataScope) await this.dataScope.assertCanSee(tenantId, dto.employeeId, 'Employee');
     const employee = await this.loadAssignee(tenantId, dto.employeeId);
     const handover = this.assertHandover(dto.checklist, dto.assignedOn);
     const Asset = await this.modelProvider.getAssetModel(tenantId);
+    let label = { code: '', name: '' };
 
     await Asset.sequelize!.transaction(async (transaction) => {
       const asset = await this.loadForAction(tenantId, assetId, transaction);
+      label = { code: asset.assetCode, name: asset.name };
       if (!ASSIGNABLE.includes(asset.status)) {
         const reason: Record<string, string> = {
           [AssetStatus.DISPOSED]: 'A disposed asset cannot be assigned.',
@@ -839,10 +964,35 @@ export class AssetService {
         details: handover.details,
       });
 
-      await asset.update({ status: AssetStatus.IN_USE, assignedEmployeeId: employee.id, assignedAt: handover.assignedAt }, { transaction });
+      await asset.update(
+        { status: AssetStatus.IN_USE, assignedEmployeeId: employee.id, assignedAt: handover.assignedAt, acceptedAt: null, acceptedSignature: null },
+        { transaction },
+      );
       await this.record(tenantId, actor, assetId, events, transaction);
     });
+    await this.notifyAssigned(tenantId, employee.id, label.code, label.name);
     return this.serialize(tenantId, assetId);
+  }
+
+  /**
+   * "An asset was given to you, please sign for it": a line in the employee's
+   * notifications, pointing them at My Assets. Best effort — the handover is
+   * already saved, and a notification that cannot be stored must not undo it.
+   */
+  private async notifyAssigned(tenantId: string, employeeId: string, assetCode: string, assetName: string) {
+    try {
+      const Notification = await this.modelProvider.getEmployeeNotificationModel(tenantId);
+      await Notification.create({
+        tenantId,
+        employeeId,
+        kind: EmployeeNotificationKind.ASSET,
+        title: 'Asset assigned to you',
+        body: `${assetName} (${assetCode}) has been assigned to you. Open My Assets to confirm you received it in working order.`,
+        readAt: null,
+      } as any);
+    } catch (error: any) {
+      this.logger.warn(`Asset ${assetCode} was assigned but the employee notification was not saved: ${error?.message ?? error}`);
+    }
   }
 
   /**
@@ -875,7 +1025,10 @@ export class AssetService {
         }],
         transaction,
       );
-      await asset.update({ status: next, assignedEmployeeId: null, assignedAt: null }, { transaction });
+      if (dto.condition === AssetCondition.DAMAGED) {
+        await this.raiseDeduction(tenantId, actor, asset, AssetDeductionReason.DAMAGED, dto.note, transaction);
+      }
+      await asset.update({ status: next, assignedEmployeeId: null, assignedAt: null, acceptedAt: null, acceptedSignature: null }, { transaction });
     });
     return this.serialize(tenantId, assetId);
   }
@@ -905,6 +1058,7 @@ export class AssetService {
         }],
         transaction,
       );
+      await this.raiseDeduction(tenantId, actor, asset, AssetDeductionReason.DAMAGED, note, transaction);
       await asset.update({ status: AssetStatus.DAMAGED }, { transaction });
     });
     return this.serialize(tenantId, assetId);
@@ -936,6 +1090,7 @@ export class AssetService {
       if (asset.status === AssetStatus.MAINTENANCE) {
         await this.cancelOpenJob(tenantId, assetId, actor, 'Asset was reported lost', transaction);
       }
+      await this.raiseDeduction(tenantId, actor, asset, AssetDeductionReason.LOST, note, transaction);
       await asset.update({ status: AssetStatus.LOST }, { transaction });
     });
     return this.serialize(tenantId, assetId);
@@ -1066,6 +1221,8 @@ export class AssetService {
           status: AssetStatus.DISPOSED,
           assignedEmployeeId: null,
           assignedAt: null,
+          acceptedAt: null,
+          acceptedSignature: null,
           disposedAt: new Date(),
           disposalReason: dto.reason ?? null,
         },

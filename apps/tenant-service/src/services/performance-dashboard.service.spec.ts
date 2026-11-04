@@ -1,7 +1,10 @@
 import { HttpStatus } from '@nestjs/common';
+import { Op } from 'sequelize';
+import { runAsRpcActor } from '@app/tenant-context';
 import { PerformanceDashboardService } from './performance-dashboard.service';
 import { PerformanceReviewStatus } from '../models/performance-review.model';
 import { PerformanceGoalStatus } from '../models/performance-goal.model';
+import { todayIso } from './workspace-shared';
 
 /**
  * Covers the derived values the Performance screen depends on — the rating
@@ -19,6 +22,8 @@ describe('PerformanceDashboardService', () => {
   let reviewModel: any;
   let goalModel: any;
   let employeeModel: any;
+  let notices: any[];
+  let auditModel: { create: jest.Mock };
   let service: PerformanceDashboardService;
 
   const review = (over: Record<string, any> = {}) => ({
@@ -69,12 +74,16 @@ describe('PerformanceDashboardService', () => {
       destroy: jest.fn().mockResolvedValue(1),
     };
     employeeModel = {
-      findOne: jest.fn().mockResolvedValue({ id: EMPLOYEE }),
+      findOne: jest.fn().mockResolvedValue({ id: EMPLOYEE, status: 'ACTIVE' }),
       findAll: jest.fn().mockResolvedValue([]),
       count: jest.fn().mockResolvedValue(0),
     };
 
+    notices = [];
+    auditModel = { create: jest.fn().mockResolvedValue({}) };
     const modelProvider = {
+      getEmployeeNotificationModel: jest.fn().mockResolvedValue({ create: jest.fn(async (row: any) => notices.push(row)) }),
+      getEntityAuditLogModel: jest.fn().mockResolvedValue(auditModel),
       getPerformanceReviewModel: jest.fn().mockResolvedValue(reviewModel),
       getPerformanceGoalModel: jest.fn().mockResolvedValue(goalModel),
       getEmployeeModel: jest.fn().mockResolvedValue(employeeModel),
@@ -204,6 +213,86 @@ describe('PerformanceDashboardService', () => {
       expect(reviewModel.findOne).toHaveBeenCalledWith({
         where: { id: REVIEW, tenantId: TENANT },
       });
+    });
+  });
+
+  describe('publishing a review to the employee', () => {
+    it('publishes a completed review, records who, tells the employee, and audits it', async () => {
+      const completed = review({ status: PerformanceReviewStatus.COMPLETED });
+      reviewModel.findOne.mockResolvedValue(completed);
+
+      await service.publishReview(TENANT, REVIEW, 'hr@example.com');
+
+      const patch = completed.update.mock.calls[0][0];
+      expect(patch.publishedAt).toBeInstanceOf(Date);
+      expect(patch.publishedByEmail).toBe('hr@example.com');
+      expect(notices).toEqual([expect.objectContaining({ employeeId: EMPLOYEE, kind: 'PERFORMANCE', title: 'Your H1 2026 review is ready' })]);
+      expect(auditModel.create.mock.calls[0][0]).toMatchObject({ tableName: 'performance_reviews', changes: { published: { from: false, to: true } } });
+    });
+
+    it('refuses a review that is not completed', async () => {
+      reviewModel.findOne.mockResolvedValue(review({ status: PerformanceReviewStatus.IN_PROGRESS }));
+      await expect(service.publishReview(TENANT, REVIEW)).rejects.toMatchObject({ status: HttpStatus.CONFLICT });
+      expect(notices).toHaveLength(0);
+    });
+
+    it('does nothing the second time, and tells the employee only once', async () => {
+      const published = review({ status: PerformanceReviewStatus.COMPLETED, publishedAt: new Date() });
+      reviewModel.findOne.mockResolvedValue(published);
+      await service.publishReview(TENANT, REVIEW);
+      expect(published.update).not.toHaveBeenCalled();
+      expect(notices).toHaveLength(0);
+    });
+
+    it('takes it back with unpublish', async () => {
+      const published = review({ status: PerformanceReviewStatus.COMPLETED, publishedAt: new Date(), publishedByEmail: 'hr@example.com' });
+      reviewModel.findOne.mockResolvedValue(published);
+      await service.unpublishReview(TENANT, REVIEW);
+      expect(published.update).toHaveBeenCalledWith({ publishedAt: null, publishedByEmail: null });
+    });
+
+    it('will not change a review the employee has been shown', async () => {
+      const published = review({ status: PerformanceReviewStatus.COMPLETED, publishedAt: new Date() });
+      reviewModel.findOne.mockResolvedValue(published);
+      await expect(service.updateReview(TENANT, REVIEW, { communication: 1 } as any)).rejects.toMatchObject({ status: HttpStatus.CONFLICT, message: expect.stringContaining('Unpublish') });
+      expect(published.update).not.toHaveBeenCalled();
+    });
+
+    it('keeps the reviewer\'s comments, and clears them with an empty string', async () => {
+      const open = review();
+      reviewModel.findOne.mockResolvedValue(open);
+      await service.updateReview(TENANT, REVIEW, { reviewerComments: ' Strong quarter ' } as any);
+      expect(open.update.mock.calls[0][0]).toMatchObject({ reviewerComments: 'Strong quarter' });
+      await service.updateReview(TENANT, REVIEW, { reviewerComments: '' } as any);
+      expect(open.update.mock.calls[1][0]).toMatchObject({ reviewerComments: null });
+    });
+
+    it('shows the reviewer whether it is published and what the employee wrote', async () => {
+      reviewModel.findOne.mockResolvedValue(review({ selfAssessment: { scores: { teamwork: 4 }, comments: 'Good', submittedAt: 'x' }, reviewerComments: 'Nice' }));
+      expect(await service.getReview(TENANT, REVIEW)).toMatchObject({
+        published: false,
+        reviewerComments: 'Nice',
+        selfAssessment: { scores: { teamwork: 4 }, comments: 'Good' },
+      });
+    });
+  });
+
+  describe('what the employee is told', () => {
+    it('asks for a self-assessment when an open review is created, and not for a completed one', async () => {
+      reviewModel.findOne.mockResolvedValue(review());
+      await service.createReview(TENANT, { employeeId: EMPLOYEE, cycle: 'H2 2026' } as any);
+      expect(notices).toEqual([expect.objectContaining({ employeeId: EMPLOYEE, kind: 'PERFORMANCE', title: 'Self-assessment requested: H2 2026' })]);
+
+      notices.length = 0;
+      await service.createReview(TENANT, { employeeId: EMPLOYEE, cycle: 'H1 2026', status: PerformanceReviewStatus.COMPLETED } as any);
+      expect(notices).toHaveLength(0);
+    });
+
+    it('tells the employee about a new goal', async () => {
+      goalModel.findOne.mockResolvedValue(goal());
+      await service.createGoal(TENANT, { employeeId: EMPLOYEE, title: 'Ship the portal', dueDate: '2026-12-31' } as any);
+      expect(notices).toEqual([expect.objectContaining({ employeeId: EMPLOYEE, title: 'New goal: Ship the portal' })]);
+      expect(notices[0].body).toContain('2026-12-31');
     });
   });
 
@@ -410,6 +499,327 @@ describe('PerformanceDashboardService', () => {
 
       await expect(service.deleteGoal(TENANT, GOAL)).rejects.toMatchObject({
         status: HttpStatus.NOT_FOUND,
+      });
+    });
+  });
+
+  /**
+   * A Department Head or Team Lead holds `performance.*` for their own people
+   * only. The same `DataScopeService` the employee, attendance and leave lists
+   * use narrows every read and write here; an organization-wide caller is
+   * untouched (`employeeWhere` answers `{}`).
+   */
+  describe('data scope', () => {
+    const OUTSIDER = '55555555-5555-4555-8555-555555555555';
+    let dataScope: any;
+
+    beforeEach(() => {
+      dataScope = {
+        scope: jest.fn().mockReturnValue('TEAM'),
+        actorEmployeeId: jest.fn().mockResolvedValue(null),
+        employeeWhere: jest.fn().mockImplementation(async (_tenant: string, field = 'employeeId') => ({
+          [field]: { [Op.in]: [EMPLOYEE] },
+        })),
+        canSee: jest.fn().mockImplementation(async (_tenant: string, id: string) => id === EMPLOYEE),
+      };
+      service = new PerformanceDashboardService((service as any).modelProvider, dataScope);
+    });
+
+    it('limits the review list and KPI counts to visible employees', async () => {
+      await service.getReviews(TENANT);
+      expect(reviewModel.findAll).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { tenantId: TENANT, employeeId: { [Op.in]: [EMPLOYEE] } } }),
+      );
+
+      await service.getOverview(TENANT);
+      expect(employeeModel.count).toHaveBeenCalledWith({ where: { tenantId: TENANT, id: { [Op.in]: [EMPLOYEE] } } });
+      expect(goalModel.count).toHaveBeenCalledWith({ where: { tenantId: TENANT, employeeId: { [Op.in]: [EMPLOYEE] } } });
+    });
+
+    it('refuses a review for someone outside the scope, as not found', async () => {
+      employeeModel.findOne.mockResolvedValue({ id: OUTSIDER });
+
+      await expect(
+        service.createReview(TENANT, { employeeId: OUTSIDER, cycle: 'H1' } as any),
+      ).rejects.toMatchObject({ status: HttpStatus.NOT_FOUND });
+      expect(reviewModel.create).not.toHaveBeenCalled();
+    });
+
+    it('cannot delete a goal outside the scope', async () => {
+      goalModel.destroy.mockResolvedValue(0);
+      await expect(service.deleteGoal(TENANT, GOAL)).rejects.toMatchObject({ status: HttpStatus.NOT_FOUND });
+      expect(goalModel.destroy).toHaveBeenCalledWith({
+        where: { id: GOAL, tenantId: TENANT, employeeId: { [Op.in]: [EMPLOYEE] } },
+      });
+    });
+
+    it('shows a scoped caller only the departments their people sit in', async () => {
+      reviewModel.findAll.mockResolvedValue([{ rating: '4', employee: { id: EMPLOYEE, departmentId: 'd1' } }]);
+      (service as any).modelProvider.getDepartmentModel = jest.fn().mockResolvedValue({
+        findAll: jest.fn().mockResolvedValue([
+          { id: 'd1', name: 'Engineering' },
+          { id: 'd2', name: 'Design' },
+        ]),
+      });
+
+      const result = await service.getByDepartment(TENANT);
+
+      expect(result.rows.map((row) => row.department)).toEqual(['Engineering']);
+      expect(result.unscored).toBe(0);
+    });
+
+    it('leaves an organization-wide caller untouched', async () => {
+      dataScope.scope.mockReturnValue('ORGANIZATION');
+      dataScope.employeeWhere.mockResolvedValue({});
+
+      await service.getReviews(TENANT);
+      expect(reviewModel.findAll).toHaveBeenCalledWith(expect.objectContaining({ where: { tenantId: TENANT } }));
+    });
+  });
+
+  describe('work evidence for a review', () => {
+    const OPEN_PROJECT = '55555555-5555-4555-8555-555555555555';
+    const SECRET_PROJECT = '66666666-6666-4666-8666-666666666666';
+    const REVIEWER = 'reviewer-1';
+    const daysAgo = (days: number) => new Date(Date.now() - days * 86_400_000);
+    const isoDaysAgo = (days: number) => daysAgo(days).toISOString().slice(0, 10);
+
+    const open = { id: OPEN_PROJECT, name: 'Portal', status: 'ACTIVE', confidential: false, leadEmployeeId: 'lead-1' };
+    const secret = { id: SECRET_PROJECT, name: 'Secret Launch', status: 'ACTIVE', confidential: true, leadEmployeeId: 'someone-else' };
+
+    const task = (over: Record<string, any>) => ({
+      id: 't',
+      title: 'Task',
+      status: 'COMPLETED',
+      dueDate: null,
+      completedAt: daysAgo(10),
+      projectId: OPEN_PROJECT,
+      project: open,
+      ...over,
+    });
+
+    /** The work-tracking models behind the evidence, with the reader's own involvement configurable. */
+    const arrange = (
+      work: {
+        tasks?: any[];
+        comments?: any[];
+        led?: any[];
+        employeeProjectIds?: string[];
+        readerProjectIds?: string[];
+        reader?: string | null;
+      } = {},
+    ) => {
+      const { tasks = [], comments = [], led = [], employeeProjectIds = [], readerProjectIds = [], reader = REVIEWER } = work;
+      reviewModel.findOne.mockResolvedValue(review());
+      employeeModel.findOne.mockResolvedValue({ id: EMPLOYEE, reportingManagerId: 'mgr-1' });
+      const projectModel = {
+        findAll: jest.fn(async ({ where }: any) => {
+          if (where.confidential === true) return [{ id: SECRET_PROJECT }];
+          if (where.leadEmployeeId === EMPLOYEE) return led;
+          if (where.id) return [open, secret].filter((project) => where.id[Op.in].includes(project.id));
+          return [];
+        }),
+      };
+      const taskModel = {
+        // The reader's own tasks (used to work out which projects they are on) have none here.
+        findAll: jest.fn(async ({ where }: any) => (where.assigneeEmployeeId ? [] : tasks)),
+      };
+      const memberModel = {
+        findAll: jest.fn(async ({ where }: any) =>
+          (where.employeeId === EMPLOYEE ? employeeProjectIds : readerProjectIds).map((projectId) => ({ projectId })),
+        ),
+      };
+      const provider = (service as any).modelProvider;
+      provider.getWorkspaceTaskModel = jest.fn().mockResolvedValue(taskModel);
+      provider.getWorkspaceTaskAssigneeModel = jest.fn().mockResolvedValue({ findAll: jest.fn().mockResolvedValue([]) });
+      provider.getWorkspaceProjectModel = jest.fn().mockResolvedValue(projectModel);
+      provider.getWorkspaceProjectMemberModel = jest.fn().mockResolvedValue(memberModel);
+      provider.getWorkspaceTaskCommentModel = jest.fn().mockResolvedValue({ findAll: jest.fn().mockResolvedValue(comments) });
+      (service as any).dataScope = {
+        scope: () => 'ORGANIZATION',
+        employeeWhere: async () => ({}),
+        canSee: async () => true,
+        actorEmployeeId: jest.fn().mockResolvedValue(reader),
+      };
+    };
+
+    const comment = (over: Record<string, any>) => ({
+      id: 'c',
+      taskId: 't1',
+      body: 'Well done',
+      authorEmployeeId: 'mgr-1',
+      authorName: 'Manager',
+      createdAt: daysAgo(5),
+      ...over,
+    });
+
+    const restricted = <T>(work: () => Promise<T>) =>
+      runAsRpcActor({ permissions: ['performance.view'], isFullAccess: false } as any, work);
+
+    it('shows projects, finished work, overdue work and manager feedback, and never writes a rating', async () => {
+      const row = review();
+      arrange({
+        led: [{ id: OPEN_PROJECT, name: 'Portal', status: 'ACTIVE', confidential: false }],
+        tasks: [
+          task({ id: 't1', title: 'Done' }),
+          task({ id: 't2', title: 'Late', status: 'PENDING', dueDate: isoDaysAgo(20), completedAt: null }),
+        ],
+        comments: [
+          comment({ id: 'c1', body: 'Please close this' }),
+          comment({ id: 'c2', body: 'Looks good', authorEmployeeId: 'lead-1', authorName: 'Owner' }),
+          comment({ id: 'c3', body: 'Thanks', authorEmployeeId: EMPLOYEE, authorName: 'Sara' }),
+          comment({ id: 'c4', body: 'I can help', authorEmployeeId: 'other', authorName: 'Colleague' }),
+        ],
+      });
+      reviewModel.findOne.mockResolvedValue(row);
+
+      const evidence = await service.getReviewEvidence(TENANT, REVIEW);
+
+      expect(evidence.projects).toEqual([expect.objectContaining({ id: OPEN_PROJECT, name: 'Portal', part: 'owner', concealed: false })]);
+      expect(evidence.completedTasks.map((line) => line.title)).toEqual(['Done']);
+      expect(evidence.overdueTasks.map((line) => line.title)).toEqual(['Late']);
+      expect(evidence.managerFeedback.map((note) => note.authorName)).toEqual(['Manager', 'Owner']);
+      expect(evidence).not.toHaveProperty('rating');
+      expect(reviewModel.create).not.toHaveBeenCalled();
+      expect(row.update).not.toHaveBeenCalled();
+    });
+
+    it('covers the last twelve months unless told otherwise', async () => {
+      arrange({
+        tasks: [
+          task({ id: 't1', title: 'Recent', completedAt: daysAgo(30) }),
+          task({ id: 't2', title: 'Two years ago', completedAt: daysAgo(730) }),
+          task({ id: 't3', title: 'Overdue long ago', status: 'PENDING', dueDate: isoDaysAgo(900), completedAt: null }),
+          task({ id: 't4', title: 'Overdue lately', status: 'PENDING', dueDate: isoDaysAgo(3), completedAt: null }),
+        ],
+      });
+
+      const evidence = await service.getReviewEvidence(TENANT, REVIEW);
+
+      expect(evidence.period.to).toBe(todayIso());
+      expect(evidence.period.from).toBe(new Date(Date.parse(`${evidence.period.to}T00:00:00.000Z`) - 365 * 86_400_000).toISOString().slice(0, 10));
+      expect(evidence.completedTasks.map((line) => line.title)).toEqual(['Recent']);
+      expect(evidence.overdueTasks.map((line) => line.title)).toEqual(['Overdue lately']);
+      expect(evidence.counts).toMatchObject({ completedTasks: 1, overdueTasks: 1 });
+    });
+
+    it('uses the period asked for', async () => {
+      arrange({
+        tasks: [
+          task({ id: 't1', title: 'Recent', completedAt: daysAgo(30) }),
+          task({ id: 't2', title: 'Two years ago', completedAt: daysAgo(730) }),
+        ],
+        comments: [comment({ id: 'old', createdAt: daysAgo(725) }), comment({ id: 'new', createdAt: daysAgo(5) })],
+      });
+
+      const evidence = await service.getReviewEvidence(TENANT, REVIEW, { from: isoDaysAgo(800), to: isoDaysAgo(600) });
+
+      expect(evidence.period).toEqual({ from: isoDaysAgo(800), to: isoDaysAgo(600) });
+      expect(evidence.completedTasks.map((line) => line.title)).toEqual(['Two years ago']);
+      expect(evidence.managerFeedback.map((note) => note.id)).toEqual(['old']);
+    });
+
+    it('refuses a period that ends before it starts', async () => {
+      arrange();
+
+      await expect(service.getReviewEvidence(TENANT, REVIEW, { from: '2026-06-30', to: '2026-01-01' })).rejects.toMatchObject({
+        status: HttpStatus.BAD_REQUEST,
+      });
+      expect(reviewModel.findOne).not.toHaveBeenCalled();
+    });
+
+    it('404s for a review outside the caller\'s scope or organization', async () => {
+      arrange();
+      reviewModel.findOne.mockResolvedValue(null);
+
+      await expect(service.getReviewEvidence(TENANT, REVIEW)).rejects.toMatchObject({ status: HttpStatus.NOT_FOUND });
+    });
+
+    it('leaves out cancelled projects and caps each list at eight while counting them all', async () => {
+      arrange({
+        tasks: Array.from({ length: 10 }, (_, index) => task({ id: `t${index}`, title: `Done ${index}`, completedAt: daysAgo(index + 1) })),
+        led: [{ id: 'cancelled', name: 'Dropped', status: 'CANCELLED', confidential: false }],
+      });
+
+      const evidence = await service.getReviewEvidence(TENANT, REVIEW);
+
+      expect(evidence.projects.map((project) => project.name)).toEqual(['Portal']);
+      expect(evidence.completedTasks).toHaveLength(8);
+      expect(evidence.completedTasks[0].title).toBe('Done 0');
+      expect(evidence.counts.completedTasks).toBe(10);
+    });
+
+    describe('confidential projects', () => {
+      const confidentialWork = () => ({
+        employeeProjectIds: [SECRET_PROJECT],
+        tasks: [
+          task({ id: 't1', title: 'Open work' }),
+          task({ id: 't2', title: 'Launch plan', projectId: SECRET_PROJECT, project: secret }),
+          task({ id: 't3', title: 'Late launch task', status: 'PENDING', dueDate: isoDaysAgo(4), completedAt: null, projectId: SECRET_PROJECT, project: secret }),
+        ],
+        comments: [
+          comment({ id: 'c1', taskId: 't1', body: 'Fine work' }),
+          comment({ id: 'c2', taskId: 't2', body: 'The launch date is the 14th' }),
+        ],
+      });
+
+      it('counts the work but hides what it was from a reader who may not see the project', async () => {
+        arrange(confidentialWork());
+
+        const evidence = await restricted(() => service.getReviewEvidence(TENANT, REVIEW));
+
+        expect(evidence.projects.map((project) => [project.name, project.concealed])).toEqual([
+          ['Confidential project', true],
+          ['Portal', false],
+        ]);
+        expect(evidence.completedTasks.map((line) => [line.title, line.projectName, line.concealed])).toEqual(
+          expect.arrayContaining([
+            ['Confidential task', 'Confidential project', true],
+            ['Open work', 'Portal', false],
+          ]),
+        );
+        expect(evidence.overdueTasks).toEqual([expect.objectContaining({ title: 'Confidential task', projectName: 'Confidential project', concealed: true })]);
+        expect(evidence.counts).toMatchObject({ projects: 2, completedTasks: 2, overdueTasks: 1 });
+        // What was said about the hidden project is not passed on, or counted.
+        expect(evidence.managerFeedback.map((note) => note.body)).toEqual(['Fine work']);
+        expect(evidence.counts.managerFeedback).toBe(1);
+        expect(JSON.stringify(evidence)).not.toContain('Secret Launch');
+        expect(JSON.stringify(evidence)).not.toContain('Launch plan');
+        expect(JSON.stringify(evidence)).not.toContain('14th');
+      });
+
+      it('shows everything to a reader with the Confidential permission, or full access', async () => {
+        arrange(confidentialWork());
+
+        const granted = await runAsRpcActor({ permissions: ['projects.confidential'], isFullAccess: false } as any, () =>
+          service.getReviewEvidence(TENANT, REVIEW),
+        );
+        const full = await runAsRpcActor({ permissions: [], isFullAccess: true } as any, () => service.getReviewEvidence(TENANT, REVIEW));
+
+        for (const evidence of [granted, full]) {
+          expect(evidence.projects.map((project) => project.name)).toContain('Secret Launch');
+          expect(evidence.completedTasks.map((line) => line.title)).toContain('Launch plan');
+          expect(evidence.managerFeedback.map((note) => note.body)).toContain('The launch date is the 14th');
+          expect(evidence.projects.every((project) => project.concealed === false)).toBe(true);
+        }
+      });
+
+      it('shows a confidential project to a reader who is on it', async () => {
+        arrange({ ...confidentialWork(), readerProjectIds: [SECRET_PROJECT] });
+
+        const evidence = await restricted(() => service.getReviewEvidence(TENANT, REVIEW));
+
+        expect(evidence.projects.map((project) => project.name)).toContain('Secret Launch');
+        expect(evidence.completedTasks.map((line) => line.title)).toContain('Launch plan');
+        expect(evidence.managerFeedback.map((note) => note.body)).toContain('The launch date is the 14th');
+      });
+
+      it('hides it from a reader who has no employee record and no permission', async () => {
+        arrange({ ...confidentialWork(), reader: null });
+
+        const evidence = await restricted(() => service.getReviewEvidence(TENANT, REVIEW));
+
+        expect(evidence.projects.map((project) => project.name)).not.toContain('Secret Launch');
       });
     });
   });

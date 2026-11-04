@@ -23,12 +23,30 @@ import { OrganizationAdminActivationController } from './controllers/activation.
 import { OrganizationSetupController } from './controllers/organization-setup.controller';
 import { OrganizationProfileController } from './controllers/organization-profile.controller';
 import { OrganizationDepartmentsController } from './controllers/organization-departments.controller';
+import { OrganizationHierarchyController } from './controllers/organization-hierarchy.controller';
 import { EmployeesController } from './controllers/employees.controller';
 import { LeaveRequestsController } from './controllers/leave-requests.controller';
 import { LeaveBalancesController } from './controllers/leave-balances.controller';
 import { ShiftsController } from './controllers/shifts.controller';
 import { MessagesController } from './controllers/messages.controller';
 import { AssetsController } from './controllers/assets.controller';
+import { MyAssetsController } from './controllers/my-assets.controller';
+import { LearningController } from './controllers/learning.controller';
+import { MyLearningController } from './controllers/my-learning.controller';
+import { MyPerformanceController } from './controllers/my-performance.controller';
+import { MyPoliciesController } from './controllers/my-policies.controller';
+import { ApprovalPoliciesController } from './controllers/approval-policies.controller';
+import { MyApprovalsController } from './controllers/my-approvals.controller';
+import { BranchesController } from './controllers/branches.controller';
+import { HelpdeskController, MyTicketsController } from './controllers/helpdesk.controller';
+import { EmployeeAssignmentsController, MyAssignmentsController } from './controllers/employee-assignments.controller';
+import { DepartmentChecklistsController } from './controllers/department-checklists.controller';
+import { PerformanceCyclesController } from './controllers/performance-cycles.controller';
+import { KpiTemplatesController } from './controllers/kpi-templates.controller';
+import { OffboardingController } from './controllers/offboarding.controller';
+import { MyOffboardingController } from './controllers/my-offboarding.controller';
+import { FinalSettlementsController } from './controllers/final-settlements.controller';
+import { RoleDashboardsController, MyManagerDashboardController } from './controllers/role-dashboards.controller';
 import { ChatGateway } from './realtime/chat.gateway';
 import { ChatRealtimeService } from './realtime/chat-realtime.service';
 import { RecruitmentController } from './controllers/recruitment.controller';
@@ -135,12 +153,33 @@ import { ExportPolicyGuard } from './guards/export-policy.guard';
     // than load-bearing — but it keeps the intent obvious if either side
     // grows a route later.
     OrganizationDepartmentsController,
+    OrganizationHierarchyController,
     EmployeesController,
     LeaveRequestsController,
     LeaveBalancesController,
     ShiftsController,
     MessagesController,
     AssetsController,
+    MyAssetsController,
+    LearningController,
+    MyLearningController,
+    MyPerformanceController,
+    MyPoliciesController,
+    ApprovalPoliciesController,
+    MyApprovalsController,
+    BranchesController,
+    HelpdeskController,
+    MyTicketsController,
+    EmployeeAssignmentsController,
+    MyAssignmentsController,
+    DepartmentChecklistsController,
+    PerformanceCyclesController,
+    KpiTemplatesController,
+    OffboardingController,
+    MyOffboardingController,
+    FinalSettlementsController,
+    RoleDashboardsController,
+    MyManagerDashboardController,
     RecruitmentController,
     OnboardingController,
     AttendanceController,

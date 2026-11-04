@@ -42,6 +42,12 @@ export const DEFAULT_CHECKLIST: readonly DefaultChecklistItem[] = [
     sortOrder: 30,
   },
   {
+    title: 'Prepare and assign assets (laptop, ID card, accessories)',
+    category: OnboardingTaskCategory.IT_SETUP,
+    dueInDays: -1,
+    sortOrder: 35,
+  },
+  {
     title: 'Create email and system accounts',
     category: OnboardingTaskCategory.IT_SETUP,
     dueInDays: 0,

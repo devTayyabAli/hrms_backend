@@ -14,10 +14,15 @@ function makeContext(user: unknown, type = 'http'): ExecutionContext {
 function makeGuard(
   requiredPermissions: string[] | undefined,
   isPublic = false,
+  allowOwner = false,
 ): PermissionsGuard {
   const reflector = {
     getAllAndOverride: (key: string) =>
-      key === 'isPublic' ? isPublic : requiredPermissions,
+      key === 'isPublic'
+        ? isPublic
+        : key === 'allowProjectOwner'
+          ? allowOwner
+          : requiredPermissions,
   } as unknown as Reflector;
   return new PermissionsGuard(reflector);
 }
@@ -163,6 +168,28 @@ describe('PermissionsGuard', () => {
           }),
         ),
       ).toBe(true);
+    });
+  });
+
+  describe('routes a project owner may use', () => {
+    it('lets a caller without the permission through, for the service to check ownership', () => {
+      const guard = makeGuard(['projects.edit'], false, true);
+
+      expect(guard.canActivate(makeContext({ roles: ['employee'], permissions: ['tasks.view'] }))).toBe(true);
+    });
+
+    it('still refuses a caller without the permission on a route that is not marked', () => {
+      const guard = makeGuard(['projects.edit'], false, false);
+
+      expect(() => guard.canActivate(makeContext({ roles: ['employee'], permissions: ['tasks.view'] }))).toThrow(
+        ForbiddenException,
+      );
+    });
+
+    it('still needs a signed-in user, even on a marked route', () => {
+      expect(() => makeGuard(['projects.edit'], false, true).canActivate(makeContext(undefined))).toThrow(
+        ForbiddenException,
+      );
     });
   });
 });

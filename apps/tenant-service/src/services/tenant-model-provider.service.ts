@@ -7,8 +7,16 @@ import {
 } from '@app/tenant-context';
 import {
   Department,
+  Branch,
+  HelpdeskTicket,
+  EmployeeAssignment,
+  DepartmentChecklistItem,
+  PerformanceCycle,
+  KpiTemplate,
+  ReviewKpi,
   Designation,
   Employee,
+  HierarchyChange,
   AttendanceRecord,
   WorkingHours,
   Shift,
@@ -17,12 +25,22 @@ import {
   Asset,
   AssetEvent,
   AssetMaintenance,
+  AssetRequest,
+  AssetDeductionFlag,
+  AssetClearance,
+  TrainingCourse,
+  TrainingMaterial,
+  TrainingAssignment,
+  TrainingProgress,
+  LearningSetting,
+  TrainingRecommendation,
   ChatConversation,
   ChatParticipant,
   ChatMessage,
   ChatPresence,
   LeavePolicy,
   AttendancePolicy,
+  ApprovalSetting,
   OrganizationPolicy,
   OrganizationModuleAccess,
   LeaveRequest,
@@ -55,9 +73,23 @@ import {
   EmployeeInvitation,
   HrReportRun,
   WorkspaceProject,
+  WorkspaceProjectMember,
   WorkspaceTask,
+  WorkspaceTaskAssignee,
+  WorkspaceTaskComment,
+  WorkspaceTaskChecklistItem,
+  WorkspaceTaskAttachment,
+  WorkspaceSetting,
   CalendarEvent,
   CompanyDocument,
+  CompanyDocumentAcknowledgement,
+  CompanyDocumentAckNotice,
+  ApprovalPolicy,
+  SalaryRevisionRequest,
+  OffboardingSetting,
+  OffboardingCase,
+  OffboardingClearance,
+  FinalSettlement,
 } from '../models';
 import { ProjectionOutbox } from '@app/database';
 
@@ -77,11 +109,24 @@ import { ProjectionOutbox } from '@app/database';
  */
 export const TENANT_OPERATIONAL_MODELS: Array<typeof Model> = [
   Department,
+  // Before Employee, which carries a real FK to it.
+  Branch,
   Designation,
   // Employee before AttendanceRecord: sync() creates tables in
   // registration order and attendance_records carries a real FK to
   // employees, so the referenced table has to exist first.
   Employee,
+  // Structure change history. No FKs, so order is free; kept by Employee.
+  HierarchyChange,
+  // Additional roles beside the primary position. No FKs.
+  EmployeeAssignment,
+  // What departments add to onboarding and offboarding. No FKs.
+  DepartmentChecklistItem,
+  // Performance review cycles. No FKs.
+  PerformanceCycle,
+  // KPI templates and the KPIs of a review. No FKs.
+  KpiTemplate,
+  ReviewKpi,
   AttendanceRecord,
   WorkingHours,
   // Shift before EmployeeShift, which FKs to it (and to employees, above).
@@ -92,6 +137,19 @@ export const TENANT_OPERATIONAL_MODELS: Array<typeof Model> = [
   Asset,
   AssetEvent,
   AssetMaintenance,
+  AssetRequest,
+  AssetDeductionFlag,
+  AssetClearance,
+  // IT helpdesk tickets. No FKs.
+  HelpdeskTicket,
+  // Learning: the course before the materials that FK to it.
+  TrainingCourse,
+  TrainingMaterial,
+  // Assignments FK to the course and to employees; progress FKs to the assignment and the material.
+  TrainingAssignment,
+  TrainingProgress,
+  LearningSetting,
+  TrainingRecommendation,
   // Messages: the conversation before the participants and messages that FK to it.
   ChatConversation,
   ChatParticipant,
@@ -103,6 +161,7 @@ export const TENANT_OPERATIONAL_MODELS: Array<typeof Model> = [
   // be created before it.
   LeaveRequest,
   AttendancePolicy,
+  ApprovalSetting,
   OrganizationPolicy,
   OrganizationModuleAccess,
   // Recruitment: JobOpening before Candidate before Interview. Each
@@ -146,12 +205,28 @@ export const TENANT_OPERATIONAL_MODELS: Array<typeof Model> = [
   EmployeeInvitation,
   HrReportRun,
   // Workspace. After Employee and Department, which projects FK to; the
-  // project before the tasks that FK to it.
+  // project before the members and tasks that FK to it. The task before its assignees.
   WorkspaceProject,
+  WorkspaceProjectMember,
   WorkspaceTask,
+  WorkspaceTaskAssignee,
+  WorkspaceTaskComment,
+  WorkspaceTaskChecklistItem,
+  WorkspaceTaskAttachment,
+  WorkspaceSetting,
   CalendarEvent,
   // After Employee, which it FKs to.
   CompanyDocument,
+  // Acknowledgements and their reminder stamps FK to the document and to employees.
+  CompanyDocumentAcknowledgement,
+  CompanyDocumentAckNotice,
+  ApprovalPolicy,
+  SalaryRevisionRequest,
+  // The case before the clearances that FK to it; both FK to employees.
+  OffboardingSetting,
+  OffboardingCase,
+  OffboardingClearance,
+  FinalSettlement,
   // Shared with user-service: one outbox table per tenant database,
   // drained by ProjectionRelayService.
   ProjectionOutbox,
@@ -186,6 +261,10 @@ export class TenantModelProviderService extends BaseTenantModelProvider {
     return this.model<typeof Employee>('Employee', tenantId);
   }
 
+  getHierarchyChangeModel(tenantId?: string): Promise<typeof HierarchyChange> {
+    return this.model<typeof HierarchyChange>('HierarchyChange', tenantId);
+  }
+
   getAttendanceRecordModel(tenantId?: string): Promise<typeof AttendanceRecord> {
     return this.model<typeof AttendanceRecord>('AttendanceRecord', tenantId);
   }
@@ -204,6 +283,42 @@ export class TenantModelProviderService extends BaseTenantModelProvider {
 
   getAssetModel(tenantId?: string): Promise<typeof Asset> {
     return this.model<typeof Asset>('Asset', tenantId);
+  }
+
+  getTrainingCourseModel(tenantId?: string): Promise<typeof TrainingCourse> {
+    return this.model<typeof TrainingCourse>('TrainingCourse', tenantId);
+  }
+
+  getTrainingAssignmentModel(tenantId?: string): Promise<typeof TrainingAssignment> {
+    return this.model<typeof TrainingAssignment>('TrainingAssignment', tenantId);
+  }
+
+  getTrainingRecommendationModel(tenantId?: string): Promise<typeof TrainingRecommendation> {
+    return this.model<typeof TrainingRecommendation>('TrainingRecommendation', tenantId);
+  }
+
+  getLearningSettingModel(tenantId?: string): Promise<typeof LearningSetting> {
+    return this.model<typeof LearningSetting>('LearningSetting', tenantId);
+  }
+
+  getTrainingProgressModel(tenantId?: string): Promise<typeof TrainingProgress> {
+    return this.model<typeof TrainingProgress>('TrainingProgress', tenantId);
+  }
+
+  getTrainingMaterialModel(tenantId?: string): Promise<typeof TrainingMaterial> {
+    return this.model<typeof TrainingMaterial>('TrainingMaterial', tenantId);
+  }
+
+  getAssetRequestModel(tenantId?: string): Promise<typeof AssetRequest> {
+    return this.model<typeof AssetRequest>('AssetRequest', tenantId);
+  }
+
+  getAssetDeductionFlagModel(tenantId?: string): Promise<typeof AssetDeductionFlag> {
+    return this.model<typeof AssetDeductionFlag>('AssetDeductionFlag', tenantId);
+  }
+
+  getAssetClearanceModel(tenantId?: string): Promise<typeof AssetClearance> {
+    return this.model<typeof AssetClearance>('AssetClearance', tenantId);
   }
 
   getAssetMaintenanceModel(tenantId?: string): Promise<typeof AssetMaintenance> {
@@ -244,6 +359,10 @@ export class TenantModelProviderService extends BaseTenantModelProvider {
 
   getAttendancePolicyModel(tenantId?: string): Promise<typeof AttendancePolicy> {
     return this.model<typeof AttendancePolicy>('AttendancePolicy', tenantId);
+  }
+
+  getApprovalSettingModel(tenantId?: string): Promise<typeof ApprovalSetting> {
+    return this.model<typeof ApprovalSetting>('ApprovalSetting', tenantId);
   }
 
   getOrganizationPolicyModel(
@@ -382,8 +501,32 @@ export class TenantModelProviderService extends BaseTenantModelProvider {
     return this.model<typeof WorkspaceProject>('WorkspaceProject', tenantId);
   }
 
+  getWorkspaceProjectMemberModel(tenantId?: string): Promise<typeof WorkspaceProjectMember> {
+    return this.model<typeof WorkspaceProjectMember>('WorkspaceProjectMember', tenantId);
+  }
+
   getWorkspaceTaskModel(tenantId?: string): Promise<typeof WorkspaceTask> {
     return this.model<typeof WorkspaceTask>('WorkspaceTask', tenantId);
+  }
+
+  getWorkspaceTaskAssigneeModel(tenantId?: string): Promise<typeof WorkspaceTaskAssignee> {
+    return this.model<typeof WorkspaceTaskAssignee>('WorkspaceTaskAssignee', tenantId);
+  }
+
+  getWorkspaceTaskCommentModel(tenantId?: string): Promise<typeof WorkspaceTaskComment> {
+    return this.model<typeof WorkspaceTaskComment>('WorkspaceTaskComment', tenantId);
+  }
+
+  getWorkspaceTaskChecklistItemModel(tenantId?: string): Promise<typeof WorkspaceTaskChecklistItem> {
+    return this.model<typeof WorkspaceTaskChecklistItem>('WorkspaceTaskChecklistItem', tenantId);
+  }
+
+  getWorkspaceTaskAttachmentModel(tenantId?: string): Promise<typeof WorkspaceTaskAttachment> {
+    return this.model<typeof WorkspaceTaskAttachment>('WorkspaceTaskAttachment', tenantId);
+  }
+
+  getWorkspaceSettingModel(tenantId?: string): Promise<typeof WorkspaceSetting> {
+    return this.model<typeof WorkspaceSetting>('WorkspaceSetting', tenantId);
   }
 
   getCalendarEventModel(tenantId?: string): Promise<typeof CalendarEvent> {
@@ -392,6 +535,66 @@ export class TenantModelProviderService extends BaseTenantModelProvider {
 
   getCompanyDocumentModel(tenantId?: string): Promise<typeof CompanyDocument> {
     return this.model<typeof CompanyDocument>('CompanyDocument', tenantId);
+  }
+
+  getCompanyDocumentAcknowledgementModel(tenantId?: string): Promise<typeof CompanyDocumentAcknowledgement> {
+    return this.model<typeof CompanyDocumentAcknowledgement>('CompanyDocumentAcknowledgement', tenantId);
+  }
+
+  getSalaryRevisionRequestModel(tenantId?: string): Promise<typeof SalaryRevisionRequest> {
+    return this.model<typeof SalaryRevisionRequest>('SalaryRevisionRequest', tenantId);
+  }
+
+  getFinalSettlementModel(tenantId?: string): Promise<typeof FinalSettlement> {
+    return this.model<typeof FinalSettlement>('FinalSettlement', tenantId);
+  }
+
+  getOffboardingSettingModel(tenantId?: string): Promise<typeof OffboardingSetting> {
+    return this.model<typeof OffboardingSetting>('OffboardingSetting', tenantId);
+  }
+
+  getOffboardingCaseModel(tenantId?: string): Promise<typeof OffboardingCase> {
+    return this.model<typeof OffboardingCase>('OffboardingCase', tenantId);
+  }
+
+  getOffboardingClearanceModel(tenantId?: string): Promise<typeof OffboardingClearance> {
+    return this.model<typeof OffboardingClearance>('OffboardingClearance', tenantId);
+  }
+
+  getKpiTemplateModel(tenantId?: string): Promise<typeof KpiTemplate> {
+    return this.model<typeof KpiTemplate>('KpiTemplate', tenantId);
+  }
+
+  getReviewKpiModel(tenantId?: string): Promise<typeof ReviewKpi> {
+    return this.model<typeof ReviewKpi>('ReviewKpi', tenantId);
+  }
+
+  getPerformanceCycleModel(tenantId?: string): Promise<typeof PerformanceCycle> {
+    return this.model<typeof PerformanceCycle>('PerformanceCycle', tenantId);
+  }
+
+  getDepartmentChecklistItemModel(tenantId?: string): Promise<typeof DepartmentChecklistItem> {
+    return this.model<typeof DepartmentChecklistItem>('DepartmentChecklistItem', tenantId);
+  }
+
+  getEmployeeAssignmentModel(tenantId?: string): Promise<typeof EmployeeAssignment> {
+    return this.model<typeof EmployeeAssignment>('EmployeeAssignment', tenantId);
+  }
+
+  getHelpdeskTicketModel(tenantId?: string): Promise<typeof HelpdeskTicket> {
+    return this.model<typeof HelpdeskTicket>('HelpdeskTicket', tenantId);
+  }
+
+  getBranchModel(tenantId?: string): Promise<typeof Branch> {
+    return this.model<typeof Branch>('Branch', tenantId);
+  }
+
+  getApprovalPolicyModel(tenantId?: string): Promise<typeof ApprovalPolicy> {
+    return this.model<typeof ApprovalPolicy>('ApprovalPolicy', tenantId);
+  }
+
+  getCompanyDocumentAckNoticeModel(tenantId?: string): Promise<typeof CompanyDocumentAckNotice> {
+    return this.model<typeof CompanyDocumentAckNotice>('CompanyDocumentAckNotice', tenantId);
   }
 
   getEmployeeInvitationModel(tenantId?: string): Promise<typeof EmployeeInvitation> {

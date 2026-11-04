@@ -22,6 +22,7 @@ import {
 import { TenantModelProviderService } from './tenant-model-provider.service';
 import { RecruitmentActivityService } from './recruitment-activity.service';
 import { buildDefaultChecklist } from './onboarding-checklist';
+import { notifyTaskOwners, onboardingTasksFor } from './department-checklist';
 
 /** Flattened row for the candidate table and the pipeline cards. */
 export interface CandidateRow {
@@ -759,7 +760,7 @@ export class CandidateService {
       createdByUserId: actorUserId ?? null,
     });
 
-    await this.seedDefaultChecklist(tenantId, created.id, created.joiningDate);
+    await this.seedDefaultChecklist(tenantId, created.id, created.joiningDate, created);
     return created.id;
   }
 
@@ -768,12 +769,17 @@ export class CandidateService {
     tenantId: string,
     newHireId: string,
     joiningDate: string,
+    hire?: { departmentId?: string | null; reportingManagerEmployeeId?: string | null },
   ): Promise<void> {
     const OnboardingTaskModel =
       await this.modelProvider.getOnboardingTaskModel(tenantId);
-    await OnboardingTaskModel.bulkCreate(
-      buildDefaultChecklist(tenantId, newHireId, joiningDate) as any[],
-    );
+    const departmentTasks = await onboardingTasksFor(this.modelProvider, tenantId, newHireId, {
+      departmentId: hire?.departmentId,
+      joiningDate,
+      reportingManagerEmployeeId: hire?.reportingManagerEmployeeId,
+    });
+    await OnboardingTaskModel.bulkCreate([...buildDefaultChecklist(tenantId, newHireId, joiningDate), ...departmentTasks] as any[]);
+    await notifyTaskOwners(this.modelProvider, tenantId, newHireId, departmentTasks as any[]);
   }
 
   /**

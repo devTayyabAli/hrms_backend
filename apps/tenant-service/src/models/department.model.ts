@@ -64,6 +64,22 @@ export class Department extends Model {
   @Column({ type: DataType.UUID, allowNull: true })
   declare managerId: string | null;
 
+  /**
+   * The branch or office this department sits in ("Lahore HQ", "Remote").
+   * Free text: organizations name their locations differently and most have
+   * one, so a location table would be ceremony for them.
+   */
+  @Column({ type: DataType.STRING(120), allowNull: true })
+  declare location: string | null;
+
+  /**
+   * The branches this department works from. A department can sit in several,
+   * and an organization with one office leaves it empty. Plain ids checked by
+   * the service, so neither table has to exist before the other.
+   */
+  @Column({ type: DataType.JSONB, allowNull: false, defaultValue: [] })
+  declare branchIds: string[];
+
   @Default(true)
   @Column({ type: DataType.BOOLEAN, defaultValue: true })
   declare isActive: boolean;

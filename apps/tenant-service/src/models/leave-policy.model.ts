@@ -65,6 +65,11 @@ export class LeavePolicy extends Model {
   })
   declare eligibility: LeaveEligibility;
 
+  /** Unused days of this leave are paid out in the final settlement of someone who leaves. */
+  @Default(false)
+  @Column({ type: DataType.BOOLEAN, allowNull: false, defaultValue: false })
+  declare isEncashable: boolean;
+
   @Default(true)
   @Column({ type: DataType.BOOLEAN, defaultValue: true })
   declare isActive: boolean;

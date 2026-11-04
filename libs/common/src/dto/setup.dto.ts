@@ -6,6 +6,7 @@ import {
   IsBoolean,
   IsNumber,
   IsArray,
+  ArrayMaxSize,
   IsUUID,
   IsEnum,
   ValidateNested,
@@ -116,6 +117,19 @@ export class CreateDepartmentDto {
   @IsUUID()
   @IsOptional()
   parentDepartmentId?: string;
+
+  @ApiProperty({ example: 'Lahore HQ', required: false, description: 'Branch or office this department sits in' })
+  @IsString()
+  @MaxLength(120)
+  @IsOptional()
+  location?: string;
+
+  @ApiProperty({ type: [String], required: false, description: 'The branches this department works from. Leave out if the organization has one office' })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(50)
+  @IsUUID('4', { each: true })
+  branchIds?: string[];
 }
 
 export class UpdateDepartmentDto {
@@ -138,6 +152,19 @@ export class UpdateDepartmentDto {
   @IsUUID()
   @IsOptional()
   parentDepartmentId?: string;
+
+  @ApiProperty({ example: 'Lahore HQ', required: false, nullable: true })
+  @IsString()
+  @MaxLength(120)
+  @IsOptional()
+  location?: string | null;
+
+  @ApiProperty({ type: [String], required: false, description: 'Replaces the branches this department works from. An empty list clears them' })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(50)
+  @IsUUID('4', { each: true })
+  branchIds?: string[];
 
   @ApiProperty({ example: true, required: false })
   @IsBoolean()
@@ -273,6 +300,11 @@ export class CreateLeavePolicyDto {
   @IsOptional()
   carryForwardDays?: number;
 
+  @ApiProperty({ required: false, description: 'Unused days are paid out when someone leaves (a day is their monthly basic salary divided by 30)' })
+  @IsBoolean()
+  @IsOptional()
+  isEncashable?: boolean;
+
   @ApiProperty({ enum: LeaveEligibility, required: false })
   @IsEnum(LeaveEligibility)
   @IsOptional()
@@ -311,6 +343,11 @@ export class UpdateLeavePolicyDto {
   @Min(0)
   @IsOptional()
   carryForwardDays?: number;
+
+  @ApiProperty({ required: false, description: 'Unused days are paid out when someone leaves (a day is their monthly basic salary divided by 30)' })
+  @IsBoolean()
+  @IsOptional()
+  isEncashable?: boolean;
 
   @ApiProperty({ enum: LeaveEligibility, required: false })
   @IsEnum(LeaveEligibility)
@@ -536,6 +573,25 @@ export class UpdateLeavePolicyMessageDto extends TenantLeavePolicyIdDto {
   @Type(() => UpdateLeavePolicyDto)
   @IsDefined()
   dto: UpdateLeavePolicyDto;
+}
+
+export class UpdateApprovalFlowDto {
+  @ApiProperty({ enum: ['SINGLE', 'MANAGER_THEN_HR'] })
+  @IsIn(['SINGLE', 'MANAGER_THEN_HR'])
+  flow: 'SINGLE' | 'MANAGER_THEN_HR';
+}
+
+export class UpdateApprovalFlowMessageDto {
+  @ApiProperty({ example: 'd4b12f6a-04b3-4f8a-9892-9653d9e21183' })
+  @IsUUID()
+  @IsNotEmpty()
+  tenantId: string;
+
+  @ApiProperty({ type: UpdateApprovalFlowDto })
+  @ValidateNested()
+  @Type(() => UpdateApprovalFlowDto)
+  @IsDefined()
+  dto: UpdateApprovalFlowDto;
 }
 
 export class UpdateAttendancePolicyMessageDto {

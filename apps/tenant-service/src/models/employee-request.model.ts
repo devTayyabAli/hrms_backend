@@ -85,6 +85,14 @@ export class EmployeeRequest extends Model {
   @Column({ type: DataType.JSONB, allowNull: true })
   declare resolution: Record<string, unknown> | null;
 
+  /**
+   * The route this request takes when the organization has saved an approval
+   * policy for employee requests. Null: the older approval-flow setting
+   * (one step, or manager then HR) decides.
+   */
+  @Column({ type: DataType.JSONB, allowNull: true })
+  declare approval: Record<string, unknown> | null;
+
   @Default(EmployeeRequestStatus.PENDING)
   @Column({
     type: DataType.ENUM(...Object.values(EmployeeRequestStatus)),

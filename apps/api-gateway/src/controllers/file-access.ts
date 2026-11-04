@@ -1,4 +1,5 @@
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import { grantsPermission } from '@app/common';
 
 /** The caller as the JWT describes them. */
 export interface FileCaller {
@@ -26,14 +27,17 @@ export const isSuperAdminCaller = (user: FileCaller | undefined) =>
     user?.roles?.some((r) => String(r).toLowerCase() === 'superadmin'),
   );
 
+/** Platform-level full access; no organization role carries it. */
 const isFullAccess = (user: FileCaller) =>
   Boolean(user.isFullAccess || user.permissions?.includes('*'));
 
 /**
  * Who besides the uploader may reach a file of each category through the
- * generic `/files` routes. Anything not listed is uploader-or-admin only.
- * Feature routes (employee documents, payslips) do their own ownership
- * checks and stream files without going through these rules.
+ * generic `/files` routes. Anything not listed is uploader-only — the
+ * Organization Admin included: a payslip or receipt is only theirs to open
+ * when they hold that area's permission. Feature routes (employee
+ * documents, payslips) do their own ownership checks and stream files
+ * without going through these rules.
  */
 const CATEGORY_PERMISSIONS: Record<string, Record<FileAction, string[]>> = {
   // Company documents — shared with whoever may see the documents module.
@@ -45,6 +49,11 @@ const CATEGORY_PERMISSIONS: Record<string, Record<FileAction, string[]>> = {
   'reimbursement-receipt': {
     read: ['payroll.view', 'payroll.manage'],
     delete: ['payroll.manage'],
+  },
+  // Task files. An assignee without these permissions uses the My Tasks download.
+  task: {
+    read: ['tasks.view', 'tasks.manage', 'projects.view', 'projects.manage'],
+    delete: ['tasks.delete', 'tasks.edit', 'tasks.manage'],
   },
 };
 
@@ -77,7 +86,11 @@ export const assertFileAccess = (
   if (callerId && file.uploadedBy === callerId) return;
 
   const allowed = CATEGORY_PERMISSIONS[file.category ?? '']?.[action] ?? [];
-  if (allowed.some((permission) => user.permissions?.includes(permission)))
+  if (
+    allowed.some((permission) =>
+      grantsPermission(user.permissions ?? [], permission),
+    )
+  )
     return;
 
   throw new ForbiddenException(

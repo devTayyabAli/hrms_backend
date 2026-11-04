@@ -1,8 +1,25 @@
-import { HttpStatus, Injectable, Logger } from '@nestjs/common';
-import { Op } from 'sequelize';
-import { PayrollProcessStep } from '@app/common';
+import { HttpStatus, Injectable, Logger, Optional } from '@nestjs/common';
+import { Op, literal, where as sqlWhere } from 'sequelize';
+import { DataScope, EmployeeNotificationKind, PayrollProcessStep } from '@app/common';
 import { TenantModelProviderService } from './tenant-model-provider.service';
+import { DataScopeService } from './data-scope.service';
 import { payrollActor, payrollError, writePayrollAudit } from './payroll-access';
+import {
+  Actor,
+  Approval,
+  PolicyStage,
+  advanceApproval,
+  buildApproval,
+  canActOnStage,
+  completeApproval,
+  handOnApproval,
+  rejectApproval,
+  rerouteApproval,
+  resolveStages,
+  stagesOf,
+} from './approval-engine';
+import { createRouteLookup, loadPolicyStages } from './approval-route-lookup';
+import { PermissionHoldersService } from './permission-holders.service';
 import {
   COMPONENT_CATEGORIES,
   NOT_IN_COMPENSATION,
@@ -75,7 +92,25 @@ export interface CompensationContext {
 export class PayrollCompensationService {
   private readonly logger = new Logger(PayrollCompensationService.name);
 
-  constructor(private readonly modelProvider: TenantModelProviderService) {}
+  constructor(
+    private readonly modelProvider: TenantModelProviderService,
+    @Optional() private readonly dataScope?: DataScopeService,
+    @Optional() private readonly holders?: PermissionHoldersService,
+  ) {}
+
+  private scopeWhere(tenantId: string, field = 'employeeId'): Promise<Record<string, unknown>> {
+    return this.dataScope ? this.dataScope.employeeWhere(tenantId, field) : Promise.resolve({});
+  }
+
+  private async assertEmployee(tenantId: string, employeeId: string | null | undefined) {
+    if (this.dataScope) await this.dataScope.assertCanSee(tenantId, employeeId, 'Employee');
+  }
+
+  /** Import writes every salary in the file. A narrowed role cannot do that for people it cannot see. */
+  private assertOrganization(what: string) {
+    if (!this.dataScope || this.dataScope.scope() === DataScope.ORGANIZATION) return;
+    payrollError(`${what} covers the whole organization.`, HttpStatus.FORBIDDEN);
+  }
 
   // ── Access & audit ────────────────────────────────────────────────────────
 
@@ -567,7 +602,7 @@ export class PayrollCompensationService {
     const Revision = await this.modelProvider.getSalaryRevisionModel(tenantId);
     const Department = await this.modelProvider.getDepartmentModel(tenantId);
     const employees = (await Employee.findAll({
-      where: { tenantId, status: { [Op.in]: ['ACTIVE', 'ON_LEAVE'] } },
+      where: { tenantId, status: { [Op.in]: ['ACTIVE', 'ON_LEAVE'] }, ...(await this.scopeWhere(tenantId, 'id')) },
       include: [{ model: Department, as: 'department', attributes: ['id', 'name'], required: false }],
       order: [['firstName', 'ASC']],
     })) as any[];
@@ -600,6 +635,7 @@ export class PayrollCompensationService {
   /** An employee's compensation now, what is scheduled, and the history. */
   async getCompensation(tenantId: string, employeeId: string) {
     this.require('compensation', 'view', 'view compensation');
+    await this.assertEmployee(tenantId, employeeId);
     const employee = await this.loadEmployee(tenantId, employeeId);
     const revisions = await this.revisionsOf(tenantId, employeeId);
     const now = today();
@@ -669,6 +705,7 @@ export class PayrollCompensationService {
 
   /** The compensation a save would store, worked out — nothing is saved. */
   async previewCompensation(tenantId: string, employeeId: string, dto: Record<string, any>) {
+    await this.assertEmployee(tenantId, employeeId);
     this.require('compensation', 'view', 'preview compensation');
     await this.loadEmployee(tenantId, employeeId);
     const effectiveFrom = day(dto.effectiveFrom) ?? today();
@@ -681,9 +718,24 @@ export class PayrollCompensationService {
    * date — a correction of that revision. Never back into a month whose
    * payroll is approved. The revision keeps the components as worked out
    * now, so later structure or component edits don't change it.
+   *
+   * When the organization asks for salary changes to be approved, nothing is
+   * written: the change is proposed, and written only once its approvers have
+   * approved it.
    */
-  async saveCompensation(tenantId: string, employeeId: string, dto: Record<string, any>, options: { source?: string; skipAudit?: boolean } = {}) {
+  async saveCompensation(tenantId: string, employeeId: string, dto: Record<string, any>, options: { source?: string; skipAudit?: boolean; skipApproval?: boolean } = {}) {
+    await this.assertEmployee(tenantId, employeeId);
     this.require('compensation', 'manage', 'change compensation');
+    const prepared = await this.prepareCompensation(tenantId, employeeId, dto);
+    if (!options.skipApproval) {
+      const stages = await loadPolicyStages(this.modelProvider, tenantId, 'SALARY_REVISION');
+      if (stages) return this.proposeCompensation(tenantId, employeeId, dto, prepared, stages);
+    }
+    return this.writeCompensation(tenantId, employeeId, dto, prepared, options);
+  }
+
+  /** Everything a salary change must satisfy, checked before it is proposed or written. */
+  private async prepareCompensation(tenantId: string, employeeId: string, dto: Record<string, any>) {
     const employee = await this.loadEmployee(tenantId, employeeId);
     const effectiveFrom = day(dto.effectiveFrom);
     if (!isDate(effectiveFrom)) this.bad('An effective date is required.');
@@ -694,7 +746,17 @@ export class PayrollCompensationService {
     const { structure, resolved, errors } = await this.buildLines(tenantId, { structureId: dto.structureId, lines: dto.lines, effectiveFrom });
     if (errors.length) this.bad(errors.join(' '));
     if (resolved.totals.gross <= 0) this.bad('The compensation adds up to nothing — enter a basic salary.');
+    return { employee, effectiveFrom: effectiveFrom as string, structure, resolved };
+  }
 
+  private async writeCompensation(
+    tenantId: string,
+    employeeId: string,
+    dto: Record<string, any>,
+    prepared: { employee: any; effectiveFrom: string; structure: any; resolved: any },
+    options: { source?: string; skipAudit?: boolean } = {},
+  ) {
+    const { employee, effectiveFrom, structure, resolved } = prepared;
     const revisions = await this.revisionsOf(tenantId, employeeId);
     const existing = revisions.find((r) => String(r.effectiveFrom).slice(0, 10) === effectiveFrom);
     const dayBefore = new Date(`${effectiveFrom}T00:00:00Z`);
@@ -748,6 +810,264 @@ export class PayrollCompensationService {
         ? { id: openRun.id, periodLabel: new Date(`${String(openRun.periodStart).slice(0, 10)}T12:00:00Z`).toLocaleString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' }) }
         : null,
     };
+  }
+
+  // ── What a final settlement needs ─────────────────────────────────────────
+
+  /** The monthly basic salary in effect on a day (or the one on the employee record), null when there is none. */
+  async basicSalaryOn(tenantId: string, employeeId: string, date: string): Promise<number | null> {
+    const revisions = await this.revisionsOf(tenantId, employeeId);
+    const inEffect = this.inEffectOn(revisions, date);
+    if (inEffect) return money(inEffect.basicSalary) || null;
+    const employee = await this.loadEmployee(tenantId, employeeId);
+    return money(employee.basicSalary) || null;
+  }
+
+  /**
+   * Loans and advances still being recovered, and what is left to recover once
+   * the instalments already on payrolls in Review are taken: the part a
+   * settlement has to collect.
+   */
+  async settlementLoans(tenantId: string, employeeId: string) {
+    const Loan = await this.modelProvider.getEmployeeLoanModel(tenantId);
+    const rows = (await Loan.findAll({ where: { tenantId, employeeId, status: 'ACTIVE' } as any })) as any[];
+    if (!rows.length) return [];
+    const taken = await this.takenBySource(tenantId, [employeeId], undefined, ['LOAN', 'ADVANCE']);
+    return rows
+      .map((row) => {
+        const view = this.loanRow(row, taken.get(row.id));
+        return { id: view.id as string, kind: view.kind as string, principal: view.principal, remaining: view.remaining, scheduled: view.scheduled, balance: round2(Math.max(0, view.remaining - view.scheduled)) };
+      })
+      .filter((loan) => loan.balance > 0);
+  }
+
+  /** The balance was taken in the settlement: no further instalments. */
+  async markLoanSettled(tenantId: string, loanId: string) {
+    const Loan = await this.modelProvider.getEmployeeLoanModel(tenantId);
+    const row: any = await Loan.findOne({ where: { tenantId, id: loanId } });
+    if (!row || row.status !== 'ACTIVE') return;
+    await row.update({ status: 'SETTLED' });
+    await this.audit(tenantId, 'EmployeeLoan', loanId, 'UPDATE', { event: { from: null, to: 'LOAN_SETTLED' }, status: { from: 'ACTIVE', to: 'SETTLED' } });
+  }
+
+  // ── Approving salary changes ──────────────────────────────────────────────
+
+  /** What payroll people may use to stand in for a payroll permission: payroll.manage covers payroll.*. */
+  private approverActor(employeeId: string | null): Actor {
+    const actor = payrollActor();
+    return {
+      employeeId,
+      orgWide: false,
+      permissions: actor.permissions,
+      isFullAccess: actor.isFullAccess,
+      holds: (permission) => actor.permissions.includes(permission) || (permission.startsWith('payroll.') && actor.permissions.includes('payroll.manage')),
+    };
+  }
+
+  /** The employee record behind the signed-in login, or null. */
+  private async myEmployeeId(tenantId: string): Promise<string | null> {
+    const actor = payrollActor();
+    if (!actor.userId && !actor.email) return null;
+    try {
+      return (await this.me(tenantId, actor.userId ?? '', actor.email ?? undefined)).id as string;
+    } catch {
+      return null;
+    }
+  }
+
+  private proposedBy(row: any, actor: { userId: string | null; email: string | null }): boolean {
+    return (Boolean(actor.userId) && row.requestedByUserId === actor.userId) || (Boolean(actor.email) && row.requestedByEmail?.toLowerCase() === actor.email);
+  }
+
+  /** The words and the route a request carries, as the screens read them. */
+  private approvalView(approval: Approval | null) {
+    if (!approval) return null;
+    const { stages, index } = stagesOf(approval);
+    return {
+      statusText: approval.statusText,
+      stage: approval.stage,
+      finalStep: approval.finalStep,
+      currentApproverId: approval.currentApproverId,
+      currentApproverName: approval.currentApproverName,
+      currentApproverTitle: approval.currentApproverTitle,
+      currentPermission: approval.currentPermission ?? null,
+      stageIndex: index,
+      stages: stages.map((stage) => ({ kind: stage.kind, title: stage.title, name: stage.name, permission: stage.permission })),
+      workflow: approval.workflow,
+    };
+  }
+
+  private salaryRequestRow(row: any, employee?: any, canDecide = false) {
+    const proposed = (row.proposed ?? {}) as { structureName?: string | null; lines?: any[]; totals?: Record<string, number> };
+    const gross = (totals?: Record<string, number> | null) => (totals && Number.isFinite(Number(totals.gross)) ? money(totals.gross) : null);
+    const from = gross(row.current?.totals);
+    const to = gross(proposed.totals);
+    return {
+      id: row.id,
+      employeeId: row.employeeId,
+      employee: employee ? { id: employee.id, name: nameOf(employee), employeeCode: employee.employeeCode } : undefined,
+      effectiveFrom: day(row.effectiveFrom),
+      status: row.status,
+      reason: row.payload?.reason ?? null,
+      proposed: {
+        structureName: proposed.structureName ?? null,
+        lines: (proposed.lines ?? []).map((line: any) => ({ code: line.code, name: line.name, type: line.type, monthlyAmount: line.monthlyAmount })),
+        totals: proposed.totals ?? null,
+      },
+      current: row.current ? { totals: row.current.totals ?? null } : null,
+      change: from !== null && to !== null ? { grossFrom: from, grossTo: to, difference: money(to - from), percent: from > 0 ? Math.round(((to - from) / from) * 1000) / 10 : null } : null,
+      requestedBy: row.requestedByEmail ?? null,
+      requestedAt: row.createdAt,
+      decidedBy: row.decidedByEmail ?? null,
+      decidedAt: row.decidedAt ?? null,
+      decisionNote: row.decisionNote ?? null,
+      revisionId: row.revisionId ?? null,
+      approval: this.approvalView(row.approval as Approval | null),
+      canDecide,
+    };
+  }
+
+  /** The change is held for approval instead of being written. */
+  private async proposeCompensation(
+    tenantId: string,
+    employeeId: string,
+    dto: Record<string, any>,
+    prepared: { employee: any; effectiveFrom: string; structure: any; resolved: any },
+    policy: PolicyStage[],
+  ) {
+    const { employee, effectiveFrom, structure, resolved } = prepared;
+    const Request = await this.modelProvider.getSalaryRevisionRequestModel(tenantId);
+    const open = await Request.count({ where: { tenantId, employeeId, effectiveFrom, status: 'PENDING' } });
+    if (open) payrollError('A change from that date is already waiting for approval. Cancel it, or wait for it to be decided.', HttpStatus.CONFLICT);
+
+    const revisions = await this.revisionsOf(tenantId, employeeId);
+    const inEffect = this.inEffectOn(revisions, effectiveFrom);
+    const lookup = await createRouteLookup(this.modelProvider, tenantId);
+    const route = await resolveStages(policy, employeeId, lookup);
+    const actor = payrollActor();
+    const view = this.compensationView(resolved.lines);
+    const created: any = await Request.create({
+      tenantId,
+      employeeId,
+      effectiveFrom,
+      payload: { effectiveFrom, structureId: dto.structureId ?? null, lines: dto.lines ?? null, reason: String(dto.reason ?? '').trim() || null },
+      proposed: { structureName: structure?.name ?? null, lines: view.lines, totals: view.totals },
+      current: inEffect ? { totals: this.compensationView(this.revisionLines(inEffect)).totals } : null,
+      status: 'PENDING',
+      approval: buildApproval(route, nameOf(employee) || 'the employee'),
+      requestedByUserId: actor.userId,
+      requestedByEmail: actor.email,
+    } as any);
+    await this.audit(tenantId, 'SalaryRevisionRequest', created.id, 'CREATE', {
+      event: { from: null, to: 'SALARY_CHANGE_PROPOSED' },
+      employeeId: { from: null, to: employeeId },
+      effectiveFrom: { from: null, to: effectiveFrom },
+    });
+    await this.holders?.tell(tenantId, created.approval, [employeeId], 'Salary change waiting', `A salary change for ${nameOf(employee) || 'an employee'} from ${effectiveFrom} is waiting for your approval.`);
+    return { pending: true, request: this.salaryRequestRow(created, employee), revision: null, openRun: null };
+  }
+
+  /** Proposed salary changes: those waiting, and what was decided. */
+  async listSalaryRevisionRequests(tenantId: string, filters: { status?: string; employeeId?: string } = {}) {
+    // Whoever approves a change must be able to read it, even without the rest of compensation.
+    const actor = payrollActor();
+    if (actor.present && !actor.isFullAccess && !this.allowed('compensation', 'view') && !this.approverActor(null).holds!('payroll.compensation.approve')) {
+      payrollError("You don't have permission to view proposed salary changes.", HttpStatus.FORBIDDEN);
+    }
+    const Request = await this.modelProvider.getSalaryRevisionRequestModel(tenantId);
+    const Employee = await this.modelProvider.getEmployeeModel(tenantId);
+    if (filters.employeeId) await this.assertEmployee(tenantId, filters.employeeId);
+    const rows = (await Request.findAll({
+      where: {
+        tenantId,
+        ...(filters.status ? { status: filters.status } : {}),
+        ...(filters.employeeId ? { employeeId: filters.employeeId } : await this.scopeWhere(tenantId)),
+      },
+      order: [['createdAt', 'DESC']],
+      limit: 500,
+    })) as any[];
+    const ids = [...new Set(rows.map((row) => row.employeeId))];
+    const employees = ids.length ? ((await Employee.findAll({ where: { tenantId, id: { [Op.in]: ids } }, raw: true })) as any[]) : [];
+    const byId = new Map(employees.map((employee) => [employee.id, employee]));
+    return rows.map((row) => this.salaryRequestRow(row, byId.get(row.employeeId), this.canDecideSalary(row, actor)));
+  }
+
+  private canDecideSalary(row: any, actor: ReturnType<typeof payrollActor>): boolean {
+    if (row.status !== 'PENDING' || !row.approval) return false;
+    if (this.proposedBy(row, actor)) return false;
+    const approvers: { userId?: string; email?: string }[] = (row.approval as any).approvers ?? [];
+    if (approvers.some((a) => (a.userId && a.userId === actor.userId) || (a.email && a.email === actor.email))) return false;
+    const { stages, index } = stagesOf(row.approval as Approval);
+    return canActOnStage(stages[index], this.approverActor(null));
+  }
+
+  /**
+   * Approve or reject a proposed pay change. Whoever proposed it cannot decide
+   * it, and nobody approves two stages of the same change. Approving the last
+   * stage writes the revision from the proposal; if the month has been locked
+   * since, it says so and stays waiting.
+   */
+  async decideSalaryRevision(tenantId: string, id: string, dto: { decision: 'APPROVE' | 'REJECT'; note?: string }) {
+    const Request = await this.modelProvider.getSalaryRevisionRequestModel(tenantId);
+    const row: any = await Request.findOne({ where: { tenantId, id } });
+    if (!row) this.notFound('Salary change');
+    await this.assertEmployee(tenantId, row.employeeId);
+    if (row.status !== 'PENDING') payrollError(`This change is ${String(row.status).toLowerCase()}.`, HttpStatus.CONFLICT);
+    const actor = payrollActor();
+    if (this.proposedBy(row, actor)) payrollError('You proposed this change, so someone else has to approve it.', HttpStatus.FORBIDDEN);
+    const approval = row.approval as Approval;
+    const approvers: { userId?: string; email?: string; at: string }[] = (approval as any).approvers ?? [];
+    if (approvers.some((a) => (a.userId && a.userId === actor.userId) || (a.email && a.email === actor.email))) {
+      payrollError('You already approved an earlier stage of this change. A different person has to approve the next one.', HttpStatus.FORBIDDEN);
+    }
+    const { stages, index } = stagesOf(approval);
+    if (!canActOnStage(stages[index], this.approverActor(null))) {
+      payrollError(`This change is ${approval.statusText.charAt(0).toLowerCase()}${approval.statusText.slice(1)}`, HttpStatus.FORBIDDEN);
+    }
+    if (dto.decision === 'REJECT' && String(dto.note ?? '').trim().length < 3) this.bad('Say why the change is rejected.');
+
+    const label = stages[index].title ?? 'Approver';
+    const decided = { decidedByUserId: actor.userId, decidedByEmail: actor.email, decidedAt: new Date(), decisionNote: String(dto.note ?? '').trim() || null };
+
+    if (dto.decision === 'REJECT') {
+      await row.update({ status: 'REJECTED', approval: rejectApproval(approval, label), ...decided });
+      await this.audit(tenantId, 'SalaryRevisionRequest', id, 'UPDATE', { event: { from: null, to: 'SALARY_CHANGE_REJECTED' }, status: { from: 'PENDING', to: 'REJECTED' } });
+      return this.salaryRequestRow(row, undefined, false);
+    }
+
+    const approvedBy = [...approvers, { userId: actor.userId ?? undefined, email: actor.email ?? undefined, at: new Date().toISOString() }];
+    if (index < stages.length - 1) {
+      await row.update({ approval: { ...advanceApproval(approval, label), approvers: approvedBy } });
+      await this.audit(tenantId, 'SalaryRevisionRequest', id, 'UPDATE', { event: { from: null, to: 'SALARY_CHANGE_STAGE_APPROVED' }, stage: { from: index + 1, to: index + 2 } });
+      await this.holders?.tell(tenantId, row.approval, [row.employeeId], 'Salary change waiting', `${label} approved a salary change from ${String(row.effectiveFrom).slice(0, 10)}. It is now waiting for your approval.`);
+      return this.salaryRequestRow(row, undefined, false);
+    }
+
+    // The last approval: write the revision exactly as it was proposed.
+    const prepared = await this.prepareCompensation(tenantId, row.employeeId, row.payload);
+    const written = await this.writeCompensation(tenantId, row.employeeId, row.payload, prepared, { source: 'APPROVED' });
+    await row.update({ status: 'APPROVED', approval: { ...completeApproval(approval, label), approvers: approvedBy }, revisionId: written.revision.id, ...decided });
+    await this.audit(tenantId, 'SalaryRevisionRequest', id, 'UPDATE', {
+      event: { from: null, to: 'SALARY_CHANGE_APPROVED' },
+      status: { from: 'PENDING', to: 'APPROVED' },
+      revisionId: { from: null, to: written.revision.id },
+    });
+    return this.salaryRequestRow(row, undefined, false);
+  }
+
+  /** Whoever proposed a change can withdraw it while it is waiting. */
+  async cancelSalaryRevisionRequest(tenantId: string, id: string) {
+    this.require('compensation', 'manage', 'cancel a proposed salary change');
+    const Request = await this.modelProvider.getSalaryRevisionRequestModel(tenantId);
+    const row: any = await Request.findOne({ where: { tenantId, id } });
+    if (!row) this.notFound('Salary change');
+    await this.assertEmployee(tenantId, row.employeeId);
+    if (row.status !== 'PENDING') payrollError(`This change is ${String(row.status).toLowerCase()}.`, HttpStatus.CONFLICT);
+    const actor = payrollActor();
+    if (!this.proposedBy(row, actor) && !actor.isFullAccess) payrollError('Only the person who proposed this change can withdraw it.', HttpStatus.FORBIDDEN);
+    await row.update({ status: 'CANCELLED', decidedByUserId: actor.userId, decidedByEmail: actor.email, decidedAt: new Date() });
+    await this.audit(tenantId, 'SalaryRevisionRequest', id, 'UPDATE', { event: { from: null, to: 'SALARY_CHANGE_CANCELLED' }, status: { from: 'PENDING', to: 'CANCELLED' } });
+    return this.salaryRequestRow(row, undefined, false);
   }
 
   /** The employee row keeps Phase 1's figures in step with what is in effect today. */
@@ -817,6 +1137,7 @@ export class PayrollCompensationService {
   }
 
   async listRecurringItems(tenantId: string, employeeId: string) {
+    await this.assertEmployee(tenantId, employeeId);
     this.require('compensation', 'view', 'view recurring earnings and deductions');
     await this.loadEmployee(tenantId, employeeId);
     const Item = await this.modelProvider.getEmployeeRecurringItemModel(tenantId);
@@ -847,6 +1168,7 @@ export class PayrollCompensationService {
   }
 
   async createRecurringItem(tenantId: string, employeeId: string, dto: Record<string, any>) {
+    await this.assertEmployee(tenantId, employeeId);
     this.require('compensation', 'manage', 'add recurring earnings and deductions');
     const employee = await this.loadEmployee(tenantId, employeeId);
     this.validateRecurring(dto);
@@ -892,6 +1214,7 @@ export class PayrollCompensationService {
     const Item = await this.modelProvider.getEmployeeRecurringItemModel(tenantId);
     const row: any = await Item.findOne({ where: { tenantId, id } });
     if (!row) this.notFound('Recurring item');
+    await this.assertEmployee(tenantId, row.employeeId);
     const merged = {
       kind: row.kind,
       name: dto.name ?? row.name,
@@ -958,8 +1281,13 @@ export class PayrollCompensationService {
     this.require('loans', 'view', 'view loans and advances');
     const Loan = await this.modelProvider.getEmployeeLoanModel(tenantId);
     const Employee = await this.modelProvider.getEmployeeModel(tenantId);
+    if (filters.employeeId) await this.assertEmployee(tenantId, filters.employeeId);
     const rows = (await Loan.findAll({
-      where: { tenantId, ...(filters.employeeId ? { employeeId: filters.employeeId } : {}), ...(filters.kind ? { kind: filters.kind } : {}) },
+      where: {
+        tenantId,
+        ...(filters.kind ? { kind: filters.kind } : {}),
+        ...(filters.employeeId ? { employeeId: filters.employeeId } : await this.scopeWhere(tenantId)),
+      },
       order: [['issuedOn', 'DESC']],
     })) as any[];
     const employeeIds = [...new Set(rows.map((r) => r.employeeId))];
@@ -987,6 +1315,7 @@ export class PayrollCompensationService {
 
   async createLoan(tenantId: string, dto: Record<string, any>) {
     this.require('loans', 'manage', 'record loans and advances');
+    await this.assertEmployee(tenantId, dto.employeeId);
     await this.loadEmployee(tenantId, dto.employeeId);
     // Instalment count → amount, when only the count is given.
     const principal = Number(dto.principal);
@@ -1032,6 +1361,7 @@ export class PayrollCompensationService {
     const Loan = await this.modelProvider.getEmployeeLoanModel(tenantId);
     const row: any = await Loan.findOne({ where: { tenantId, id } });
     if (!row) this.notFound('Loan or advance');
+    await this.assertEmployee(tenantId, row.employeeId);
     const taken = (await this.takenBySource(tenantId, [row.employeeId], undefined, ['LOAN', 'ADVANCE'])).get(row.id);
     const merged = {
       kind: row.kind,
@@ -1083,6 +1413,7 @@ export class PayrollCompensationService {
       decidedBy: row.decidedByEmail ?? null,
       decidedAt: row.decidedAt ?? null,
       decisionNote: row.decisionNote ?? null,
+      approval: this.approvalView((row.approval as Approval | null) ?? null),
       createdAt: row.createdAt,
     };
   }
@@ -1098,7 +1429,7 @@ export class PayrollCompensationService {
     if (errors.length) this.bad(errors.join(' '));
   }
 
-  private async createReimbursementRow(tenantId: string, employeeId: string, dto: Record<string, any>) {
+  private async createReimbursementRow(tenantId: string, employeeId: string, dto: Record<string, any>, approval: Approval | null = null) {
     this.validateReimbursement(dto);
     const Reimbursement = await this.modelProvider.getReimbursementModel(tenantId);
     const row = await Reimbursement.create({
@@ -1114,7 +1445,8 @@ export class PayrollCompensationService {
       status: 'SUBMITTED',
       payrollPeriod: dto.payrollPeriod ?? null,
       submittedByEmail: payrollActor().email,
-    });
+      approval,
+    } as any);
     await this.audit(tenantId, 'Reimbursement', row.id, 'CREATE', {
       event: { from: null, to: 'REIMBURSEMENT_SUBMITTED' },
       employeeId: { from: null, to: employeeId },
@@ -1127,8 +1459,13 @@ export class PayrollCompensationService {
     this.require('adjustments', 'view', 'view reimbursements');
     const Reimbursement = await this.modelProvider.getReimbursementModel(tenantId);
     const Employee = await this.modelProvider.getEmployeeModel(tenantId);
+    if (filters.employeeId) await this.assertEmployee(tenantId, filters.employeeId);
     const rows = (await Reimbursement.findAll({
-      where: { tenantId, ...(filters.status ? { status: filters.status } : {}), ...(filters.employeeId ? { employeeId: filters.employeeId } : {}) },
+      where: {
+        tenantId,
+        ...(filters.status ? { status: filters.status } : {}),
+        ...(filters.employeeId ? { employeeId: filters.employeeId } : await this.scopeWhere(tenantId)),
+      },
       order: [['createdAt', 'DESC']],
     })) as any[];
     const ids = [...new Set(rows.map((r) => r.employeeId))];
@@ -1140,6 +1477,7 @@ export class PayrollCompensationService {
   /** Payroll staff recording a claim for an employee. */
   async createReimbursement(tenantId: string, dto: Record<string, any>) {
     this.require('adjustments', 'manage', 'record reimbursements');
+    await this.assertEmployee(tenantId, dto.employeeId);
     await this.loadEmployee(tenantId, dto.employeeId);
     return this.reimbursementRow(await this.createReimbursementRow(tenantId, dto.employeeId, dto));
   }
@@ -1149,10 +1487,13 @@ export class PayrollCompensationService {
    * next payroll calculated for their period.
    */
   async decideReimbursement(tenantId: string, id: string, dto: { decision: 'APPROVE' | 'REJECT'; note?: string; payrollPeriod?: string | null }) {
-    this.require('adjustments', 'manage', 'approve reimbursements');
     const Reimbursement = await this.modelProvider.getReimbursementModel(tenantId);
     const row: any = await Reimbursement.findOne({ where: { tenantId, id } });
+    // A claim with a route is decided stage by stage, by whoever its current stage names.
+    if (row?.approval) return this.decideStagedReimbursement(tenantId, row, dto, await this.myEmployeeId(tenantId));
+    this.require('adjustments', 'manage', 'approve reimbursements');
     if (!row) this.notFound('Reimbursement');
+    await this.assertEmployee(tenantId, row.employeeId);
     if (row.status !== 'SUBMITTED') this.bad(`This claim is ${row.status.toLowerCase()} — only a submitted claim can be decided.`);
     if (dto.decision === 'REJECT' && String(dto.note ?? '').trim().length < 3) this.bad('Say why the claim is rejected.');
     if (dto.payrollPeriod && !/^\d{4}-(0[1-9]|1[0-2])$/.test(dto.payrollPeriod)) this.bad('The payroll period is YYYY-MM.');
@@ -1171,7 +1512,32 @@ export class PayrollCompensationService {
       status: { from: 'SUBMITTED', to: status },
       ...(row.decisionNote ? { reason: { from: null, to: row.decisionNote } } : {}),
     });
+    await this.notifyReimbursementDecision(tenantId, row, status);
     return this.reimbursementRow(row);
+  }
+
+  /**
+   * Tells the employee their claim was decided, with the reason when it was
+   * rejected. Best effort: the decision is already saved.
+   */
+  private async notifyReimbursementDecision(tenantId: string, row: any, status: 'APPROVED' | 'REJECTED') {
+    try {
+      const Notification = await this.modelProvider.getEmployeeNotificationModel(tenantId);
+      const approved = status === 'APPROVED';
+      const what = row.description ? ` (${String(row.description).slice(0, 80)})` : '';
+      await Notification.create({
+        tenantId,
+        employeeId: row.employeeId,
+        kind: EmployeeNotificationKind.REQUEST,
+        title: approved ? 'Reimbursement approved' : 'Reimbursement rejected',
+        body: approved
+          ? `Your ${row.category} claim of ${row.amount}${what} was approved. It will be paid in your next payroll.`
+          : `Your ${row.category} claim of ${row.amount}${what} was rejected. Reason: ${row.decisionNote ?? 'not given'}.`,
+        readAt: null,
+      } as any);
+    } catch (error: any) {
+      this.logger.warn(`Reimbursement ${row.id} was decided but the employee notification was not saved: ${error?.message ?? error}`);
+    }
   }
 
   // ── What payroll needs ────────────────────────────────────────────────────
@@ -1282,6 +1648,7 @@ export class PayrollCompensationService {
    */
   async importCompensation(tenantId: string, dto: { csv: string; apply?: boolean }) {
     this.require('compensation', 'manage', 'import compensation');
+    this.assertOrganization('Importing compensation');
     await this.ensureSystemComponents(tenantId);
     const rows = parseCsv(String(dto.csv ?? ''));
     if (rows.length < 2) this.bad('The file needs a header row and at least one data row.');
@@ -1375,6 +1742,9 @@ export class PayrollCompensationService {
     let applied = 0;
     if (dto.apply) {
       if (invalid) this.bad(`${invalid} row(s) have errors — nothing was imported. Fix them and try again.`);
+      if (await loadPolicyStages(this.modelProvider, tenantId, 'SALARY_REVISION')) {
+        payrollError('Salary changes need approval, so an import cannot apply them. Enter the changes one by one, or turn the approval requirement off.', HttpStatus.CONFLICT);
+      }
       for (const plan of plans) {
         // structureId stays a reference only: the lines are explicit.
         await this.saveCompensation(tenantId, plan.employee.id, { effectiveFrom: plan.effectiveFrom, lines: plan.lines, reason: 'Compensation import' }, { source: 'IMPORT', skipAudit: true });
@@ -1455,7 +1825,178 @@ export class PayrollCompensationService {
   async submitMyReimbursement(tenantId: string, userId: string, email: string | undefined, dto: Record<string, any>) {
     const me = await this.me(tenantId, userId, email);
     const { payrollPeriod: _ignored, ...claim } = dto;
-    return this.reimbursementRow(await this.createReimbursementRow(tenantId, me.id, claim));
+    const stages = await loadPolicyStages(this.modelProvider, tenantId, 'REIMBURSEMENT');
+    const approval = stages ? buildApproval(await resolveStages(stages, me.id, await createRouteLookup(this.modelProvider, tenantId)), nameOf(me) || 'the employee') : null;
+    const row = await this.createReimbursementRow(tenantId, me.id, claim, approval);
+    if (approval?.currentApproverId) {
+      await this.notifyEmployee(tenantId, approval.currentApproverId, 'Reimbursement waiting', `${nameOf(me) || 'A team member'} submitted a ${row.category} claim of ${row.amount}. It is waiting for your approval.`);
+    }
+    await this.holders?.tell(tenantId, approval, [me.id], 'Reimbursement waiting', `${nameOf(me) || 'A team member'} submitted a ${row.category} claim of ${row.amount}. It is waiting for your approval.`);
+    return this.reimbursementRow(row);
+  }
+
+  /** A line in the employee's notifications. Best effort: what happened is already saved. */
+  private async notifyEmployee(tenantId: string, employeeId: string, title: string, body: string) {
+    try {
+      const Notification = await this.modelProvider.getEmployeeNotificationModel(tenantId);
+      await Notification.create({ tenantId, employeeId, kind: EmployeeNotificationKind.REQUEST, title, body, readAt: null } as any);
+    } catch (error: any) {
+      this.logger.warn(`A payroll notification for ${employeeId} was not saved: ${error?.message ?? error}`);
+    }
+  }
+
+  /** Tells the claimant and whoever the claim is now waiting on. Best effort. */
+  private async announceReimbursementMove(tenantId: string, row: any, approval: Approval) {
+    await this.notifyEmployee(tenantId, row.employeeId, 'Reimbursement update', `Your ${row.category} claim changed hands. ${approval.statusText}`);
+    if (approval.currentApproverId) {
+      await this.notifyEmployee(tenantId, approval.currentApproverId, 'Reimbursement waiting', `A ${row.category} claim of ${row.amount} is waiting for your approval.`);
+    }
+    await this.holders?.tell(tenantId, approval, [row.employeeId], 'Reimbursement waiting', `A ${row.category} claim of ${row.amount} is waiting for your approval.`);
+  }
+
+  /**
+   * Someone's reporting line changed. Their submitted claims, and their direct
+   * reports', follow the new route: rebuilt from the current policy where
+   * nobody has approved yet, moved on only when the current approver is no
+   * longer on the route otherwise. Claims with no saved route are untouched.
+   * Returns how many claims moved.
+   */
+  async rerouteReimbursementsAfterReportingChange(tenantId: string, employeeId: string): Promise<number> {
+    const Employee = await this.modelProvider.getEmployeeModel(tenantId);
+    const reports = (await Employee.findAll({ where: { tenantId, reportingManagerId: employeeId }, attributes: ['id'], raw: true })) as unknown as { id: string }[];
+    const Reimbursement = await this.modelProvider.getReimbursementModel(tenantId);
+    const pending: any[] = (await Reimbursement.findAll({
+      where: { tenantId, status: 'SUBMITTED', employeeId: { [Op.in]: [employeeId, ...reports.map((row) => row.id)] } },
+    })) as any[];
+    const staged = pending.filter((row) => row.approval);
+    if (!staged.length) return 0;
+
+    const policy = await loadPolicyStages(this.modelProvider, tenantId, 'REIMBURSEMENT');
+    if (!policy) return 0;
+    const lookup = await createRouteLookup(this.modelProvider, tenantId);
+    let moved = 0;
+    for (const row of staged) {
+      const next = rerouteApproval(row.approval as Approval, await resolveStages(policy, row.employeeId, lookup));
+      if (!next) continue;
+      await row.update({ approval: next });
+      await this.announceReimbursementMove(tenantId, row, next);
+      moved++;
+    }
+    return moved;
+  }
+
+  /** Someone left: claims that were waiting on them go to the next stage, or HR. */
+  async releaseReimbursementsWaitingOn(tenantId: string, approverId: string): Promise<number> {
+    const Reimbursement = await this.modelProvider.getReimbursementModel(tenantId);
+    const waiting: any[] = (await Reimbursement.findAll({
+      where: { tenantId, status: 'SUBMITTED', [Op.and]: [sqlWhere(literal(`"Reimbursement"."approval"->>'currentApproverId'`), approverId)] } as any,
+    })) as any[];
+
+    let moved = 0;
+    for (const row of waiting) {
+      const approval = row.approval as Approval | null;
+      if (!approval || approval.currentApproverId !== approverId) continue;
+      const next = handOnApproval(approval, `${approval.currentApproverName ?? 'The approver'} is no longer with the organization.`);
+      await row.update({ approval: next });
+      await this.announceReimbursementMove(tenantId, row, next);
+      moved++;
+    }
+    return moved;
+  }
+
+  /** Claims waiting on the signed-in person: the ones whose current stage names them. */
+  async myReimbursementApprovals(tenantId: string, userId: string, email?: string) {
+    const me = await this.me(tenantId, userId, email);
+    const Reimbursement = await this.modelProvider.getReimbursementModel(tenantId);
+    const Employee = await this.modelProvider.getEmployeeModel(tenantId);
+    const rows = (await Reimbursement.findAll({
+      where: { tenantId, status: 'SUBMITTED', [Op.and]: [sqlWhere(literal(`"Reimbursement"."approval"->>'currentApproverId'`), me.id)] } as any,
+      order: [['createdAt', 'ASC']],
+      limit: 200,
+    })) as any[];
+    const ids = [...new Set(rows.map((row) => row.employeeId))];
+    const employees = ids.length ? ((await Employee.findAll({ where: { tenantId, id: { [Op.in]: ids } }, raw: true })) as any[]) : [];
+    const byId = new Map(employees.map((employee) => [employee.id, employee]));
+    return { data: rows.map((row) => ({ ...this.reimbursementRow(row, byId.get(row.employeeId)), canDecide: true })), total: rows.length };
+  }
+
+  /** The signed-in person decides the stage of a claim that is waiting on them. */
+  async decideMyReimbursementApproval(tenantId: string, userId: string, email: string | undefined, id: string, dto: { decision: 'APPROVE' | 'REJECT'; note?: string }) {
+    const me = await this.me(tenantId, userId, email);
+    const Reimbursement = await this.modelProvider.getReimbursementModel(tenantId);
+    const row: any = await Reimbursement.findOne({ where: { tenantId, id } });
+    if (!row || !row.approval) this.notFound('Reimbursement');
+    return this.decideStagedReimbursement(tenantId, row, dto, me.id);
+  }
+
+  /**
+   * One stage of a claim's route. A stage that is not the last only moves the
+   * claim on. The last one is payroll's, and approving it is what puts the
+   * claim into a payroll, so it needs the payroll permission as well.
+   */
+  private async decideStagedReimbursement(tenantId: string, row: any, dto: { decision: 'APPROVE' | 'REJECT'; note?: string; payrollPeriod?: string | null }, actorEmployeeId: string | null) {
+    if (row.status !== 'SUBMITTED') this.bad(`This claim is ${String(row.status).toLowerCase()} — only a submitted claim can be decided.`);
+    const approval = row.approval as Approval;
+    if (actorEmployeeId && actorEmployeeId === row.employeeId) {
+      payrollError("You can't approve or reject your own claim. Another approver needs to decide it.", HttpStatus.FORBIDDEN);
+    }
+    const { stages, index } = stagesOf(approval);
+    if (!canActOnStage(stages[index], this.approverActor(actorEmployeeId))) {
+      payrollError(`This claim is ${approval.statusText.charAt(0).toLowerCase()}${approval.statusText.slice(1)}`, HttpStatus.FORBIDDEN);
+    }
+    const last = index === stages.length - 1;
+    if (last) {
+      this.require('adjustments', 'manage', 'approve reimbursements');
+      await this.assertEmployee(tenantId, row.employeeId);
+    }
+    if (dto.decision === 'REJECT' && String(dto.note ?? '').trim().length < 3) this.bad('Say why the claim is rejected.');
+    if (dto.payrollPeriod && !/^\d{4}-(0[1-9]|1[0-2])$/.test(dto.payrollPeriod)) this.bad('The payroll period is YYYY-MM.');
+
+    const actor = payrollActor();
+    const label = approval.currentApproverName ? `${approval.currentApproverName}${approval.currentApproverTitle ? ` (${approval.currentApproverTitle})` : ''}` : (stages[index].title ?? 'Payroll');
+    const decided = { decidedByEmail: actor.email, decidedAt: new Date(), decisionNote: String(dto.note ?? '').trim() || null };
+
+    if (dto.decision === 'REJECT') {
+      await row.update({ status: 'REJECTED', approval: rejectApproval(approval, label), ...decided });
+      await this.audit(tenantId, 'Reimbursement', row.id, 'UPDATE', {
+        event: { from: null, to: 'REIMBURSEMENT_REJECTED' },
+        employeeId: { from: null, to: row.employeeId },
+        status: { from: 'SUBMITTED', to: 'REJECTED' },
+        reason: { from: null, to: row.decisionNote },
+      });
+      await this.notifyReimbursementDecision(tenantId, row, 'REJECTED');
+      return this.reimbursementRow(row);
+    }
+
+    if (!last) {
+      const next = advanceApproval(approval, label);
+      await row.update({ approval: next });
+      await this.audit(tenantId, 'Reimbursement', row.id, 'UPDATE', {
+        event: { from: null, to: 'REIMBURSEMENT_STAGE_APPROVED' },
+        stage: { from: index + 1, to: index + 2 },
+      });
+      await this.notifyEmployee(tenantId, row.employeeId, 'Reimbursement update', `Your ${row.category} claim: ${next.statusText}`);
+      if (next.currentApproverId) {
+        await this.notifyEmployee(tenantId, next.currentApproverId, 'Reimbursement waiting', `${label} approved a ${row.category} claim of ${row.amount}. It is now waiting for your approval.`);
+      }
+      await this.holders?.tell(tenantId, next, [row.employeeId], 'Reimbursement waiting', `${label} approved a ${row.category} claim of ${row.amount}. It is now waiting for your approval.`);
+      return this.reimbursementRow(row);
+    }
+
+    await row.update({
+      status: 'APPROVED',
+      approval: completeApproval(approval, label),
+      ...decided,
+      ...(dto.payrollPeriod !== undefined ? { payrollPeriod: dto.payrollPeriod || null } : {}),
+    });
+    await this.audit(tenantId, 'Reimbursement', row.id, 'UPDATE', {
+      event: { from: null, to: 'REIMBURSEMENT_APPROVED' },
+      employeeId: { from: null, to: row.employeeId },
+      status: { from: 'SUBMITTED', to: 'APPROVED' },
+      ...(row.decisionNote ? { reason: { from: null, to: row.decisionNote } } : {}),
+    });
+    await this.notifyReimbursementDecision(tenantId, row, 'APPROVED');
+    return this.reimbursementRow(row);
   }
 
   /** Category lists for the forms. */

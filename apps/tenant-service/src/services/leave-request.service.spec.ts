@@ -1,6 +1,7 @@
 import { HttpStatus } from '@nestjs/common';
 import { Op } from 'sequelize';
 import { EmployeeNotificationKind, LeaveRequestStatus } from '@app/common';
+import { runAsRpcActor } from '@app/tenant-context';
 import { LeaveRequestService } from './leave-request.service';
 
 /**
@@ -621,5 +622,415 @@ describe('LeaveRequestService', () => {
       expect(stats.approvedThisMonth).toBe(0);
       expect(stats.rejectedThisMonth).toBe(0);
     });
+  });
+});
+
+describe('leave approval route', () => {
+  const TENANT = '11111111-1111-4111-8111-111111111111';
+  const REQUEST = '33333333-3333-4333-8333-333333333333';
+  const EMPLOYEE = '44444444-4444-4444-8444-444444444444';
+  const LEAD = '77777777-7777-4777-8777-777777777777';
+  const MANAGER = '88888888-8888-4888-8888-888888888888';
+
+  const people: Record<string, any> = {
+    [EMPLOYEE]: {
+      id: EMPLOYEE,
+      firstName: 'Naveed',
+      lastName: 'Ahmad',
+      reportingManagerId: LEAD,
+      designationId: null,
+    },
+    [LEAD]: {
+      id: LEAD,
+      firstName: 'Tayyaba',
+      lastName: 'Sabir',
+      reportingManagerId: MANAGER,
+      designationId: 'des-lead',
+    },
+    [MANAGER]: {
+      id: MANAGER,
+      firstName: 'Ali',
+      lastName: 'Khan',
+      reportingManagerId: null,
+      designationId: 'des-mgr',
+    },
+  };
+
+  let stored: any;
+  let notices: any[];
+  let service: LeaveRequestService;
+  let actorId: string | null;
+  let orgWide: boolean;
+  let hrPeople: { sourceId: string; email: string }[];
+  let hrEmployees: { id: string }[];
+  let policyStages: any[] | null;
+  let departmentHead: string | null;
+
+  beforeEach(() => {
+    stored = null;
+    notices = [];
+    actorId = null;
+    orgWide = true;
+    hrPeople = [];
+    hrEmployees = [];
+    policyStages = null;
+    departmentHead = null;
+    const leaveRequestModel = {
+      findOne: jest.fn(async () => stored),
+      create: jest.fn(async (row: any) => {
+        stored = { ...row, id: REQUEST, update: jest.fn(async (patch: any) => Object.assign(stored, patch)) };
+        return stored;
+      }),
+      count: jest.fn().mockResolvedValue(0),
+      findAll: jest.fn(async () => (stored ? [stored] : [])),
+    };
+    const modelProvider = {
+      getLeaveRequestModel: jest.fn().mockResolvedValue(leaveRequestModel),
+      getEmployeeModel: jest.fn().mockResolvedValue({
+        findOne: jest.fn(async ({ where }: any) => people[where.id] ?? null),
+        findAll: jest.fn(async () => hrEmployees),
+      }),
+      getLeavePolicyModel: jest.fn().mockResolvedValue({
+        findOne: jest.fn().mockResolvedValue({ id: 'policy', name: 'Annual Leave', isActive: true, isPaid: true }),
+      }),
+      getDepartmentModel: jest.fn().mockResolvedValue({ findOne: jest.fn(async () => ({ managerId: departmentHead })) }),
+      getApprovalPolicyModel: jest.fn().mockResolvedValue({ findOne: jest.fn(async () => (policyStages ? { stages: policyStages } : null)) }),
+      getDesignationModel: jest.fn().mockResolvedValue({
+        findAll: jest.fn().mockResolvedValue([
+          { id: 'des-lead', title: 'Team Lead' },
+          { id: 'des-mgr', title: 'Engineering Manager' },
+        ]),
+      }),
+      getEmployeeNotificationModel: jest.fn().mockResolvedValue({
+        create: jest.fn(async (row: any) => {
+          notices.push(row);
+          return row;
+        }),
+      }),
+    };
+    service = new LeaveRequestService(
+      modelProvider as any,
+      {
+        actorEmployeeId: async () => actorId,
+        scope: () => (orgWide ? 'ORGANIZATION' : 'TEAM'),
+        employeeWhere: async () => ({}),
+      } as any,
+      { findAll: jest.fn(async () => hrPeople) } as any,
+    );
+  });
+
+  describe('with a route the organization configured', () => {
+    const DIRECTOR = '99999999-9999-4999-8999-999999999999';
+    const HEAD = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const submit = () =>
+      service.create(TENANT, { employeeId: EMPLOYEE, leavePolicyId: 'policy', fromDate: '2026-09-18', toDate: '2026-09-18' } as any);
+    const approve = () => service.decide(TENANT, REQUEST, { status: LeaveRequestStatus.APPROVED } as any);
+
+    beforeEach(() => {
+      people[MANAGER].reportingManagerId = DIRECTOR;
+      people[DIRECTOR] = { id: DIRECTOR, firstName: 'Dina', lastName: 'Shah', reportingManagerId: null, designationId: null };
+      people[HEAD] = { id: HEAD, firstName: 'Hira', lastName: 'Noor', reportingManagerId: null, designationId: null };
+      orgWide = false;
+    });
+
+    afterEach(() => {
+      people[MANAGER].reportingManagerId = null;
+      delete people[DIRECTOR];
+      delete people[HEAD];
+    });
+
+    it('goes through three stages, and only the last one grants the leave', async () => {
+      policyStages = [{ kind: 'REPORTING_MANAGER', level: 1 }, { kind: 'REPORTING_MANAGER', level: 2 }, { kind: 'REPORTING_MANAGER', level: 3 }];
+      await submit();
+      expect(stored.approval.workflow.map((step: any) => step.step)).toEqual(['SUBMITTED', 'FIRST_REVIEW', 'SECOND_REVIEW', 'THIRD_REVIEW']);
+
+      actorId = LEAD;
+      expect((await approve()).status).toBe(LeaveRequestStatus.PENDING);
+      expect(stored.approval).toMatchObject({ currentApproverId: MANAGER, finalStep: false });
+
+      actorId = MANAGER;
+      expect((await approve()).status).toBe(LeaveRequestStatus.PENDING);
+      expect(stored.approval).toMatchObject({ currentApproverId: DIRECTOR, finalStep: true });
+
+      actorId = DIRECTOR;
+      const done = await approve();
+      expect(done.status).toBe(LeaveRequestStatus.APPROVED);
+      expect(done.approval?.statusText).toBe('Approved by Dina Shah (Manager).');
+    });
+
+    it('lets only the stage it is at decide, not a later approver', async () => {
+      policyStages = [{ kind: 'REPORTING_MANAGER', level: 1 }, { kind: 'REPORTING_MANAGER', level: 2 }, { kind: 'REPORTING_MANAGER', level: 3 }];
+      await submit();
+      actorId = DIRECTOR;
+      await expect(approve()).rejects.toMatchObject({ status: HttpStatus.FORBIDDEN });
+    });
+
+    it('rejection at any stage ends it', async () => {
+      policyStages = [{ kind: 'REPORTING_MANAGER', level: 1 }, { kind: 'REPORTING_MANAGER', level: 2 }, { kind: 'REPORTING_MANAGER', level: 3 }];
+      await submit();
+      actorId = LEAD;
+      await approve();
+      actorId = MANAGER;
+      const row = await service.decide(TENANT, REQUEST, { status: LeaveRequestStatus.REJECTED } as any);
+      expect(row.status).toBe(LeaveRequestStatus.REJECTED);
+      expect(row.approval?.statusText).toContain('Rejected by Ali Khan');
+    });
+
+    it('sends the request to the head of the department', async () => {
+      policyStages = [{ kind: 'DEPARTMENT_HEAD' }];
+      people[EMPLOYEE].departmentId = 'dept';
+      departmentHead = HEAD;
+      try {
+        await submit();
+        expect(stored.approval).toMatchObject({ currentApproverId: HEAD, currentApproverTitle: 'Department head', finalStep: true });
+        actorId = HEAD;
+        expect((await approve()).status).toBe(LeaveRequestStatus.APPROVED);
+      } finally {
+        delete people[EMPLOYEE].departmentId;
+      }
+    });
+
+    it('sends the request to a named approver', async () => {
+      policyStages = [{ kind: 'EMPLOYEE', employeeId: DIRECTOR }];
+      await submit();
+      expect(stored.approval).toMatchObject({ currentApproverId: DIRECTOR, finalStep: true });
+    });
+
+    it('lets anyone holding the permission decide a permission stage, and nobody else', async () => {
+      policyStages = [{ kind: 'REPORTING_MANAGER', level: 1 }, { kind: 'PERMISSION', permission: 'payroll.approve' }];
+      await submit();
+      actorId = LEAD;
+      await approve();
+      expect(stored.approval).toMatchObject({ stage: 'WITH_HR', currentApproverId: null, currentPermission: 'payroll.approve', finalStep: true });
+
+      actorId = 'someone-in-finance';
+      await expect(
+        runAsRpcActor({ permissions: ['payroll.view'], isFullAccess: false } as any, () => approve()),
+      ).rejects.toMatchObject({ status: HttpStatus.FORBIDDEN });
+
+      const row = await runAsRpcActor({ permissions: ['payroll.approve'], isFullAccess: false } as any, () => approve());
+      expect(row.status).toBe(LeaveRequestStatus.APPROVED);
+    });
+
+    it('shows a permission holder the request is waiting for them', async () => {
+      policyStages = [{ kind: 'PERMISSION', permission: 'payroll.approve' }];
+      await submit();
+      const [holder, other] = await Promise.all([
+        runAsRpcActor({ permissions: ['payroll.approve'], isFullAccess: false } as any, () => service.getOne(TENANT, REQUEST)),
+        runAsRpcActor({ permissions: ['payroll.view'], isFullAccess: false } as any, () => service.getOne(TENANT, REQUEST)),
+      ]);
+      expect(holder.canDecide).toBe(true);
+      expect(other.canDecide).toBe(false);
+    });
+
+    it('keeps the route a request was given when the policy changes afterwards', async () => {
+      await submit();
+      policyStages = [{ kind: 'HR' }];
+      actorId = LEAD;
+      await approve();
+      // Still the manager's route: the lead approved, and it moved to the manager.
+      expect(stored.approval).toMatchObject({ currentApproverId: MANAGER });
+    });
+
+    it('rebuilds a request nobody has approved from the current policy when the line changes', async () => {
+      await submit();
+      policyStages = [{ kind: 'REPORTING_MANAGER', level: 1 }, { kind: 'REPORTING_MANAGER', level: 2 }, { kind: 'REPORTING_MANAGER', level: 3 }];
+      expect(await service.rerouteAfterReportingChange(TENANT, EMPLOYEE)).toBe(1);
+      expect(stored.approval.stages.map((s: any) => s.approverId)).toEqual([LEAD, MANAGER, DIRECTOR]);
+    });
+  });
+
+  describe('when the reporting line changes', () => {
+    const submit = () =>
+      service.create(TENANT, { employeeId: EMPLOYEE, leavePolicyId: 'policy', fromDate: '2026-09-18', toDate: '2026-09-18' } as any);
+    const original = { lead: people[EMPLOYEE].reportingManagerId, managerOfLead: people[LEAD].reportingManagerId };
+
+    afterEach(() => {
+      people[EMPLOYEE].reportingManagerId = original.lead;
+      people[LEAD].reportingManagerId = original.managerOfLead;
+    });
+
+    it('sends a request nobody has approved yet to the new manager, keeping when it was submitted', async () => {
+      await submit();
+      const submittedAt = stored.approval.workflow[0].at;
+      notices.length = 0;
+      people[EMPLOYEE].reportingManagerId = MANAGER;
+
+      expect(await service.rerouteAfterReportingChange(TENANT, EMPLOYEE)).toBe(1);
+
+      expect(stored.approval).toMatchObject({ stage: 'WITH_APPROVER', currentApproverId: MANAGER, finalStep: false });
+      expect(stored.approval.workflow[0]).toMatchObject({ step: 'SUBMITTED', at: submittedAt });
+      expect(notices.map((n) => [n.employeeId, n.title])).toEqual([
+        [EMPLOYEE, 'Leave update'],
+        [MANAGER, 'Leave request waiting'],
+      ]);
+    });
+
+    it('does nothing when the route is still the same', async () => {
+      await submit();
+      notices.length = 0;
+      expect(await service.rerouteAfterReportingChange(TENANT, EMPLOYEE)).toBe(0);
+      expect(stored.update).not.toHaveBeenCalled();
+      expect(notices).toHaveLength(0);
+    });
+
+    it('follows the second approver when the manager\'s own manager changes', async () => {
+      await submit();
+      people[LEAD].reportingManagerId = null;
+
+      // The request is the employee's; the change is to the lead's line, so the lead's reports are checked.
+      const reports = [{ id: EMPLOYEE }];
+      const employeeModel: any = await (service as any).modelProvider.getEmployeeModel();
+      employeeModel.findAll.mockResolvedValueOnce(reports);
+      expect(await service.rerouteAfterReportingChange(TENANT, LEAD)).toBe(1);
+      expect(stored.approval).toMatchObject({ currentApproverId: LEAD, nextApproverId: null });
+    });
+
+    it('sends a request whose first approval is done to HR when its approver left the route', async () => {
+      await submit();
+      stored.approval = {
+        ...stored.approval,
+        stage: 'WITH_APPROVER',
+        currentApproverId: MANAGER,
+        currentApproverName: 'Ali Khan',
+        finalStep: true,
+        nextApproverId: null,
+        stageIndex: 1,
+        workflow: stored.approval.workflow.map((step: any, index: number) => (index === 1 ? { ...step, status: 'COMPLETED' } : index === 2 ? { ...step, status: 'PENDING' } : step)),
+      };
+      people[EMPLOYEE].reportingManagerId = LEAD;
+      people[LEAD].reportingManagerId = null;
+
+      expect(await service.rerouteAfterReportingChange(TENANT, EMPLOYEE)).toBe(1);
+
+      expect(stored.approval).toMatchObject({ stage: 'WITH_HR', currentApproverId: null });
+      expect(stored.approval.workflow[1].status).toBe('COMPLETED');
+    });
+
+    it('leaves a request alone when its approver is still on the route', async () => {
+      await submit();
+      stored.approval = {
+        ...stored.approval,
+        currentApproverId: MANAGER,
+        finalStep: true,
+        nextApproverId: null,
+        stageIndex: 1,
+        workflow: stored.approval.workflow.map((step: any, index: number) => (index === 1 ? { ...step, status: 'COMPLETED' } : step)),
+      };
+      expect(await service.rerouteAfterReportingChange(TENANT, EMPLOYEE)).toBe(0);
+    });
+
+    it('hands what was waiting on someone who left to the next approver, or to HR', async () => {
+      await submit();
+      expect(await service.releaseWaitingOn(TENANT, LEAD)).toBe(1);
+      expect(stored.approval).toMatchObject({ stage: 'WITH_APPROVER', currentApproverId: MANAGER, finalStep: true, nextApproverId: null });
+      expect(stored.approval.statusText).toContain('no longer with the organization');
+
+      expect(await service.releaseWaitingOn(TENANT, MANAGER)).toBe(1);
+      expect(stored.approval).toMatchObject({ stage: 'WITH_HR', currentApproverId: null });
+    });
+
+    it('ignores requests waiting on somebody else', async () => {
+      await submit();
+      expect(await service.releaseWaitingOn(TENANT, MANAGER)).toBe(0);
+    });
+  });
+
+  it('sends a new request to the reporting manager and tells the employee where it is', async () => {
+    const row = await service.create(TENANT, {
+      employeeId: EMPLOYEE,
+      leavePolicyId: 'policy',
+      fromDate: '2026-09-18',
+      toDate: '2026-09-18',
+    });
+
+    expect(row.approval).toMatchObject({
+      stage: 'WITH_APPROVER',
+      currentApproverId: LEAD,
+      currentApproverTitle: 'Team Lead',
+      nextApproverId: MANAGER,
+      statusText: 'With Tayyaba Sabir (Team Lead). Not approved yet.',
+    });
+    expect(row.status).toBe(LeaveRequestStatus.PENDING);
+    expect(notices.map((n) => n.employeeId).sort()).toEqual([EMPLOYEE, LEAD].sort());
+    expect(notices.find((n) => n.employeeId === LEAD).title).toBe('Leave request waiting');
+  });
+
+  it('moves the request to the manager when the team lead approves, without granting the leave', async () => {
+    await service.create(TENANT, {
+      employeeId: EMPLOYEE,
+      leavePolicyId: 'policy',
+      fromDate: '2026-09-18',
+      toDate: '2026-09-18',
+    });
+    notices.length = 0;
+    actorId = LEAD;
+
+    const row = await service.decide(TENANT, REQUEST, { status: LeaveRequestStatus.APPROVED });
+
+    expect(row.status).toBe(LeaveRequestStatus.PENDING);
+    expect(row.approval?.statusText).toBe(
+      'Tayyaba Sabir (Team Lead) approved your leave. It is now with Ali Khan (Engineering Manager).',
+    );
+    expect(row.approval?.currentApproverId).toBe(MANAGER);
+    expect(notices.find((n) => n.employeeId === EMPLOYEE).body).toContain('now with Ali Khan');
+    expect(notices.find((n) => n.employeeId === MANAGER).title).toBe('Leave request waiting');
+  });
+
+  it('refuses anyone except the person the request is waiting on', async () => {
+    await service.create(TENANT, {
+      employeeId: EMPLOYEE,
+      leavePolicyId: 'policy',
+      fromDate: '2026-09-18',
+      toDate: '2026-09-18',
+    });
+    actorId = MANAGER;
+    orgWide = false;
+
+    await expect(service.decide(TENANT, REQUEST, { status: LeaveRequestStatus.APPROVED })).rejects.toMatchObject({
+      status: HttpStatus.FORBIDDEN,
+    });
+  });
+
+  it('grants the leave only when the second approver approves', async () => {
+    await service.create(TENANT, {
+      employeeId: EMPLOYEE,
+      leavePolicyId: 'policy',
+      fromDate: '2026-09-18',
+      toDate: '2026-09-18',
+    });
+    actorId = LEAD;
+    await service.decide(TENANT, REQUEST, { status: LeaveRequestStatus.APPROVED });
+    actorId = MANAGER;
+
+    const row = await service.decide(TENANT, REQUEST, { status: LeaveRequestStatus.APPROVED });
+
+    expect(row.status).toBe(LeaveRequestStatus.APPROVED);
+    expect(row.approval?.statusText).toBe('Approved by Ali Khan (Engineering Manager).');
+  });
+
+  it('notifies every HR employee when the request moves to HR', async () => {
+    people[LEAD].reportingManagerId = null;
+    hrPeople.push({ sourceId: 'user-hr', email: 'hr@x.com' });
+    hrEmployees.push({ id: 'hr-employee' });
+
+    await service.create(TENANT, {
+      employeeId: EMPLOYEE,
+      leavePolicyId: 'policy',
+      fromDate: '2026-09-18',
+      toDate: '2026-09-18',
+    });
+    notices.length = 0;
+    actorId = LEAD;
+
+    const row = await service.decide(TENANT, REQUEST, { status: LeaveRequestStatus.APPROVED });
+
+    expect(row.status).toBe(LeaveRequestStatus.PENDING);
+    expect(row.approval?.stage).toBe('WITH_HR');
+    expect(notices.find((n) => n.employeeId === 'hr-employee')).toMatchObject({
+      title: 'Leave request waiting',
+      body: expect.stringContaining('waiting for HR approval'),
+    });
+    expect(notices.find((n) => n.employeeId === EMPLOYEE).body).toContain('now with HR');
   });
 });

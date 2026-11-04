@@ -5,6 +5,7 @@ import {
   AddPayrollAdjustmentDto,
   AttendanceStatus,
   CreatePayrollRunDto,
+  DataScope,
   EmployeeStatus,
   EXPORT_MAX_ROWS,
   GetPayrollHistoryQueryDto,
@@ -26,9 +27,11 @@ import { PayrollRunStatus } from '../models/payroll-run.model';
 import { Tenant } from '../models/tenant.model';
 import { TenantModelProviderService } from './tenant-model-provider.service';
 import { payrollActor, requireAnyPayrollPermission, requirePayrollPermission, writePayrollAudit } from './payroll-access';
+import { markSettlementsPaidForRun } from './settlement-payout';
 import { PayslipService } from './payslip.service';
 import { PayrollComplianceService } from './payroll-compliance.service';
 import { PayrollCompensationService } from './payroll-compensation.service';
+import { DataScopeService } from './data-scope.service';
 import { legacyCompensation } from './payroll-components';
 import { calculateCompliance, taxYearOf, type ComplianceInput, type ComplianceResult } from './payroll-compliance';
 import {
@@ -174,7 +177,44 @@ export class PayrollDashboardService {
     @Optional() private readonly payslips?: PayslipService,
     @Optional() private readonly compliance?: PayrollComplianceService,
     @Optional() private readonly compensation?: PayrollCompensationService,
+    @Optional() private readonly dataScope?: DataScopeService,
   ) {}
+
+  /** `null` when this caller sees the whole organization (or no scope service is wired). */
+  private visibleIds(tenantId: string): Promise<string[] | null> {
+    return this.dataScope ? this.dataScope.visibleEmployeeIds(tenantId) : Promise.resolve(null);
+  }
+
+  /** `{}` for an organization-wide caller; otherwise limits `field` to people they may see. */
+  private scopeWhere(tenantId: string, field = 'employeeId'): Promise<Record<string, unknown>> {
+    return this.dataScope ? this.dataScope.employeeWhere(tenantId, field) : Promise.resolve({});
+  }
+
+  private async assertEmployee(tenantId: string, employeeId: string | null | undefined, what = 'Employee') {
+    if (this.dataScope) await this.dataScope.assertCanSee(tenantId, employeeId, what);
+  }
+
+  /** A payroll run pays the organization. A department or team role can read its own lines, not open or move the run. */
+  private assertOrganizationPayroll() {
+    if (!this.dataScope || this.dataScope.scope() === DataScope.ORGANIZATION) return;
+    this.fail(
+      'A payroll run covers the whole organization, so it needs organization-wide access.',
+      HttpStatus.FORBIDDEN,
+    );
+  }
+
+  /** Gross, deductions and net of one run, counted only for the given people. */
+  private async moneyFor(tenantId: string, payrollRunId: string, employeeIds: string[]) {
+    const Record = await this.modelProvider.getPayrollRecordModel(tenantId);
+    const rows = (await Record.findAll({
+      where: { tenantId, payrollRunId, employeeId: { [Op.in]: employeeIds } },
+      attributes: ['grossPay', 'deductions', 'netPay'],
+      raw: true,
+    })) as any[];
+    const sum = (key: string) => round2(rows.reduce((total, row) => total + money(row[key]), 0));
+    const grossPay = sum('grossPay');
+    return { employees: rows.length, totalPayroll: grossPay, grossPay, deductions: sum('deductions'), netPay: sum('netPay') };
+  }
 
   // ── Errors ────────────────────────────────────────────────────────────────
 
@@ -467,7 +507,18 @@ export class PayrollDashboardService {
       tenantId,
       runs.flatMap((run) => Object.values(run.actorEmails ?? {}) as string[]),
     );
-    return runs.map((run) => this.runSummary(run, names));
+    const visible = await this.visibleIds(tenantId);
+    const rows = runs.map((run) => this.runSummary(run, names));
+    if (visible === null) return rows;
+    return Promise.all(
+      rows.map(async (summary, index) => ({
+        ...summary,
+        ...(await this.moneyFor(tenantId, runs[index].id, visible)),
+        skippedEmployees: (summary.skippedEmployees ?? []).filter((skipped: { employeeId?: string }) =>
+          visible.includes(skipped.employeeId ?? ''),
+        ),
+      })),
+    );
   }
 
   // ── Loading ───────────────────────────────────────────────────────────────
@@ -481,13 +532,14 @@ export class PayrollDashboardService {
 
     const run = await this.loadRun(tenantId, runId);
     const Record = await this.modelProvider.getPayrollRecordModel(tenantId);
+    const scope = await this.scopeWhere(tenantId);
     const rows = await Record.findAll({
-      where: { tenantId, payrollRunId: runId },
+      where: { tenantId, payrollRunId: runId, ...scope },
       include: [await this.employeeInclude(tenantId)],
       order: [['createdAt', 'ASC']],
       limit: EXPORT_MAX_ROWS,
     });
-    const total = await Record.count({ where: { tenantId, payrollRunId: runId } });
+    const total = await Record.count({ where: { tenantId, payrollRunId: runId, ...scope } });
     const step = this.stepOf(run);
 
     return {
@@ -586,23 +638,26 @@ export class PayrollDashboardService {
       attributes: ['id'],
       raw: true,
     });
+    const scope = await this.scopeWhere(tenantId);
     const pendingApproval = (awaiting as any[]).length
       ? await Record.count({
-          where: { tenantId, payrollRunId: { [Op.in]: (awaiting as any[]).map((r) => r.id) } },
+          where: { tenantId, payrollRunId: { [Op.in]: (awaiting as any[]).map((r) => r.id) }, ...scope },
         })
       : 0;
 
+    const latestRun = latest ? (await this.summaries(tenantId, [latest]))[0] : null;
+    const paid = latest?.step === PayrollProcessStep.COMPLETED;
+
     return {
-      totalPayroll: money(latest?.grossPay),
-      totalEmployees: latest?.employeeCount ?? 0,
+      totalPayroll: latestRun ? latestRun.grossPay : money(latest?.grossPay),
+      totalEmployees: latestRun ? latestRun.employees : (latest?.employeeCount ?? 0),
       // The "Employees Paid" card: only a completed run has actually paid.
-      employeesPaid:
-        latest?.step === PayrollProcessStep.COMPLETED ? (latest?.employeeCount ?? 0) : 0,
+      employeesPaid: paid ? (latestRun ? latestRun.employees : (latest?.employeeCount ?? 0)) : 0,
       pendingApproval,
-      deductions: money(latest?.deductions),
-      netPay: money(latest?.netPay),
-      grossPay: money(latest?.grossPay),
-      latestRun: latest ? (await this.summaries(tenantId, [latest]))[0] : null,
+      deductions: latestRun ? latestRun.deductions : money(latest?.deductions),
+      netPay: latestRun ? latestRun.netPay : money(latest?.netPay),
+      grossPay: latestRun ? latestRun.grossPay : money(latest?.grossPay),
+      latestRun,
       completedRuns,
       processingRuns,
       draftRuns,
@@ -634,12 +689,13 @@ export class PayrollDashboardService {
     }
 
     const run = latest as any;
+    const [currentRun] = await this.summaries(tenantId, [run]);
     const cycle = (run.cycle as PayrollCycle) ?? PayrollCycle.MONTHLY;
     const payDate = run.payDate ?? this.defaultPayDate(run.periodEnd, cycle);
     const step = this.stepOf(run);
 
     return {
-      currentRun: this.runSummary(run),
+      currentRun,
       cycle,
       periodStart: run.periodStart,
       periodEnd: run.periodEnd,
@@ -689,7 +745,7 @@ export class PayrollDashboardService {
 
     const Record = await this.modelProvider.getPayrollRecordModel(tenantId);
     const rows = (await Record.findAll({
-      where: { tenantId, payrollRunId: latest.id },
+      where: { tenantId, payrollRunId: latest.id, ...(await this.scopeWhere(tenantId)) },
       attributes: ['earnedBasic', 'earnedAllowances', 'overtimePay', 'bonus', 'deductions'],
       raw: true,
     })) as any[];
@@ -724,20 +780,42 @@ export class PayrollDashboardService {
     const months = query.months ?? 6;
     const window = monthWindow(months);
     const Run = await this.modelProvider.getPayrollRunModel(tenantId);
-    const runs = await Run.findAll({
+    const visible = await this.visibleIds(tenantId);
+    const runs = (await Run.findAll({
       where: { tenantId },
-      attributes: ['periodEnd', 'netPay', 'grossPay', 'deductions'],
+      attributes: visible === null ? ['periodEnd', 'netPay', 'grossPay', 'deductions'] : ['id', 'periodEnd'],
       raw: true,
-    });
+    })) as any[];
 
     const buckets = new Map<string, { netPay: number; grossPay: number; deductions: number }>();
-    for (const run of runs as any[]) {
-      const key = String(run.periodEnd).slice(0, 7);
-      const current = buckets.get(key) ?? { netPay: 0, grossPay: 0, deductions: 0 };
-      current.netPay += money(run.netPay);
-      current.grossPay += money(run.grossPay);
-      current.deductions += money(run.deductions);
-      buckets.set(key, current);
+    if (visible === null) {
+      for (const run of runs) {
+        const key = String(run.periodEnd).slice(0, 7);
+        const current = buckets.get(key) ?? { netPay: 0, grossPay: 0, deductions: 0 };
+        current.netPay += money(run.netPay);
+        current.grossPay += money(run.grossPay);
+        current.deductions += money(run.deductions);
+        buckets.set(key, current);
+      }
+    } else {
+      const Record = await this.modelProvider.getPayrollRecordModel(tenantId);
+      const lines = runs.length
+        ? ((await Record.findAll({
+            where: { tenantId, payrollRunId: { [Op.in]: runs.map((run) => run.id) }, employeeId: { [Op.in]: visible } },
+            attributes: ['payrollRunId', 'netPay', 'grossPay', 'deductions'],
+            raw: true,
+          })) as any[])
+        : [];
+      const periodOf = new Map(runs.map((run) => [run.id, String(run.periodEnd).slice(0, 7)]));
+      for (const line of lines) {
+        const key = periodOf.get(line.payrollRunId);
+        if (!key) continue;
+        const current = buckets.get(key) ?? { netPay: 0, grossPay: 0, deductions: 0 };
+        current.netPay += money(line.netPay);
+        current.grossPay += money(line.grossPay);
+        current.deductions += money(line.deductions);
+        buckets.set(key, current);
+      }
     }
 
     return {
@@ -780,7 +858,7 @@ export class PayrollDashboardService {
       warnings: {
         negativeNet: rows.filter((row) => row.netPay < 0).length,
         withNotes: rows.filter((row) => row.noteCount > 0).length,
-        skipped: (run.skippedEmployees ?? []).length,
+        skipped: summary.skippedEmployees.length,
       },
       compliance: {
         incomeTax: round2(rows.reduce((sum, row) => sum + row.incomeTax, 0)),
@@ -805,14 +883,15 @@ export class PayrollDashboardService {
     const run = await this.loadRun(tenantId, payrollRunId);
     const Record = await this.modelProvider.getPayrollRecordModel(tenantId);
     const Adjustment = await this.modelProvider.getPayrollAdjustmentModel(tenantId);
+    const scope = await this.scopeWhere(tenantId);
     const [rows, total, counts] = await Promise.all([
       Record.findAll({
-        where: { tenantId, payrollRunId },
+        where: { tenantId, payrollRunId, ...scope },
         include: [await this.employeeInclude(tenantId)],
         order: [['createdAt', 'ASC']],
         limit,
       }),
-      Record.count({ where: { tenantId, payrollRunId } }),
+      Record.count({ where: { tenantId, payrollRunId, ...scope } }),
       Adjustment.findAll({ where: { tenantId, payrollRunId }, attributes: ['payrollRecordId'], raw: true }),
     ]);
     const adjustmentsPer = new Map<string, number>();
@@ -866,6 +945,7 @@ export class PayrollDashboardService {
       include: [await this.employeeInclude(tenantId)],
     });
     if (!record) this.notFound('Payroll line', recordId);
+    await this.assertEmployee(tenantId, record.employeeId, 'Payroll line');
     const run = await this.loadRun(tenantId, record.payrollRunId);
     const Adjustment = await this.modelProvider.getPayrollAdjustmentModel(tenantId);
     const adjustments = await Adjustment.findAll({
@@ -1221,6 +1301,7 @@ export class PayrollDashboardService {
    */
   async createRun(tenantId: string, dto: CreatePayrollRunDto) {
     this.requirePermission('payroll.create', 'create payroll');
+    this.assertOrganizationPayroll();
 
     const periodStart = String(dto.periodStart).slice(0, 10);
     const periodEnd = String(dto.periodEnd).slice(0, 10);
@@ -1317,6 +1398,7 @@ export class PayrollDashboardService {
    */
   async recalculateRun(tenantId: string, payrollRunId: string) {
     this.requirePermission('payroll.edit', 'recalculate payroll');
+    this.assertOrganizationPayroll();
     const run = await this.loadRun(tenantId, payrollRunId);
     this.assertInReview(run, 'recalculating');
 
@@ -1387,6 +1469,7 @@ export class PayrollDashboardService {
   /** Review → Approval. Nothing is paid below zero, and an empty run is not a payroll. */
   async submitRun(tenantId: string, payrollRunId: string) {
     this.requirePermission('payroll.edit', 'submit payroll');
+    this.assertOrganizationPayroll();
     const run = await this.loadRun(tenantId, payrollRunId);
     this.assertInReview(run, 'submitting');
 
@@ -1414,6 +1497,7 @@ export class PayrollDashboardService {
   /** Approval → Payment. From here on the run is locked. */
   async approveRun(tenantId: string, payrollRunId: string) {
     this.requirePermission('payroll.approve', 'approve payroll');
+    this.assertOrganizationPayroll();
     const run = await this.loadRun(tenantId, payrollRunId);
     if (this.stepOf(run) !== PayrollProcessStep.APPROVAL) {
       this.badRequest(`Only a payroll awaiting approval can be approved — this one is in ${STEP_LABELS[this.stepOf(run)]}.`);
@@ -1436,6 +1520,7 @@ export class PayrollDashboardService {
   /** Approval → Review, with the reason — the only way back, and only before approval. */
   async returnRun(tenantId: string, payrollRunId: string, dto: ReturnPayrollRunDto) {
     this.requirePermission('payroll.approve', 'return payroll to review');
+    this.assertOrganizationPayroll();
     const run = await this.loadRun(tenantId, payrollRunId);
     if (this.stepOf(run) !== PayrollProcessStep.APPROVAL) {
       this.badRequest('Only a payroll awaiting approval can be returned to Review.');
@@ -1453,6 +1538,7 @@ export class PayrollDashboardService {
   /** Payment → Completed. Records when it was paid; no bank integration yet. */
   async payRun(tenantId: string, payrollRunId: string, dto: PayPayrollRunDto) {
     this.requirePermission('payroll.approve', 'mark payroll as paid');
+    this.assertOrganizationPayroll();
     const run = await this.loadRun(tenantId, payrollRunId);
     if (this.stepOf(run) !== PayrollProcessStep.PAYMENT) {
       this.badRequest('Only an approved payroll can be marked as paid.');
@@ -1471,6 +1557,13 @@ export class PayrollDashboardService {
       paymentReference: reference,
       processedAt: new Date(),
     }, 'paid', { paymentDate: { from: null, to: paymentDate }, ...(reference ? { paymentReference: { from: null, to: reference } } : {}) });
+
+    // Final settlements this payroll carried are paid with it. A failure here does not undo the payment.
+    try {
+      await markSettlementsPaidForRun(this.modelProvider, this.logger, tenantId, run, { date: paymentDate, actorEmail: this.actor().email ?? null });
+    } catch (error: any) {
+      this.logger.error(`Payroll ${payrollRunId} paid, but its final settlements were not marked paid: ${error?.message ?? error}`);
+    }
 
     // Payslips are numbered the moment the payroll is final. If that fails
     // the payment still stands — numbering fills in on first access.
@@ -1680,7 +1773,9 @@ export class PayrollDashboardService {
     const Employee = await this.modelProvider.getEmployeeModel(tenantId);
     const Profile = await this.modelProvider.getEmployeeTaxProfileModel(tenantId);
 
-    const records = (await Record.findAll({ where: { tenantId, payrollRunId } })) as any[];
+    const records = (await Record.findAll({
+      where: { tenantId, payrollRunId, ...(await this.scopeWhere(tenantId)) },
+    })) as any[];
     const employeeIds = records.map((record) => record.employeeId);
     const taxYear = taxYearOf(String(run.periodEnd));
     // Live employee rows, so a bank account fixed since the run was calculated counts.
@@ -1771,6 +1866,7 @@ export class PayrollDashboardService {
     const Record = await this.modelProvider.getPayrollRecordModel(tenantId);
     const record = await Record.findOne({ where: { id: recordId, tenantId } });
     if (!record) this.notFound('Payroll line', recordId);
+    await this.assertEmployee(tenantId, record.employeeId, 'Payroll line');
     const run = await this.loadRun(tenantId, record.payrollRunId);
     this.assertInReview(run, 'changing a line');
     return record;
@@ -1891,11 +1987,12 @@ export class PayrollDashboardService {
     const Adjustment = await this.modelProvider.getPayrollAdjustmentModel(tenantId);
     const Run = await this.modelProvider.getPayrollRunModel(tenantId);
     const Employee = await this.modelProvider.getEmployeeModel(tenantId);
+    if (filters.employeeId) await this.assertEmployee(tenantId, filters.employeeId);
     const rows = (await Adjustment.findAll({
       where: {
         tenantId,
         ...(filters.period ? { payrollPeriod: filters.period } : {}),
-        ...(filters.employeeId ? { employeeId: filters.employeeId } : {}),
+        ...(filters.employeeId ? { employeeId: filters.employeeId } : await this.scopeWhere(tenantId)),
       },
       order: [['createdAt', 'DESC']],
       limit: 500,
@@ -1935,6 +2032,7 @@ export class PayrollDashboardService {
     const Employee = await this.modelProvider.getEmployeeModel(tenantId);
     const employee = await Employee.findOne({ where: { tenantId, id: dto.employeeId } });
     if (!employee) this.notFound('Employee', dto.employeeId);
+    await this.assertEmployee(tenantId, dto.employeeId);
     const { periodStart } = monthBounds(dto.payrollPeriod);
     const Run = await this.modelProvider.getPayrollRunModel(tenantId);
     const run: any = await Run.findOne({ where: { tenantId, periodStart } });
@@ -1996,6 +2094,7 @@ export class PayrollDashboardService {
   /** Salary in effect today, scheduled and past revisions, and bank details. */
   async getEmployeePay(tenantId: string, employeeId: string) {
     this.requirePermission('payroll.view', 'view salaries');
+    await this.assertEmployee(tenantId, employeeId);
     const employee = await this.loadEmployee(tenantId, employeeId);
     const Revision = await this.modelProvider.getSalaryRevisionModel(tenantId);
     const revisions = (await Revision.findAll({
@@ -2057,6 +2156,7 @@ export class PayrollDashboardService {
    */
   async setEmployeeSalary(tenantId: string, employeeId: string, dto: SetEmployeeSalaryDto) {
     this.requirePermission('payroll.edit', 'change salaries');
+    await this.assertEmployee(tenantId, employeeId);
     const employee = await this.loadEmployee(tenantId, employeeId);
     const effectiveFrom = String(dto.effectiveFrom).slice(0, 10);
     if (employee.joiningDate && effectiveFrom < String(employee.joiningDate).slice(0, 10)) {
@@ -2121,6 +2221,7 @@ export class PayrollDashboardService {
   /** Bank details for salary transfer. Not historical — a change applies to the next run. */
   async setEmployeeBank(tenantId: string, employeeId: string, dto: SetEmployeeBankDto) {
     this.requirePermission('payroll.edit', 'change bank details');
+    await this.assertEmployee(tenantId, employeeId);
     const employee = await this.loadEmployee(tenantId, employeeId);
     const clean = (value: string | null | undefined) => {
       if (value === undefined) return undefined;

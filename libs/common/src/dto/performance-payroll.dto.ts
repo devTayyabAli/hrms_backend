@@ -1,4 +1,6 @@
 import {
+  ArrayMaxSize,
+  IsArray,
   IsBoolean,
   IsDateString,
   IsDefined,
@@ -81,6 +83,26 @@ export class GetPerformanceTrendQueryDto {
   months?: number = 6;
 }
 
+export class GetReviewEvidenceQueryDto {
+  @ApiProperty({
+    required: false,
+    example: '2026-01-01',
+    description: 'Start of the period the work evidence covers (YYYY-MM-DD). Defaults to twelve months before `to`.',
+  })
+  @IsOptional()
+  @IsDateString({ strict: true }, { message: 'Use a date as YYYY-MM-DD.' })
+  from?: string;
+
+  @ApiProperty({
+    required: false,
+    example: '2026-06-30',
+    description: 'End of the period (YYYY-MM-DD). Defaults to today. Cannot be before `from`.',
+  })
+  @IsOptional()
+  @IsDateString({ strict: true }, { message: 'Use a date as YYYY-MM-DD.' })
+  to?: string;
+}
+
 export class PerformanceMetricScoresDto {
   @ApiProperty({ required: false, minimum: 0, maximum: 5, description: 'Professionalism, 0–5' })
   @IsOptional()
@@ -156,6 +178,31 @@ export class CreatePerformanceReviewDto extends PerformanceMetricScoresDto {
   @IsOptional()
   @IsDateString()
   reviewDate?: string;
+
+  @ApiProperty({ required: false, maxLength: 2000, description: 'The reviewer\'s feedback. The employee reads it once the review is published.' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  reviewerComments?: string;
+
+  @ApiProperty({ required: false, description: 'Who completes the review. Leave out for the employee\'s reporting manager' })
+  @IsOptional()
+  @IsUUID()
+  reviewerId?: string;
+
+  @ApiProperty({ required: false, default: false, description: 'Someone who no longer works here is not given a new review unless this is true, by someone who manages performance' })
+  @IsOptional()
+  @IsBoolean()
+  authorizeInactive?: boolean;
+}
+
+/** Employees allowed to read a review they would not otherwise see. */
+export class SetReviewAccessDto {
+  @ApiProperty({ type: [String], description: 'Replaces the list. An empty list takes the extra access away' })
+  @IsArray()
+  @ArrayMaxSize(20)
+  @IsUUID('4', { each: true })
+  employeeIds: string[];
 }
 
 export class UpdatePerformanceReviewDto extends PerformanceMetricScoresDto {
@@ -183,6 +230,17 @@ export class UpdatePerformanceReviewDto extends PerformanceMetricScoresDto {
   @IsOptional()
   @IsDateString()
   reviewDate?: string;
+
+  @ApiProperty({ required: false, maxLength: 2000, description: 'Send an empty string to clear it.' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  reviewerComments?: string;
+
+  @ApiProperty({ required: false, nullable: true, description: 'Change who completes the review. null goes back to the employee\'s reporting manager' })
+  @IsOptional()
+  @IsUUID()
+  reviewerId?: string | null;
 }
 
 export class CreatePerformanceGoalDto {
@@ -219,6 +277,11 @@ export class CreatePerformanceGoalDto {
   @IsOptional()
   @IsDateString()
   dueDate?: string;
+
+  @ApiProperty({ required: false, default: false, description: 'Someone who no longer works here is not given a new goal unless this is true, by someone who manages performance' })
+  @IsOptional()
+  @IsBoolean()
+  authorizeInactive?: boolean;
 }
 
 export class UpdatePerformanceGoalDto {
@@ -442,6 +505,13 @@ export class TenantPerformanceReviewIdDto {
 
   @IsUUID()
   reviewId: string;
+}
+
+export class GetReviewEvidenceMessageDto extends TenantPerformanceReviewIdDto {
+  @ValidateNested()
+  @Type(() => GetReviewEvidenceQueryDto)
+  @IsDefined()
+  query: GetReviewEvidenceQueryDto;
 }
 
 export class CreatePerformanceReviewMessageDto {

@@ -79,6 +79,10 @@ describe('PayrollCompensationService', () => {
       WorkingHours: table([{ tenantId: TENANT, workingDays: MON_SAT, startTime: '09:00', endTime: '18:00', breakDurationMinutes: 60, isDefault: true }]),
       Policy: table([{ tenantId: TENANT, policyType: PolicyType.PAYROLL, status: PolicyStatus.ACTIVE, configuration: { currency: 'PKR' } }]),
       Audit: table(),
+      Notification: table(),
+      SalaryRequest: table(),
+      ApprovalPolicy: table(),
+      Department: table(),
     };
     const provider = {
       getPayrollComponentModel: async () => models.Component,
@@ -101,8 +105,11 @@ describe('PayrollCompensationService', () => {
       getWorkingHoursModel: async () => models.WorkingHours,
       getOrganizationPolicyModel: async () => models.Policy,
       getEntityAuditLogModel: async () => models.Audit,
-      getDepartmentModel: async () => ({}),
-      getDesignationModel: async () => ({}),
+      getEmployeeNotificationModel: async () => models.Notification,
+      getDepartmentModel: async () => models.Department,
+      getDesignationModel: async () => ({ findAll: async () => [] }),
+      getSalaryRevisionRequestModel: async () => models.SalaryRequest,
+      getApprovalPolicyModel: async () => models.ApprovalPolicy,
     };
     compensation = new PayrollCompensationService(provider as any);
     compliance = new PayrollComplianceService(provider as any);
@@ -331,6 +338,20 @@ describe('PayrollCompensationService', () => {
       expect(events()).toEqual(expect.arrayContaining(['REIMBURSEMENT_SUBMITTED', 'REIMBURSEMENT_APPROVED']));
     });
 
+    it('tells the employee when a claim is approved or rejected, with the reason', async () => {
+      const first = await compensation.submitMyReimbursement(TENANT, 'u-ayesha', undefined, { amount: 5_000, category: 'TRAVEL', expenseDate: '2026-09-10', description: 'Client visit' });
+      const second = await compensation.submitMyReimbursement(TENANT, 'u-ayesha', undefined, { amount: 900, category: 'MEDICAL', expenseDate: '2026-09-11', description: 'Pharmacy' });
+
+      await as(ADMIN, () => compensation.decideReimbursement(TENANT, first.id, { decision: 'APPROVE' }));
+      await as(ADMIN, () => compensation.decideReimbursement(TENANT, second.id, { decision: 'REJECT', note: 'No receipt attached' }));
+
+      const [approved, rejected] = models.Notification.rows;
+      expect(approved).toMatchObject({ employeeId: employeeId(), kind: 'REQUEST', title: 'Reimbursement approved' });
+      expect(approved.body).toContain('next payroll');
+      expect(rejected).toMatchObject({ employeeId: employeeId(), title: 'Reimbursement rejected' });
+      expect(rejected.body).toContain('No receipt attached');
+    });
+
     it('holds a bonus entered ahead of its month, and refuses a locked month', async () => {
       const entry = await as(HR, () =>
         payroll.createAdjustmentEntry(TENANT, { employeeId: employeeId(), payrollPeriod: '2026-10', type: 'EARNING' as any, category: 'BONUS', amount: 20_000, reason: 'Q3 bonus' }),
@@ -380,6 +401,340 @@ describe('PayrollCompensationService', () => {
     // Only the basic is taxed: 1,500,000 a year → 39,000 over 10 months.
     expect(run.records[0].grossPay).toBe(180_000);
     expect(run.records[0].incomeTax).toBe(3_900);
+  });
+
+  // ── Approving salary changes and expense claims ───────────────────────────
+
+  describe('approval of salary changes', () => {
+    const PROPOSER = HR;
+    const APPROVER = { roles: ['Finance'], isSuperAdmin: false, userId: 'u-fin', email: 'fin@x.com', permissions: ['payroll.view', 'payroll.compensation.approve'] };
+    const SECOND_APPROVER = { roles: ['Finance'], isSuperAdmin: false, userId: 'u-cfo', email: 'cfo@x.com', permissions: ['payroll.view', 'payroll.approve'] };
+    const BOTH = { roles: ['Finance'], isSuperAdmin: false, userId: 'u-hr', email: 'hr@x.com', permissions: ['payroll.edit', 'payroll.compensation.approve'] };
+
+    const requirePolicy = (stages: any[]) => models.ApprovalPolicy.create({ tenantId: TENANT, requestType: 'SALARY_REVISION', stages });
+    const propose = async (actor: any = PROPOSER, amount = 120_000) => {
+      const all = await as(ADMIN, () => compensation.listComponents(TENANT));
+      const basic = all.find((c) => c.code === 'BASIC')!;
+      return as(actor, () => compensation.saveCompensation(TENANT, employeeId(), { effectiveFrom: '2026-12-01', lines: [{ componentId: basic.id, value: amount }], reason: 'Annual raise' })) as Promise<any>;
+    };
+    const decide = (actor: any, id: string, decision: 'APPROVE' | 'REJECT', note?: string) => as(actor, () => compensation.decideSalaryRevision(TENANT, id, { decision, note }));
+
+    beforeEach(async () => {
+      await salary(100_000, '2026-07-01');
+    });
+
+    it('writes the change straight away when the organization has not asked for approval', async () => {
+      const result = await propose();
+      expect(result.pending).toBeUndefined();
+      expect(models.Revision.rows).toHaveLength(2);
+      expect(models.SalaryRequest.rows).toHaveLength(0);
+    });
+
+    it('holds the change for approval instead of writing it, and shows what would change', async () => {
+      await requirePolicy([{ kind: 'PERMISSION', permission: 'payroll.compensation.approve' }]);
+
+      const result = await propose();
+
+      expect(result).toMatchObject({ pending: true, revision: null, openRun: null });
+      expect(models.Revision.rows).toHaveLength(1);
+      expect(result.request).toMatchObject({
+        status: 'PENDING',
+        effectiveFrom: '2026-12-01',
+        reason: 'Annual raise',
+        requestedBy: 'hr@x.com',
+        change: { grossFrom: 100_000, grossTo: 120_000, difference: 20_000, percent: 20 },
+        approval: { currentPermission: 'payroll.compensation.approve', finalStep: true },
+      });
+      expect(events()).toContain('SALARY_CHANGE_PROPOSED');
+    });
+
+    it('still checks the change when it is proposed', async () => {
+      await requirePolicy([{ kind: 'PERMISSION', permission: 'payroll.compensation.approve' }]);
+      const all = await as(ADMIN, () => compensation.listComponents(TENANT));
+      const basic = all.find((c) => c.code === 'BASIC')!;
+      await expect(as(PROPOSER, () => compensation.saveCompensation(TENANT, employeeId(), { effectiveFrom: '2026-12-01', lines: [{ componentId: basic.id, value: 0 }] }))).rejects.toMatchObject({ status: HttpStatus.BAD_REQUEST });
+      expect(models.SalaryRequest.rows).toHaveLength(0);
+    });
+
+    it('writes the revision when someone else approves it, from the proposal as it was made', async () => {
+      await requirePolicy([{ kind: 'PERMISSION', permission: 'payroll.compensation.approve' }]);
+      const { request } = await propose();
+
+      const done = await decide(APPROVER, request.id, 'APPROVE', 'Looks right');
+
+      expect(done).toMatchObject({ status: 'APPROVED', decisionNote: 'Looks right', decidedBy: 'fin@x.com' });
+      expect(models.Revision.rows).toHaveLength(2);
+      expect(done.revisionId).toBe(models.Revision.rows[1].id);
+      const view = await as(ADMIN, () => compensation.getCompensation(TENANT, employeeId()));
+      expect(view.history[0]).toMatchObject({ effectiveFrom: '2026-12-01', reason: 'Annual raise' });
+      expect(events()).toEqual(expect.arrayContaining(['SALARY_CHANGE_APPROVED']));
+    });
+
+    it('never lets the person who proposed a change approve it, even holding the permission', async () => {
+      await requirePolicy([{ kind: 'PERMISSION', permission: 'payroll.compensation.approve' }]);
+      const { request } = await propose(BOTH);
+
+      await expect(decide(BOTH, request.id, 'APPROVE')).rejects.toMatchObject({ status: HttpStatus.FORBIDDEN, message: expect.stringContaining('proposed this change') });
+      expect(models.Revision.rows).toHaveLength(1);
+      const [row] = await as(BOTH, () => compensation.listSalaryRevisionRequests(TENANT));
+      expect(row.canDecide).toBe(false);
+    });
+
+    it('is not for anyone without the approval permission, not even one who can change compensation', async () => {
+      await requirePolicy([{ kind: 'PERMISSION', permission: 'payroll.compensation.approve' }]);
+      const { request } = await propose();
+      const manager = { roles: ['Payroll'], isSuperAdmin: false, userId: 'u-pm', email: 'pm@x.com', permissions: ['payroll.compensation.manage'] };
+
+      await expect(decide(manager, request.id, 'APPROVE')).rejects.toMatchObject({ status: HttpStatus.FORBIDDEN });
+      expect(models.Revision.rows).toHaveLength(1);
+    });
+
+    it('lets payroll.manage stand in for the approval permission, and shows an approver what is waiting', async () => {
+      await requirePolicy([{ kind: 'PERMISSION', permission: 'payroll.compensation.approve' }]);
+      const { request } = await propose();
+      const boss = { roles: ['Payroll'], isSuperAdmin: false, userId: 'u-boss', email: 'boss@x.com', permissions: ['payroll.manage'] };
+
+      const waiting = await as(APPROVER, () => compensation.listSalaryRevisionRequests(TENANT, { status: 'PENDING' }));
+      expect(waiting).toHaveLength(1);
+      expect(waiting[0].canDecide).toBe(true);
+      expect((await decide(boss, request.id, 'APPROVE')).status).toBe('APPROVED');
+    });
+
+    it('rejects with a reason and writes nothing', async () => {
+      await requirePolicy([{ kind: 'PERMISSION', permission: 'payroll.compensation.approve' }]);
+      const { request } = await propose();
+
+      await expect(decide(APPROVER, request.id, 'REJECT')).rejects.toMatchObject({ status: HttpStatus.BAD_REQUEST });
+      const done = await decide(APPROVER, request.id, 'REJECT', 'Not in budget');
+
+      expect(done).toMatchObject({ status: 'REJECTED', decisionNote: 'Not in budget' });
+      expect(models.Revision.rows).toHaveLength(1);
+      await expect(decide(APPROVER, request.id, 'APPROVE')).rejects.toMatchObject({ status: HttpStatus.CONFLICT });
+    });
+
+    it('takes two approvers for two stages, and not the same person twice', async () => {
+      await requirePolicy([{ kind: 'PERMISSION', permission: 'payroll.compensation.approve' }, { kind: 'PERMISSION', permission: 'payroll.approve' }]);
+      const { request } = await propose();
+
+      const first = await decide(APPROVER, request.id, 'APPROVE');
+      expect(first.status).toBe('PENDING');
+      expect(models.Revision.rows).toHaveLength(1);
+
+      await expect(decide({ ...APPROVER, permissions: [...APPROVER.permissions, 'payroll.approve'] }, request.id, 'APPROVE')).rejects.toMatchObject({
+        status: HttpStatus.FORBIDDEN,
+        message: expect.stringContaining('earlier stage'),
+      });
+      await expect(decide(APPROVER, request.id, 'APPROVE')).rejects.toMatchObject({ status: HttpStatus.FORBIDDEN });
+
+      const done = await decide(SECOND_APPROVER, request.id, 'APPROVE');
+      expect(done.status).toBe('APPROVED');
+      expect(models.Revision.rows).toHaveLength(2);
+    });
+
+    it('keeps two changes for the same date from waiting together, and lets the proposer withdraw one', async () => {
+      await requirePolicy([{ kind: 'PERMISSION', permission: 'payroll.compensation.approve' }]);
+      const { request } = await propose();
+
+      await expect(propose()).rejects.toMatchObject({ status: HttpStatus.CONFLICT });
+      const other = { ...HR, userId: 'u-hr9', email: 'hr9@x.com' };
+      await expect(as(other, () => compensation.cancelSalaryRevisionRequest(TENANT, request.id))).rejects.toMatchObject({ status: HttpStatus.FORBIDDEN });
+
+      const cancelled = await as(PROPOSER, () => compensation.cancelSalaryRevisionRequest(TENANT, request.id));
+      expect(cancelled.status).toBe('CANCELLED');
+      expect(await propose()).toMatchObject({ pending: true });
+    });
+
+    it('says so when the month was locked after it was proposed, and stays waiting', async () => {
+      await requirePolicy([{ kind: 'PERMISSION', permission: 'payroll.compensation.approve' }]);
+      const { request } = await propose();
+      models.Run.create({ tenantId: TENANT, periodStart: '2026-12-01', periodEnd: '2026-12-31', step: 'APPROVAL' });
+
+      await expect(decide(APPROVER, request.id, 'APPROVE')).rejects.toMatchObject({ status: HttpStatus.CONFLICT });
+      expect(models.SalaryRequest.rows[0].status).toBe('PENDING');
+      expect(models.Revision.rows).toHaveLength(1);
+    });
+
+    it('cannot be skipped with an import', async () => {
+      await catalog();
+      await requirePolicy([{ kind: 'PERMISSION', permission: 'payroll.compensation.approve' }]);
+      const csv = 'Employee ID,Component,Amount,Effective Date\nEMP001,BASIC,150000,2026-12-01\n';
+
+      await expect(as(ADMIN, () => compensation.importCompensation(TENANT, { csv, apply: true }))).rejects.toMatchObject({ status: HttpStatus.CONFLICT });
+      expect(models.Revision.rows).toHaveLength(1);
+      expect(await as(ADMIN, () => compensation.importCompensation(TENANT, { csv }))).toMatchObject({ valid: 1, applied: 0 });
+    });
+  });
+
+  describe('reimbursements with a route', () => {
+    const MANAGER_EMPLOYEE = { ...employee({ employeeCode: 'EMP002', firstName: 'Sara', lastName: 'Manager', email: 'sara@x.com', userId: 'u-sara', reportingManagerId: null }) };
+    const OTHER = { roles: [], isSuperAdmin: false, userId: 'u-other', email: 'other@x.com', permissions: [] };
+    const PAYROLL = { roles: ['Finance'], isSuperAdmin: false, userId: 'u-fin', email: 'fin@x.com', permissions: ['payroll.view', 'payroll.adjustments.manage'] };
+    const CLAIM = { amount: 5_000, category: 'TRAVEL', expenseDate: '2026-10-10', description: 'Client visit' };
+    let manager: any;
+
+    beforeEach(() => {
+      build([employee({ reportingManagerId: null }), MANAGER_EMPLOYEE, employee({ employeeCode: 'EMP003', firstName: 'Omar', email: 'omar@x.com', userId: 'u-omar' })]);
+      manager = models.Employee.rows[1];
+      models.Employee.rows[0].reportingManagerId = manager.id;
+      models.ApprovalPolicy.create({ tenantId: TENANT, requestType: 'REIMBURSEMENT', stages: [{ kind: 'REPORTING_MANAGER', level: 1 }, { kind: 'PERMISSION', permission: 'payroll.adjustments.manage' }] });
+    });
+
+    const submit = () => as(OTHER, () => compensation.submitMyReimbursement(TENANT, 'u-ayesha', undefined, CLAIM)) as Promise<any>;
+
+    it('goes to the reporting manager first, and tells them', async () => {
+      const claim = await submit();
+
+      expect(claim.approval).toMatchObject({ currentApproverId: manager.id, finalStep: false, statusText: expect.stringContaining('With Sara Manager') });
+      expect(claim.status).toBe('SUBMITTED');
+      expect(models.Notification.rows.map((n: any) => [n.employeeId, n.title])).toEqual([[manager.id, 'Reimbursement waiting']]);
+    });
+
+    it('goes straight to payroll, as before, when the organization has saved no route', async () => {
+      models.ApprovalPolicy.rows.length = 0;
+      const claim = await submit();
+      expect(claim.approval).toBeNull();
+      expect((await as(PAYROLL, () => compensation.decideReimbursement(TENANT, claim.id, { decision: 'APPROVE' }))).status).toBe('APPROVED');
+    });
+
+    it('shows the manager what is waiting for them, and nobody else', async () => {
+      await submit();
+      // The query matches the route's current approver inside the stored JSON; the fake table cannot, so it is applied here.
+      models.Reimbursement.findAll.mockImplementationOnce(async () =>
+        models.Reimbursement.rows.filter((row: any) => row.status === 'SUBMITTED' && row.approval?.currentApproverId === manager.id),
+      );
+      const mine = await compensation.myReimbursementApprovals(TENANT, 'u-sara');
+      expect(mine.total).toBe(1);
+      expect(mine.data[0]).toMatchObject({ employee: { name: 'Ayesha Khan' }, amount: 5000, canDecide: true });
+    });
+
+    it('moves on to payroll when the manager approves, without paying it, and tells the employee', async () => {
+      const claim = await submit();
+      models.Notification.rows.length = 0;
+
+      const moved = await as(OTHER, () => compensation.decideMyReimbursementApproval(TENANT, 'u-sara', undefined, claim.id, { decision: 'APPROVE' }));
+
+      expect(moved).toMatchObject({ status: 'SUBMITTED', approval: { currentPermission: 'payroll.adjustments.manage', finalStep: true } });
+      expect(models.Notification.rows.map((n: any) => [n.employeeId, n.title])).toEqual([[models.Employee.rows[0].id, 'Reimbursement update']]);
+      expect(events()).toContain('REIMBURSEMENT_STAGE_APPROVED');
+    });
+
+    it('is approved for payment only when payroll approves the last stage', async () => {
+      const claim = await submit();
+      await as(OTHER, () => compensation.decideMyReimbursementApproval(TENANT, 'u-sara', undefined, claim.id, { decision: 'APPROVE' }));
+      models.Notification.rows.length = 0;
+
+      const done = await as(PAYROLL, () => compensation.decideReimbursement(TENANT, claim.id, { decision: 'APPROVE', payrollPeriod: '2026-11' }));
+
+      expect(done).toMatchObject({ status: 'APPROVED', payrollPeriod: '2026-11', decidedBy: 'fin@x.com' });
+      expect(models.Notification.rows[0]).toMatchObject({ title: 'Reimbursement approved' });
+    });
+
+    it('does not let payroll decide before the manager has', async () => {
+      const claim = await submit();
+      await expect(as(PAYROLL, () => compensation.decideReimbursement(TENANT, claim.id, { decision: 'APPROVE' }))).rejects.toMatchObject({ status: HttpStatus.FORBIDDEN });
+      expect(models.Reimbursement.rows[0].status).toBe('SUBMITTED');
+    });
+
+    it('does not let anyone else, or the claimant, decide the manager\'s stage', async () => {
+      const claim = await submit();
+      await expect(as(OTHER, () => compensation.decideMyReimbursementApproval(TENANT, 'u-omar', undefined, claim.id, { decision: 'APPROVE' }))).rejects.toMatchObject({ status: HttpStatus.FORBIDDEN });
+      await expect(as(OTHER, () => compensation.decideMyReimbursementApproval(TENANT, 'u-ayesha', undefined, claim.id, { decision: 'APPROVE' }))).rejects.toMatchObject({ status: HttpStatus.FORBIDDEN });
+    });
+
+    it('lets the manager reject with a reason, which ends it and tells the employee', async () => {
+      const claim = await submit();
+      await expect(as(OTHER, () => compensation.decideMyReimbursementApproval(TENANT, 'u-sara', undefined, claim.id, { decision: 'REJECT' }))).rejects.toMatchObject({ status: HttpStatus.BAD_REQUEST });
+      models.Notification.rows.length = 0;
+
+      const done = await as(OTHER, () => compensation.decideMyReimbursementApproval(TENANT, 'u-sara', undefined, claim.id, { decision: 'REJECT', note: 'Not a work expense' }));
+
+      expect(done).toMatchObject({ status: 'REJECTED', decisionNote: 'Not a work expense' });
+      expect(models.Notification.rows[0]).toMatchObject({ title: 'Reimbursement rejected' });
+      expect(models.Notification.rows[0].body).toContain('Not a work expense');
+    });
+
+    it('does not apply to a claim payroll staff record for someone', async () => {
+      const claim = await as(PAYROLL, () => compensation.createReimbursement(TENANT, { employeeId: employeeId(), ...CLAIM })) as any;
+      expect(claim.approval).toBeNull();
+    });
+
+    it('treats a claim without a route as not found on the manager\'s side', async () => {
+      models.ApprovalPolicy.rows.length = 0;
+      const claim = await submit();
+      await expect(as(OTHER, () => compensation.decideMyReimbursementApproval(TENANT, 'u-sara', undefined, claim.id, { decision: 'APPROVE' }))).rejects.toMatchObject({ status: HttpStatus.NOT_FOUND });
+    });
+
+    describe('telling the people holding the permission', () => {
+      it('tells them when the claim reaches a permission stage, and not while a named manager has it', async () => {
+        const tell = jest.fn();
+        (compensation as any).holders = { tell };
+
+        const claim = await submit();
+        expect(tell).toHaveBeenCalledWith(TENANT, expect.objectContaining({ currentApproverId: manager.id }), [expect.any(String)], 'Reimbursement waiting', expect.any(String));
+
+        tell.mockClear();
+        await as(OTHER, () => compensation.decideMyReimbursementApproval(TENANT, 'u-sara', undefined, claim.id, { decision: 'APPROVE' }));
+        expect(tell).toHaveBeenCalledWith(TENANT, expect.objectContaining({ currentPermission: 'payroll.adjustments.manage', finalStep: true }), [models.Employee.rows[0].id], 'Reimbursement waiting', expect.stringContaining('Sara Manager'));
+      });
+    });
+
+    describe('when the reporting line changes or the approver leaves', () => {
+      it('moves a claim nobody has approved yet to the new manager, and tells both', async () => {
+        await submit();
+        const omar = models.Employee.rows[2];
+        models.Employee.rows[0].reportingManagerId = omar.id;
+        models.Notification.rows.length = 0;
+
+        const moved = await compensation.rerouteReimbursementsAfterReportingChange(TENANT, employeeId(0));
+
+        expect(moved).toBe(1);
+        expect(models.Reimbursement.rows[0].approval).toMatchObject({ currentApproverId: omar.id, finalStep: false });
+        expect(models.Notification.rows.map((n: any) => [n.employeeId, n.title])).toEqual([
+          [employeeId(0), 'Reimbursement update'],
+          [omar.id, 'Reimbursement waiting'],
+        ]);
+      });
+
+      it('follows the direct reports of the person whose line changed', async () => {
+        await submit();
+        // Sara (the claimant\'s manager) is moved under Omar: her team\'s claims are re-checked, and nothing changes for them.
+        models.Employee.rows[1].reportingManagerId = models.Employee.rows[2].id;
+        expect(await compensation.rerouteReimbursementsAfterReportingChange(TENANT, manager.id)).toBe(0);
+        expect(models.Reimbursement.rows[0].approval.currentApproverId).toBe(manager.id);
+      });
+
+      it('leaves a claim alone when the route is unchanged, or once payroll has it', async () => {
+        const claim = await submit();
+        expect(await compensation.rerouteReimbursementsAfterReportingChange(TENANT, employeeId(0))).toBe(0);
+
+        await as(OTHER, () => compensation.decideMyReimbursementApproval(TENANT, 'u-sara', undefined, claim.id, { decision: 'APPROVE' }));
+        models.Employee.rows[0].reportingManagerId = models.Employee.rows[2].id;
+        expect(await compensation.rerouteReimbursementsAfterReportingChange(TENANT, employeeId(0))).toBe(0);
+        expect(models.Reimbursement.rows[0].approval).toMatchObject({ currentPermission: 'payroll.adjustments.manage' });
+      });
+
+      it('does nothing for claims with no saved route, or when the policy has since been removed', async () => {
+        models.ApprovalPolicy.rows.length = 0;
+        await submit();
+        models.Employee.rows[0].reportingManagerId = models.Employee.rows[2].id;
+        expect(await compensation.rerouteReimbursementsAfterReportingChange(TENANT, employeeId(0))).toBe(0);
+        expect(models.Reimbursement.rows[0].approval).toBeNull();
+      });
+
+      it('hands a claim on to payroll when the manager it was waiting on leaves', async () => {
+        await submit();
+        // The query matches the stored JSON inside the database; the fake table cannot, so it is applied here.
+        models.Reimbursement.findAll.mockImplementationOnce(async () => models.Reimbursement.rows.filter((row: any) => row.approval?.currentApproverId === manager.id));
+        models.Notification.rows.length = 0;
+
+        const moved = await compensation.releaseReimbursementsWaitingOn(TENANT, manager.id);
+
+        expect(moved).toBe(1);
+        expect(models.Reimbursement.rows[0].approval).toMatchObject({ currentPermission: 'payroll.adjustments.manage', finalStep: true });
+        expect(models.Reimbursement.rows[0].approval.statusText).toContain('no longer with the organization');
+        expect(models.Notification.rows[0]).toMatchObject({ employeeId: employeeId(0), title: 'Reimbursement update' });
+      });
+    });
   });
 
   // ── Import ────────────────────────────────────────────────────────────────

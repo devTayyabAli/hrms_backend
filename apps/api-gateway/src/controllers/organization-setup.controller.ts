@@ -10,6 +10,8 @@ import {
   Headers,
   Inject,
   UseGuards,
+  Query,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiHeader, ApiBearerAuth } from '@nestjs/swagger';
 import { TAGS } from '../swagger/swagger-tags';
@@ -26,6 +28,7 @@ import {
   CreateLeavePolicyDto,
   UpdateLeavePolicyDto,
   UpdateAttendancePolicyDto,
+  UpdateApprovalFlowDto,
   HRMSModuleKey,
   ModuleAction,
 } from '@app/common';
@@ -110,9 +113,9 @@ export class OrganizationSetupController {
   @Get(['departments', 'setup/departments'])
   @RequireModule(HRMSModuleKey.DEPARTMENTS)
   @RequirePermissions('departments.view', 'departments.manage')
-  @ApiOperation({ summary: 'List all departments for organization' })
-  getDepartments(@Headers('x-tenant-id') tenantId: string) {
-    return this.tenantClient.send(MESSAGE_PATTERNS.ORGANIZATION_SETUP.GET_DEPARTMENTS, { tenantId });
+  @ApiOperation({ summary: 'List all departments for organization, each with the branches it works from. ?branchId= keeps one branch\'s departments' })
+  getDepartments(@Headers('x-tenant-id') tenantId: string, @Query('branchId', new ParseUUIDPipe({ optional: true })) branchId?: string) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.ORGANIZATION_SETUP.GET_DEPARTMENTS, { tenantId, branchId });
   }
 
   @ApiTags(TAGS.ORG_SETUP)
@@ -306,6 +309,27 @@ export class OrganizationSetupController {
       tenantId,
       dto,
     });
+  }
+
+  @ApiTags(TAGS.ORG_SETUP)
+  @Get('approval-flow')
+  @RequireModule(HRMSModuleKey.SETTINGS, ModuleAction.VIEW)
+  @RequirePermissions('settings.view', 'settings.manage')
+  @ApiOperation({
+    summary:
+      'How employee requests are approved: one step, or the reporting manager and then HR',
+  })
+  getApprovalFlow(@Headers('x-tenant-id') tenantId: string) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.ORGANIZATION_SETUP.GET_APPROVAL_FLOW, { tenantId });
+  }
+
+  @ApiTags(TAGS.ORG_SETUP)
+  @Put('approval-flow')
+  @RequireModule(HRMSModuleKey.SETTINGS, ModuleAction.EDIT)
+  @RequirePermissions('settings.edit', 'settings.manage')
+  @ApiOperation({ summary: 'Choose how employee requests are approved' })
+  updateApprovalFlow(@Headers('x-tenant-id') tenantId: string, @Body() dto: UpdateApprovalFlowDto) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.ORGANIZATION_SETUP.UPDATE_APPROVAL_FLOW, { tenantId, dto });
   }
 
   // ==========================================

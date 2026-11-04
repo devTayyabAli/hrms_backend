@@ -35,6 +35,7 @@ import {
   ORG_ADMIN_ROLE_NAME,
   CsvColumn,
   csvFilename,
+  grantsPermission,
   toCsv,
 } from '@app/common';
 import {
@@ -280,18 +281,19 @@ export class EmployeeInvitationController {
   async invite(
     @Headers('x-tenant-id') tenantId: string,
     @CurrentUser('id') actorUserId: string,
-    @CurrentUser('isFullAccess') isFullAccess: boolean,
+    @CurrentUser('permissions') permissions: string[] | undefined,
     @Body() dto: InviteEmployeeDto,
   ) {
-    // Anyone who may edit employees may invite them — but only an admin may
-    // hand out admin. Without this, HR could mint a full-access login.
-    if (dto.roleId && !isFullAccess) {
+    // Anyone who may edit employees may invite them — but only whoever
+    // manages roles may hand out the admin role. Without this, HR could
+    // mint an administrator login.
+    if (dto.roleId && !grantsPermission(permissions ?? [], 'user_management.manage')) {
       const role: any = await firstValueFrom(
         this.userClient.send(MESSAGE_PATTERNS.ROLE.GET_BY_ID, this.signingService.sign({ id: dto.roleId })),
       ).catch(() => null);
       if (!role) throw new NotFoundException('That role no longer exists.');
       if (role.name === ORG_ADMIN_ROLE_NAME) {
-        throw new ForbiddenException('Only an organization admin can invite someone as Organization Admin.');
+        throw new ForbiddenException('Only someone who manages roles can invite an Organization Admin.');
       }
     }
     return firstValueFrom(

@@ -219,18 +219,6 @@ export class OrganizationModulesController {
   }
 
   @ApiTags(TAGS.ORG_MODULES)
-  @Get('tickets')
-  @RequireModule(HRMSModuleKey.TICKETS)
-  @RequirePermissions('tickets.view', 'tickets.manage')
-  @ApiOperation({ summary: 'Helpdesk & Ticket Management' })
-  getTickets(@Headers('x-tenant-id') tenantId: string) {
-    return {
-      tenantId,
-      tickets: [{ id: 'tkt-1', subject: 'VPN Access issue', status: 'open' }],
-    };
-  }
-
-  @ApiTags(TAGS.ORG_MODULES)
   @Get('audit-logs')
   @RequireModule(HRMSModuleKey.REPORTS)
   @RequirePermissions('reports.view', 'reports.manage')

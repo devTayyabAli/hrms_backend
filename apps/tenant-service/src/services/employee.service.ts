@@ -17,6 +17,17 @@ import { TenantModelProviderService } from './tenant-model-provider.service';
 import { DataScopeService } from './data-scope.service';
 import { SubscriptionLimitService } from './subscription-limit.service';
 import { EmployeeInvitationService } from './employee-invitation.service';
+import { AssetClearanceService } from './asset-clearance.service';
+import { LearningAssignmentService } from './learning-assignment.service';
+import { LeaveRequestService } from './leave-request.service';
+import { OffboardingService } from './offboarding.service';
+import { PayrollCompensationService } from './payroll-compensation.service';
+import { EmployeePortalService } from './employee-portal.service';
+import { PerformanceDashboardService } from './performance-dashboard.service';
+import { PerformanceCycleService } from './performance-cycle.service';
+import { PerformanceSyncService } from './performance-sync.service';
+import { OrganizationHierarchyService } from './organization-hierarchy.service';
+import { WorkspaceTaskService } from './workspace-task.service';
 
 /** Flattened employee shape the Employees screen renders directly. */
 export interface EmployeeRow {
@@ -30,6 +41,8 @@ export interface EmployeeRow {
   phone: string | null;
   avatarUrl: string | null;
   department: { id: string; name: string } | null;
+  /** The office or location they work from. */
+  branch: { id: string; name: string } | null;
   designation: { id: string; title: string } | null;
   reportingManager: { id: string; name: string } | null;
   status: EmployeeStatus;
@@ -50,6 +63,7 @@ export interface GetEmployeesQuery {
   limit?: number;
   search?: string;
   departmentId?: string;
+  branchId?: string;
   designationId?: string;
   status?: EmployeeStatusFilter;
   sortBy?: EmployeeSortableField;
@@ -108,7 +122,18 @@ export class EmployeeService {
     private readonly modelProvider: TenantModelProviderService,
     private readonly subscriptionLimitService: SubscriptionLimitService,
     private readonly employeeInvitationService: EmployeeInvitationService,
+    private readonly assetClearance: AssetClearanceService,
     @Optional() private readonly dataScope?: DataScopeService,
+    @Optional() private readonly hierarchy?: OrganizationHierarchyService,
+    @Optional() private readonly workspaceTasks?: WorkspaceTaskService,
+    @Optional() private readonly learningAssignments?: LearningAssignmentService,
+    @Optional() private readonly leaveRequests?: LeaveRequestService,
+    @Optional() private readonly offboarding?: OffboardingService,
+    @Optional() private readonly compensation?: PayrollCompensationService,
+    @Optional() private readonly portal?: EmployeePortalService,
+    @Optional() private readonly performance?: PerformanceDashboardService,
+    @Optional() private readonly performanceCycles?: PerformanceCycleService,
+    @Optional() private readonly performanceSync?: PerformanceSyncService,
   ) {}
 
   // ==========================================
@@ -165,6 +190,7 @@ export class EmployeeService {
       department: employee.department
         ? { id: employee.department.id, name: employee.department.name }
         : null,
+      branch: employee.branch ? { id: employee.branch.id, name: employee.branch.name } : null,
       designation: employee.designation
         ? { id: employee.designation.id, title: employee.designation.title }
         : null,
@@ -246,11 +272,18 @@ export class EmployeeService {
     const DesignationModel =
       await this.modelProvider.getDesignationModel(tenantId);
     const EmployeeModel = await this.modelProvider.getEmployeeModel(tenantId);
+    const BranchModel = await this.modelProvider.getBranchModel(tenantId);
 
     return [
       {
         model: DepartmentModel,
         as: 'department',
+        attributes: ['id', 'name'],
+        required: false,
+      },
+      {
+        model: BranchModel,
+        as: 'branch',
         attributes: ['id', 'name'],
         required: false,
       },
@@ -273,6 +306,7 @@ export class EmployeeService {
     const where: any = { tenantId };
 
     if (query.departmentId) where.departmentId = query.departmentId;
+    if (query.branchId) where.branchId = query.branchId;
     if (query.designationId) where.designationId = query.designationId;
 
     if (query.status && query.status !== EmployeeStatusFilter.ALL) {
@@ -380,6 +414,7 @@ export class EmployeeService {
     tenantId: string,
     refs: {
       departmentId?: string | null;
+      branchId?: string | null;
       designationId?: string | null;
       reportingManagerId?: string | null;
     },
@@ -392,6 +427,13 @@ export class EmployeeService {
         where: { id: refs.departmentId, tenantId },
       });
       if (!found) this.badRequest('Department not found in this organization.');
+    }
+
+    if (refs.branchId) {
+      const BranchModel = await this.modelProvider.getBranchModel(tenantId);
+      const found: any = await BranchModel.findOne({ where: { id: refs.branchId, tenantId } });
+      if (!found) this.badRequest('Branch not found in this organization.');
+      if (found.isActive === false) this.badRequest('That branch is inactive. Choose an active one.');
     }
 
     if (refs.designationId) {
@@ -415,6 +457,9 @@ export class EmployeeService {
       if (!found) {
         this.badRequest('Reporting manager not found in this organization.');
       }
+      // Someone who reports to this employee (at any depth) cannot become
+      // their manager — that would close a reporting loop.
+      if (selfId) await this.hierarchy?.assertNoReportingCycle(tenantId, selfId, refs.reportingManagerId);
     }
   }
 
@@ -679,6 +724,7 @@ export class EmployeeService {
       email,
       phone: dto.phone ?? null,
       departmentId: dto.departmentId ?? null,
+      branchId: dto.branchId ?? null,
       designationId: dto.designationId ?? null,
       reportingManagerId: dto.reportingManagerId ?? null,
       joiningDate: dto.joiningDate ?? null,
@@ -690,6 +736,26 @@ export class EmployeeService {
     this.logger.log(
       `Employee ${employeeCode} (${email}) created for tenant ${tenantId}`,
     );
+
+    // The first assignment is the start of their reporting history.
+    await this.hierarchy?.recordEmployeeAssignment(
+      tenantId,
+      created.id,
+      { reportingManagerId: null, departmentId: null, designationId: null },
+      {
+        reportingManagerId: created.reportingManagerId ?? null,
+        departmentId: created.departmentId ?? null,
+        designationId: created.designationId ?? null,
+      },
+      { effectiveFrom: dto.joiningDate ?? undefined },
+    );
+
+    // Courses marked "assign on join". Best effort: the employee already exists.
+    if (this.learningAssignments && created.status === EmployeeStatus.ACTIVE) {
+      await this.learningAssignments.autoAssignOnJoin(tenantId, created.id);
+    }
+
+    await this.checkReviewCycles(tenantId, created.id);
 
     // Portal access is no longer granted automatically at hire — HR sends it
     // explicitly via the "Invite Employee" quick action
@@ -745,6 +811,7 @@ export class EmployeeService {
     if (dto.lastName !== undefined) patch.lastName = dto.lastName.trim();
     if (dto.phone !== undefined) patch.phone = dto.phone;
     if (dto.departmentId !== undefined) patch.departmentId = dto.departmentId;
+    if (dto.branchId !== undefined) patch.branchId = dto.branchId;
     if (dto.designationId !== undefined)
       patch.designationId = dto.designationId;
     if (dto.reportingManagerId !== undefined) {
@@ -757,7 +824,11 @@ export class EmployeeService {
     if (dto.status !== undefined) {
       Object.assign(
         patch,
-        this.resolveStatusChange(dto.status, dto.exitDate, employee.exitDate),
+        this.resolveStatusChange(
+          dto.status,
+          dto.exitDate ?? (dto.status === EmployeeStatus.RESIGNED ? ((await this.offboarding?.lastWorkingDayOf(tenantId, employeeId)) ?? undefined) : undefined),
+          employee.exitDate,
+        ),
       );
     } else if (dto.exitDate !== undefined) {
       patch.exitDate = dto.exitDate;
@@ -772,12 +843,45 @@ export class EmployeeService {
     );
     Object.assign(patch, profile);
 
+    // Final exit: not while equipment is still with them or something is unsettled.
+    if (patch.status === EmployeeStatus.RESIGNED && employee.status !== EmployeeStatus.RESIGNED) {
+      await this.assetClearance.assertCanLeave(tenantId, employeeId);
+      await this.offboarding?.assertCanLeave(tenantId, employeeId);
+    }
+
     const previousStatus = employee.status;
+    const previousAssignment = {
+      reportingManagerId: employee.reportingManagerId ?? null,
+      departmentId: employee.departmentId ?? null,
+      designationId: employee.designationId ?? null,
+    };
     await employee.update(patch);
     if (patch.status && patch.status !== previousStatus) {
       await this.syncPortalAccess(employee, previousStatus, patch.status);
+      await this.flagExitTasks(tenantId, employeeId, previousStatus, patch.status);
     }
+    // Manager, department or designation changed through the general edit
+    // form: recorded the same way as a change made on the hierarchy screen.
+    await this.hierarchy?.recordEmployeeAssignment(tenantId, employeeId, previousAssignment, {
+      reportingManagerId: patch.reportingManagerId,
+      departmentId: patch.departmentId,
+      designationId: patch.designationId,
+    });
+    await this.checkReviewCycles(tenantId, employeeId);
     return this.getOne(tenantId, employeeId);
+  }
+
+  /**
+   * Hired, confirmed after probation, moved, or back at work: a running review
+   * cycle that now includes them enrols them. Never fails the change itself.
+   */
+  private async checkReviewCycles(tenantId: string, employeeId: string): Promise<void> {
+    if (!this.performanceCycles) return;
+    try {
+      await this.performanceCycles.onEmployeeChange(tenantId, employeeId);
+    } catch (error: any) {
+      this.logger.warn(`Review cycles were not checked for ${employeeId}: ${error?.message ?? error}`);
+    }
   }
 
   /**
@@ -814,12 +918,94 @@ export class EmployeeService {
     });
     if (!employee) this.notFound(employeeId);
 
+    // Final exit: not while equipment is still with them or something is unsettled.
+    if (status === EmployeeStatus.RESIGNED && employee.status !== EmployeeStatus.RESIGNED) {
+      await this.assetClearance.assertCanLeave(tenantId, employeeId);
+      await this.offboarding?.assertCanLeave(tenantId, employeeId);
+    }
+
     const previousStatus = employee.status;
+    // Without an exit date, the last working day of their offboarding is it.
+    const exit = exitDate ?? (status === EmployeeStatus.RESIGNED ? ((await this.offboarding?.lastWorkingDayOf(tenantId, employeeId)) ?? undefined) : undefined);
     await employee.update(
-      this.resolveStatusChange(status, exitDate, employee.exitDate),
+      this.resolveStatusChange(status, exit, employee.exitDate),
     );
     await this.syncPortalAccess(employee, previousStatus, status);
+    await this.flagExitTasks(tenantId, employeeId, previousStatus, status);
+    await this.checkReviewCycles(tenantId, employeeId);
     return this.getOne(tenantId, employeeId);
+  }
+
+  /**
+   * Leaving the organization flags this person's open tasks for reassignment.
+   * Their completed tasks stay assigned to them. A failure here does not undo
+   * the exit.
+   */
+  private async flagExitTasks(tenantId: string, employeeId: string, from: EmployeeStatus, to: EmployeeStatus) {
+    if (to !== EmployeeStatus.RESIGNED || from === EmployeeStatus.RESIGNED) return;
+    if (this.workspaceTasks) {
+      try {
+        await this.workspaceTasks.flagOpenTasksForExit(tenantId, employeeId);
+      } catch (error: any) {
+        this.logger.warn(`Open tasks for ${employeeId} could not be flagged for reassignment: ${error?.message ?? error}`);
+      }
+    }
+    // Their open offboarding is complete.
+    if (this.offboarding) {
+      try {
+        await this.offboarding.completeForExit(tenantId, employeeId);
+      } catch (error: any) {
+        this.logger.warn(`Offboarding for ${employeeId} could not be completed: ${error?.message ?? error}`);
+      }
+    }
+    // Leave that was waiting on them goes to the next approver, or HR.
+    if (this.leaveRequests) {
+      try {
+        await this.leaveRequests.releaseWaitingOn(tenantId, employeeId);
+      } catch (error: any) {
+        this.logger.warn(`Leave waiting on ${employeeId} could not be handed on: ${error?.message ?? error}`);
+      }
+    }
+    // Reimbursement claims that were waiting on them go to the next stage, or HR.
+    if (this.compensation) {
+      try {
+        await this.compensation.releaseReimbursementsWaitingOn(tenantId, employeeId);
+      } catch (error: any) {
+        this.logger.warn(`Reimbursements waiting on ${employeeId} could not be handed on: ${error?.message ?? error}`);
+      }
+    }
+    // Their own open reviews are closed (kept, not deleted).
+    if (this.performanceSync) {
+      try {
+        await this.performanceSync.closeForExit(tenantId, employeeId);
+      } catch (error: any) {
+        this.logger.warn(`Open reviews of ${employeeId} could not be closed: ${error?.message ?? error}`);
+      }
+    }
+    // Reviews they were to complete go to the reviewed person's manager, or HR.
+    if (this.performance) {
+      try {
+        await this.performance.releaseReviewer(tenantId, employeeId);
+      } catch (error: any) {
+        this.logger.warn(`Reviews waiting on ${employeeId} could not be handed on: ${error?.message ?? error}`);
+      }
+    }
+    // Employee requests that were waiting on them go to the next stage, or HR.
+    if (this.portal) {
+      try {
+        await this.portal.releaseRequestsWaitingOn(tenantId, employeeId);
+      } catch (error: any) {
+        this.logger.warn(`Requests waiting on ${employeeId} could not be handed on: ${error?.message ?? error}`);
+      }
+    }
+    // Courses they had not finished are withdrawn; the ones they completed stay on record.
+    if (this.learningAssignments) {
+      try {
+        await this.learningAssignments.cancelOpenForExit(tenantId, employeeId);
+      } catch (error: any) {
+        this.logger.warn(`Open courses for ${employeeId} could not be withdrawn: ${error?.message ?? error}`);
+      }
+    }
   }
 
   /**
@@ -861,6 +1047,8 @@ export class EmployeeService {
     if (!employee) this.notFound(employeeId);
 
     await this.assertNoPayrollHistory(tenantId, [employeeId]);
+    await this.assertNoWorkHistory(tenantId, [employeeId]);
+    await this.assetClearance.assertHoldsNoAssets(tenantId, [employeeId]);
     await this.detachEmployeeReferences(tenantId, [employeeId]);
     const { userId, email, employeeCode } = employee;
     await employee.destroy();
@@ -938,6 +1126,9 @@ export class EmployeeService {
 
     if (foundIds.length > 0) {
       await this.assertNoPayrollHistory(tenantId, foundIds);
+      await this.assertNoWorkHistory(tenantId, foundIds);
+      await this.assertNoPerformanceHistory(tenantId, foundIds);
+      await this.assetClearance.assertHoldsNoAssets(tenantId, foundIds);
       await this.detachEmployeeReferences(tenantId, foundIds);
       await EmployeeModel.destroy({
         where: { tenantId, id: { [Op.in]: foundIds } },
@@ -956,6 +1147,51 @@ export class EmployeeService {
     }
 
     return { requested: unique.length, deleted: foundIds.length, notFound };
+  }
+
+  /**
+   * Performance reviews and goals are history: what was written about someone
+   * is not deleted as a side effect of removing them. Refuse the delete with a
+   * reason; marking them Resigned keeps everything and ends new assignments.
+   */
+  private async assertNoPerformanceHistory(tenantId: string, employeeIds: string[]): Promise<void> {
+    if (!employeeIds.length) return;
+    const Review = await this.modelProvider.getPerformanceReviewModel(tenantId);
+    const Goal = await this.modelProvider.getPerformanceGoalModel(tenantId);
+    const [reviews, goals] = await Promise.all([
+      Review.count({ where: { tenantId, employeeId: { [Op.in]: employeeIds } } }),
+      Goal.count({ where: { tenantId, employeeId: { [Op.in]: employeeIds } } }),
+    ]);
+    if (!reviews && !goals) return;
+    const parts = [reviews ? `${reviews} performance review${reviews === 1 ? '' : 's'}` : null, goals ? `${goals} goal${goals === 1 ? '' : 's'}` : null].filter(Boolean);
+    this.conflict(
+      `${employeeIds.length === 1 ? 'This employee has' : 'Some of these employees have'} ${parts.join(' and ')} in Performance. Their history is kept, so they cannot be deleted. Mark them Resigned instead.`,
+    );
+  }
+
+  /**
+   * Work in Projects & Tasks is history too: tasks someone did, projects they
+   * own. Refuse the delete with a reason, rather than failing on a database
+   * rule or leaving a project with no owner. Marking them Resigned keeps it all.
+   */
+  private async assertNoWorkHistory(tenantId: string, employeeIds: string[]): Promise<void> {
+    if (!employeeIds.length) return;
+    const { tasks, projectsOwned } = this.workspaceTasks
+      ? await this.workspaceTasks.workHistoryOf(tenantId, employeeIds)
+      : { tasks: 0, projectsOwned: 0 };
+    const training = this.learningAssignments ? await this.learningAssignments.countFor(tenantId, employeeIds) : 0;
+    if (!tasks && !projectsOwned && !training) return;
+    const parts = [
+      tasks ? `${tasks} task${tasks === 1 ? '' : 's'}` : null,
+      projectsOwned ? `${projectsOwned} project${projectsOwned === 1 ? '' : 's'} they own` : null,
+      training ? `${training} training record${training === 1 ? '' : 's'}` : null,
+    ].filter(Boolean);
+    const where = tasks || projectsOwned ? (training ? 'in Projects & Tasks and Learning' : 'in Projects & Tasks') : 'in Learning';
+    const who = employeeIds.length === 1 ? 'This employee has' : 'Some of these employees have';
+    this.conflict(
+      `${who} ${parts.join(' and ')} ${where}. Their history is kept, so they cannot be deleted. ` +
+        `${projectsOwned ? 'Hand over their projects, then ' : ''}Mark them Resigned instead.`,
+    );
   }
 
   /**
@@ -1010,8 +1246,6 @@ export class EmployeeService {
       this.modelProvider.getEmployeeDocumentModel(tenantId),
       this.modelProvider.getEmployeeRequestModel(tenantId),
       this.modelProvider.getEmployeeNotificationModel(tenantId),
-      this.modelProvider.getPerformanceGoalModel(tenantId),
-      this.modelProvider.getPerformanceReviewModel(tenantId),
     ]);
     for (const Model of ownedModels as any[]) {
       await Model.destroy({

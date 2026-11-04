@@ -10,7 +10,7 @@ import {
 import { ClientProxy } from '@nestjs/microservices';
 import { firstValueFrom, timeout } from 'rxjs';
 import { JwtService } from '@nestjs/jwt';
-import { SERVICES, MESSAGE_PATTERNS } from '@app/common';
+import { SERVICES, MESSAGE_PATTERNS, ORG_ADMIN_ROLE_NAME, isAdminTierCredentialRole } from '@app/common';
 
 interface MaintenanceState {
   enabled: boolean;
@@ -19,12 +19,16 @@ interface MaintenanceState {
   allowedAdmins?: string;
 }
 
-/** An organization admin by the claims on their token: full access, or an admin role. */
+/**
+ * An organization admin by the claims on their token: the Organization Admin
+ * role, or a legacy admin-tier credential. The role name is matched exactly;
+ * a custom role that merely contains "admin" is not an administrator.
+ */
 const isOrganizationAdmin = (user: any): boolean => {
   if (!user) return false;
   if (user.isFullAccess === true) return true;
   const roles: string[] = Array.isArray(user.roles) ? user.roles : user.role ? [user.role] : [];
-  return roles.some((role) => /admin/i.test(String(role)));
+  return roles.some((role) => role === ORG_ADMIN_ROLE_NAME || isAdminTierCredentialRole(String(role)));
 };
 
 /**

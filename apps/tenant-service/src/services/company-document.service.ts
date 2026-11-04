@@ -1,4 +1,4 @@
-import { HttpStatus, Injectable, Logger } from '@nestjs/common';
+import { HttpStatus, Injectable, Logger, Optional } from '@nestjs/common';
 import { Op, Sequelize } from 'sequelize';
 import {
   CompanyDocumentCategory,
@@ -8,6 +8,7 @@ import {
   UpdateCompanyDocumentDto,
 } from '@app/common';
 import { TenantModelProviderService } from './tenant-model-provider.service';
+import { PolicyAcknowledgementService, inAudience, normalizeAudience } from './policy-acknowledgement.service';
 import { writePayrollAudit as writeAudit } from './payroll-access';
 import { diffFields, employeeInclude, employeeSummary, workspaceError } from './workspace-shared';
 
@@ -33,6 +34,11 @@ export interface CompanyDocumentRow {
   sizeBytes: number;
   sizeLabel: string;
   publishedAt: Date | null;
+  /** How it is sent: who it is for (null is everyone) and whether it asks for acknowledgement. */
+  requiresAcknowledgement: boolean;
+  audience: { departmentIds: string[]; employeeIds: string[] } | null;
+  acknowledgeBy: string | null;
+  acknowledgementVersion: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -46,7 +52,10 @@ export interface CompanyDocumentRow {
 export class CompanyDocumentService {
   private readonly logger = new Logger(CompanyDocumentService.name);
 
-  constructor(private readonly modelProvider: TenantModelProviderService) {}
+  constructor(
+    private readonly modelProvider: TenantModelProviderService,
+    @Optional() private readonly acknowledgements?: PolicyAcknowledgementService,
+  ) {}
 
   private toRow(doc: any): CompanyDocumentRow {
     return {
@@ -62,6 +71,10 @@ export class CompanyDocumentService {
       sizeBytes: doc.sizeBytes ?? 0,
       sizeLabel: sizeLabel(doc.sizeBytes ?? 0),
       publishedAt: doc.publishedAt ?? null,
+      requiresAcknowledgement: doc.requiresAcknowledgement === true,
+      audience: normalizeAudience(doc.audience),
+      acknowledgeBy: doc.acknowledgeBy ?? null,
+      acknowledgementVersion: Number(doc.acknowledgementVersion ?? 1),
       createdAt: doc.createdAt,
       updatedAt: doc.updatedAt,
     };
@@ -121,9 +134,19 @@ export class CompanyDocumentService {
     };
   }
 
-  /** Self-service: published documents only. */
-  async getPublished(tenantId: string, query: GetCompanyDocumentsQueryDto) {
-    return { data: await this.findRows(tenantId, query, true) };
+  /**
+   * Self-service: published documents only, and only those meant for the
+   * viewer. A document sent to some departments or people is not shown to
+   * anyone else, and the audience itself is not part of what they see.
+   */
+  async getPublished(tenantId: string, query: GetCompanyDocumentsQueryDto, viewer?: { userId?: string; email?: string }) {
+    const rows = await this.findRows(tenantId, query, true);
+    const me = this.acknowledgements ? await this.acknowledgements.viewerOf(tenantId, viewer?.userId, viewer?.email) : null;
+    return {
+      data: rows
+        .filter((row) => !row.audience || (me !== null && inAudience(row.audience, me)))
+        .map((row) => ({ ...row, audience: null })),
+    };
   }
 
   private async findOwn(tenantId: string, documentId: string) {
@@ -174,6 +197,9 @@ export class CompanyDocumentService {
     if (dto.ownerEmployeeId !== undefined) await this.assertOwner(tenantId, dto.ownerEmployeeId);
 
     const replacingFile = Boolean(dto.fileId && dto.fileId !== doc.fileId);
+    const wasPublished = doc.status === CompanyDocumentStatus.PUBLISHED;
+    // A reworded policy is a new version: people who acknowledged the old one are asked again.
+    const newVersion = replacingFile && wasPublished && doc.requiresAcknowledgement === true;
     const next: Record<string, unknown> = {
       name: dto.name?.trim(),
       category: dto.category,
@@ -188,8 +214,14 @@ export class CompanyDocumentService {
     const previousFileId = replacingFile ? doc.fileId : null;
     if (Object.keys(changes).length) {
       if (changes.status && dto.status === CompanyDocumentStatus.PUBLISHED) next.publishedAt = new Date();
+      if (newVersion) next.acknowledgementVersion = Number(doc.acknowledgementVersion ?? 1) + 1;
       await doc.update(Object.fromEntries(Object.entries(next).filter(([, v]) => v !== undefined)));
       await writeAudit(this.modelProvider, this.logger, tenantId, 'company_documents', documentId, 'UPDATE', changes);
+      // Newly published, or a new version: ask the audience.
+      const nowPublished = !wasPublished && dto.status === CompanyDocumentStatus.PUBLISHED;
+      if ((nowPublished || newVersion) && this.acknowledgements) {
+        await this.acknowledgements.announce(tenantId, doc, undefined, newVersion ? 'Please acknowledge again' : 'Policy to acknowledge');
+      }
     }
     return { document: this.toRow(await this.findOwn(tenantId, documentId)), previousFileId };
   }

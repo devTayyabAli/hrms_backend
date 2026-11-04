@@ -1,4 +1,4 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { HttpStatus, Injectable, Optional } from '@nestjs/common';
 import { Op, fn, col } from 'sequelize';
 import {
   TenantException,
@@ -10,6 +10,7 @@ import {
   ExportResult,
 } from '@app/common';
 import { TenantModelProviderService } from './tenant-model-provider.service';
+import { OrganizationHierarchyService } from './organization-hierarchy.service';
 
 /** Flattened row for the admin Departments table. */
 export interface DepartmentRow {
@@ -93,7 +94,10 @@ const HEADCOUNT_STATUSES = [
  */
 @Injectable()
 export class OrganizationDepartmentsService {
-  constructor(private readonly modelProvider: TenantModelProviderService) {}
+  constructor(
+    private readonly modelProvider: TenantModelProviderService,
+    @Optional() private readonly hierarchy?: OrganizationHierarchyService,
+  ) {}
 
   private notFound(departmentId: string): never {
     throw new TenantException(
@@ -483,7 +487,11 @@ export class OrganizationDepartmentsService {
       }
     }
 
+    const previousManagerId = department.managerId ?? null;
     await department.update({ managerId: managerId ?? null });
+    // A head change moves who sees and approves for this department, so it
+    // is kept in the hierarchy history.
+    await this.hierarchy?.recordDepartmentHead(tenantId, departmentId, previousManagerId, managerId ?? null);
     return this.getOne(tenantId, departmentId);
   }
 }

@@ -233,6 +233,14 @@ export class UserServiceController {
     return this.roleService.resolveEffectiveAuthorization(dto.tenantId, dto.email, dto.credentialRole);
   }
 
+  /** Who holds a permission: tenant-service uses it to tell the people a request is waiting on. */
+  @MessagePattern(MESSAGE_PATTERNS.ROLE.PERMISSION_HOLDERS)
+  async handlePermissionHolders(@Payload() payload: { tenantId: string; permission: string }) {
+    const permission = String(payload?.permission ?? '').trim();
+    if (!permission) throw new BadRequestException('Name a permission.');
+    return this.roleService.findPermissionHolders(requireTenantId(payload.tenantId), permission);
+  }
+
   @MessagePattern(MESSAGE_PATTERNS.PERMISSION.GET_AVAILABLE)
   @UseGuards(SignedPayloadGuard)
   async handleGetAvailablePermissions(

@@ -17,23 +17,32 @@ import { ApiBearerAuth, ApiHeader, ApiOperation, ApiParam, ApiTags } from '@nest
 import { ClientProxy } from '@nestjs/microservices';
 import type { Response } from 'express';
 import {
+  ApproveAssetDeductionDto,
   AssetNoteDto,
   AssignAssetDto,
+  ConfirmAssetClearanceDto,
   CreateAssetCategoryDto,
   CompleteMaintenanceDto,
   CreateAssetDto,
   DEFAULT_HANDOVER_CHECKLIST,
   DisposeAssetDto,
   ExportAssetsQueryDto,
+  GetAssetDeductionsQueryDto,
+  GetAssetRequestsQueryDto,
   GetAssetsQueryDto,
+  GetOnboardingTasksQueryDto,
   HRMSModuleKey,
   MESSAGE_PATTERNS,
   ModuleAction,
+  OnboardingTaskCategory,
   ReturnAssetDto,
   SERVICES,
+  SetOnboardingTaskStatusDto,
   StartMaintenanceDto,
   UpdateAssetCategoryDto,
   UpdateAssetDto,
+  UpdateAssetRequestDto,
+  WaiveAssetDeductionDto,
   type CsvColumn,
 } from '@app/common';
 import {
@@ -184,6 +193,34 @@ export class AssetsController {
     return { data: DEFAULT_HANDOVER_CHECKLIST.map((item) => ({ item, checked: false })) };
   }
 
+  @Get('it-onboarding')
+  @RequireModule(HRMSModuleKey.ASSETS, ModuleAction.VIEW)
+  @RequirePermissions('assets.view', 'assets.manage')
+  @ApiOperation({
+    summary:
+      "The IT setup items on new hires' onboarding checklists (laptop, accounts, accessories). Only those items, and only the new hire's name, position and joining date",
+  })
+  getItOnboarding(@Headers('x-tenant-id') tenantId: string, @Query() query: GetOnboardingTasksQueryDto) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.ONBOARDING_TASK.GET_ALL, {
+      tenantId,
+      query: { ...query, category: OnboardingTaskCategory.IT_SETUP },
+    });
+  }
+
+  @Patch('it-onboarding/:taskId/status')
+  @RequireModule(HRMSModuleKey.ASSETS, ModuleAction.EDIT)
+  @RequirePermissions('assets.edit', 'assets.manage')
+  @ApiParam({ name: 'taskId', description: 'Onboarding task id (an IT setup item)' })
+  @ApiOperation({ summary: 'Tick or untick an IT setup item. Any other onboarding task is not found here' })
+  setItOnboardingStatus(
+    @Headers('x-tenant-id') tenantId: string,
+    @Param('taskId', ParseUUIDPipe) taskId: string,
+    @Body() dto: SetOnboardingTaskStatusDto,
+    @CurrentUser('id') actorUserId: string,
+  ) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.ONBOARDING_TASK.SET_IT_STATUS, { tenantId, taskId, dto, actorUserId });
+  }
+
   @Get('export')
   @RequireModule(HRMSModuleKey.ASSETS, ModuleAction.EXPORT)
   @RequirePermissions('assets.export', 'assets.manage')
@@ -211,6 +248,104 @@ export class AssetsController {
     @Body() dto: CreateAssetDto,
   ) {
     return this.tenantClient.send(MESSAGE_PATTERNS.ASSET.CREATE, { ...this.actor(tenantId, userId, email), dto });
+  }
+
+  @Get('alerts')
+  @RequireModule(HRMSModuleKey.ASSETS, ModuleAction.VIEW)
+  @RequirePermissions('assets.view', 'assets.manage')
+  @ApiOperation({ summary: 'For the notification bell: how many employee requests and salary deductions are waiting, and the newest request' })
+  getAlerts(@Headers('x-tenant-id') tenantId: string) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.ASSET.GET_ALERTS, { tenantId });
+  }
+
+  @Get('requests')
+  @RequireModule(HRMSModuleKey.ASSETS, ModuleAction.VIEW)
+  @RequirePermissions('assets.view', 'assets.manage')
+  @ApiOperation({ summary: 'Employee requests (repair / replacement / damage) — the IT / Admin queue, with counts per status' })
+  getRequests(@Headers('x-tenant-id') tenantId: string, @Query() query: GetAssetRequestsQueryDto) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.ASSET.GET_REQUESTS, { tenantId, query });
+  }
+
+  @Patch('requests/:requestId')
+  @RequireModule(HRMSModuleKey.ASSETS, ModuleAction.EDIT)
+  @RequirePermissions('assets.edit', 'assets.manage')
+  @ApiParam({ name: 'requestId' })
+  @ApiOperation({ summary: 'Move a request to In Progress, Resolved or Rejected (a rejection needs a reason)' })
+  updateRequest(
+    @Headers('x-tenant-id') tenantId: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('email') email: string,
+    @Param('requestId', ParseUUIDPipe) requestId: string,
+    @Body() dto: UpdateAssetRequestDto,
+  ) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.ASSET.UPDATE_REQUEST, { ...this.actor(tenantId, userId, email), requestId, dto });
+  }
+
+  @Get('deductions')
+  @RequireModule(HRMSModuleKey.ASSETS, ModuleAction.VIEW)
+  @RequirePermissions('assets.view', 'assets.manage', 'payroll.approve', 'payroll.manage')
+  @ApiOperation({ summary: 'Salary deductions raised for lost or damaged assets, and which are waiting for a decision' })
+  getDeductions(@Headers('x-tenant-id') tenantId: string, @Query() query: GetAssetDeductionsQueryDto) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.ASSET.GET_DEDUCTIONS, { tenantId, query });
+  }
+
+  @Post('deductions/:deductionId/approve')
+  @RequireModule(HRMSModuleKey.ASSETS, ModuleAction.EDIT)
+  @RequirePermissions('payroll.approve', 'payroll.manage')
+  @ApiParam({ name: 'deductionId' })
+  @ApiOperation({ summary: 'Approve a deduction: an amount and a payroll month. Payroll for that month takes it from the salary' })
+  approveDeduction(
+    @Headers('x-tenant-id') tenantId: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('email') email: string,
+    @Param('deductionId', ParseUUIDPipe) deductionId: string,
+    @Body() dto: ApproveAssetDeductionDto,
+  ) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.ASSET.APPROVE_DEDUCTION, { ...this.actor(tenantId, userId, email), deductionId, dto });
+  }
+
+  @Post('deductions/:deductionId/waive')
+  @RequireModule(HRMSModuleKey.ASSETS, ModuleAction.EDIT)
+  @RequirePermissions('payroll.approve', 'payroll.manage')
+  @ApiParam({ name: 'deductionId' })
+  @ApiOperation({ summary: 'Waive a deduction: take nothing from the employee' })
+  waiveDeduction(
+    @Headers('x-tenant-id') tenantId: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('email') email: string,
+    @Param('deductionId', ParseUUIDPipe) deductionId: string,
+    @Body() dto: WaiveAssetDeductionDto,
+  ) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.ASSET.WAIVE_DEDUCTION, { ...this.actor(tenantId, userId, email), deductionId, dto });
+  }
+
+  @Get('clearance/:employeeId')
+  @RequireModule(HRMSModuleKey.ASSETS, ModuleAction.VIEW)
+  @RequirePermissions('assets.view', 'assets.manage')
+  @ApiParam({ name: 'employeeId' })
+  @ApiOperation({ summary: 'Offboarding: what the employee still has, deductions waiting, and whether IT / Admin has cleared them' })
+  getClearance(
+    @Headers('x-tenant-id') tenantId: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('email') email: string,
+    @Param('employeeId', ParseUUIDPipe) employeeId: string,
+  ) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.ASSET.GET_CLEARANCE, { ...this.actor(tenantId, userId, email), employeeId });
+  }
+
+  @Post('clearance/:employeeId/confirm')
+  @RequireModule(HRMSModuleKey.ASSETS, ModuleAction.EDIT)
+  @RequirePermissions('assets.edit', 'assets.manage')
+  @ApiParam({ name: 'employeeId' })
+  @ApiOperation({ summary: 'IT / Admin confirms everything was handed back in satisfactory condition. Only possible once nothing is outstanding' })
+  confirmClearance(
+    @Headers('x-tenant-id') tenantId: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('email') email: string,
+    @Param('employeeId', ParseUUIDPipe) employeeId: string,
+    @Body() dto: ConfirmAssetClearanceDto,
+  ) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.ASSET.CONFIRM_CLEARANCE, { ...this.actor(tenantId, userId, email), employeeId, dto });
   }
 
   @Get(':assetId')

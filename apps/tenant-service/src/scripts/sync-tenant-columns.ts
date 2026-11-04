@@ -12,7 +12,7 @@
  * apps/auth-service/src/scripts/sync-platform-columns.ts, which does the same
  * job for the single platform database.
  *
- * Run it after adding a column to any model listed in OPERATIONAL_MODELS.
+ * Run it after adding a column to any model in TENANT_OPERATIONAL_MODELS.
  * New *tables* (e.g. employees, attendance_records on a tenant provisioned
  * before they existed) are created by this script too, since it syncs before
  * reconciling columns.
@@ -30,37 +30,7 @@
  */
 import * as dotenv from 'dotenv';
 import { QueryTypes, Sequelize } from 'sequelize';
-import { ProjectionOutbox } from '@app/database';
-import {
-  Department,
-  Designation,
-  Employee,
-  AttendanceRecord,
-  WorkingHours,
-  Shift,
-  EmployeeShift,
-  AssetCategory,
-  Asset,
-  AssetEvent,
-  AssetMaintenance,
-  ChatConversation,
-  ChatParticipant,
-  ChatMessage,
-  ChatPresence,
-  LeavePolicy,
-  AttendancePolicy,
-  OrganizationPolicy,
-  OrganizationModuleAccess,
-  PerformanceGoal,
-  PerformanceReview,
-  PayrollRun,
-  PayrollRecord,
-  EmployeeDocument,
-  EmployeeRequest,
-  EmployeeNotification,
-  EmployeeInvitation,
-  HrReportRun,
-} from '../models';
+import { TENANT_OPERATIONAL_MODELS } from '../services/tenant-model-provider.service';
 import {
   bindOperationalModels,
   createPlatformConnection,
@@ -74,50 +44,13 @@ dotenv.config({ path: '.env.development' });
 dotenv.config();
 
 /**
- * Must mirror the model list bound in
- * TenantModelProviderService.getConnection — anything missing here simply
- * never gets reconciled. Employee precedes AttendanceRecord so table
- * creation order satisfies the FK between them.
+ * The same list the running service binds (TENANT_OPERATIONAL_MODELS), in the
+ * same order: tables are created in that order, so a table follows the ones
+ * it has foreign keys to. It was once a copy of that list and drifted: nineteen
+ * models were missing, so their new columns never reached a tenant through this
+ * script. One list cannot drift.
  */
-const OPERATIONAL_MODELS = [
-  Department,
-  Designation,
-  Employee,
-  AttendanceRecord,
-  WorkingHours,
-  // Shifts: Shift before EmployeeShift, which FKs to it and to employees.
-  Shift,
-  EmployeeShift,
-  // Assets: the category and the asset before the events that FK to the asset.
-  AssetCategory,
-  Asset,
-  AssetEvent,
-  AssetMaintenance,
-  // Messages: the conversation before the participants and messages that FK to it.
-  ChatConversation,
-  ChatParticipant,
-  ChatMessage,
-  ChatPresence,
-  LeavePolicy,
-  AttendancePolicy,
-  OrganizationPolicy,
-  OrganizationModuleAccess,
-  // Performance and payroll columns added after those tables first existed.
-  // Employee is already earlier in this list, which these FKs require.
-  PerformanceGoal,
-  PerformanceReview,
-  PayrollRun,
-  PayrollRecord,
-  EmployeeDocument,
-  EmployeeRequest,
-  EmployeeNotification,
-  // HR Portal: employee portal invitations and the report run log.
-  EmployeeInvitation,
-  HrReportRun,
-  // SuperAdmin read model: the per-tenant outbox the relay drains. Must exist
-  // before any service that emits projection events is deployed.
-  ProjectionOutbox,
-];
+const OPERATIONAL_MODELS = TENANT_OPERATIONAL_MODELS;
 
 interface TenantRow {
   id: string;

@@ -182,9 +182,10 @@ export abstract class BaseTenantModelProvider {
    *
    * One query lists the tables and columns that exist. Missing tables are
    * created, in registration order (so a table is created after the ones it
-   * has FKs to), and columns a model has gained since are added. The only
-   * thing skipped is adding a new index to an existing table — set
-   * TENANT_DB_SYNC_MODE=full when a change needs that.
+   * has FKs to), and columns a model has gained since are added. A new member
+   * of an existing Postgres enum is added too, so a status such as PLANNED
+   * can be stored. The thing still skipped is adding a new index to an
+   * existing table — set TENANT_DB_SYNC_MODE=full when a change needs that.
    */
   private async createMissingTables(connection: Sequelize): Promise<void> {
     // One catalog query covers both: which tables exist, and their columns.
@@ -220,6 +221,56 @@ export abstract class BaseTenantModelProvider {
           // e.g. NOT NULL without a default on a table that has rows. Logged,
           // not thrown: one column must not take every request down with it.
           this.logger.error(`Could not add "${name}"."${column}": ${error?.message ?? error}`);
+        }
+      }
+    }
+    await this.addMissingEnumValues(connection);
+  }
+
+  /**
+   * Sequelize names a column enum `enum_<table>_<field>`. A value added to
+   * the model later is not applied by addColumn, and an insert of that value
+   * fails until the type grows. Each value is its own statement: Postgres
+   * refuses ADD VALUE inside a transaction on older servers, and an
+   * already-present value is ignored.
+   */
+  private async addMissingEnumValues(connection: Sequelize): Promise<void> {
+    const [existing] = (await connection.query(
+      `SELECT t.typname, e.enumlabel
+         FROM pg_type t
+         JOIN pg_enum e ON e.enumtypid = t.oid
+         JOIN pg_namespace n ON n.oid = t.typnamespace
+        WHERE n.nspname = 'public'`,
+    )) as [{ typname: string; enumlabel: string }[], unknown];
+    const labelsByType = new Map<string, Set<string>>();
+    for (const row of existing) {
+      let labels = labelsByType.get(row.typname);
+      if (!labels) {
+        labels = new Set();
+        labelsByType.set(row.typname, labels);
+      }
+      labels.add(row.enumlabel);
+    }
+
+    for (const model of Object.values(connection.models)) {
+      const table = model.getTableName();
+      const tableName = typeof table === 'string' ? table : table.tableName;
+      for (const attribute of Object.values(model.getAttributes()) as any[]) {
+        const values: string[] | undefined = attribute?.type?.values;
+        if (!Array.isArray(values) || !values.length) continue;
+        const field: string = attribute.field || attribute.fieldName;
+        const typeName = `enum_${tableName}_${field}`;
+        const present = labelsByType.get(typeName);
+        if (!present) continue;
+        for (const value of values) {
+          if (present.has(value)) continue;
+          this.logger.log(`Adding enum value "${typeName}"."${value}"`);
+          try {
+            await connection.query(`ALTER TYPE "${typeName}" ADD VALUE IF NOT EXISTS '${value.replace(/'/g, "''")}'`);
+            present.add(value);
+          } catch (error: any) {
+            this.logger.error(`Could not add enum value "${typeName}"."${value}": ${error?.message ?? error}`);
+          }
         }
       }
     }

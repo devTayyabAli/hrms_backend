@@ -19,6 +19,7 @@ import {
   ReimbursementDto,
   ReimbursementQueryDto,
   SalaryStructureDto,
+  SalaryRevisionRequestQueryDto,
   SaveCompensationDto,
   UpdatePayrollComponentDto,
 } from '@app/common';
@@ -50,6 +51,8 @@ const COMPONENTS_VIEW = ['payroll.components.view', 'payroll.view', 'payroll.man
 const COMPONENTS_MANAGE = ['payroll.components.manage', 'payroll.manage'];
 const COMPENSATION_VIEW = ['payroll.compensation.view', 'payroll.view', 'payroll.manage'];
 const COMPENSATION_MANAGE = ['payroll.compensation.manage', 'payroll.edit', 'payroll.manage'];
+// Approving a salary change is its own grant, so whoever proposes it cannot also approve it.
+const COMPENSATION_APPROVE = ['payroll.compensation.approve', 'payroll.manage'];
 const LOANS_VIEW = ['payroll.loans.view', 'payroll.manage'];
 const LOANS_MANAGE = ['payroll.loans.manage', 'payroll.manage'];
 const ADJUSTMENTS_VIEW = ['payroll.adjustments.view', 'payroll.view', 'payroll.manage'];
@@ -174,6 +177,33 @@ export class PayrollCompensationController {
   @ApiOperation({ summary: 'Save compensation from an effective date — a new revision; never into an approved month' })
   saveCompensation(@Headers('x-tenant-id') tenantId: string, @Param('employeeId', ParseUUIDPipe) employeeId: string, @Body() dto: SaveCompensationDto) {
     return this.send(MESSAGE_PATTERNS.PAYROLL_COMPENSATION.SAVE_COMPENSATION, { tenantId, employeeId, dto });
+  }
+
+  @Get('salary-revisions')
+  @RequireModule(HRMSModuleKey.PAYROLL, ModuleAction.VIEW)
+  @RequirePermissions(...COMPENSATION_VIEW, ...COMPENSATION_APPROVE)
+  @ApiOperation({ summary: 'Proposed salary changes: waiting, approved, rejected, withdrawn' })
+  listSalaryRevisions(@Headers('x-tenant-id') tenantId: string, @Query() query: SalaryRevisionRequestQueryDto) {
+    return this.send(MESSAGE_PATTERNS.PAYROLL_COMPENSATION.LIST_SALARY_REQUESTS, { tenantId, query });
+  }
+
+  @Post('salary-revisions/:id/decision')
+  @RequireModule(HRMSModuleKey.PAYROLL, ModuleAction.EDIT)
+  @RequirePermissions(...COMPENSATION_APPROVE)
+  @ApiParam({ name: 'id' })
+  @ApiOperation({ summary: 'Approve or reject a proposed salary change. Not for the person who proposed it. Approving the last stage writes the revision' })
+  decideSalaryRevision(@Headers('x-tenant-id') tenantId: string, @Param('id', ParseUUIDPipe) id: string, @Body() dto: DecideReimbursementDto) {
+    const { payrollPeriod: _ignored, ...decision } = dto;
+    return this.send(MESSAGE_PATTERNS.PAYROLL_COMPENSATION.DECIDE_SALARY_REQUEST, { tenantId, id, dto: decision });
+  }
+
+  @Post('salary-revisions/:id/cancel')
+  @RequireModule(HRMSModuleKey.PAYROLL, ModuleAction.EDIT)
+  @RequirePermissions(...COMPENSATION_MANAGE)
+  @ApiParam({ name: 'id' })
+  @ApiOperation({ summary: 'Withdraw a proposed salary change that is still waiting. Only whoever proposed it' })
+  cancelSalaryRevision(@Headers('x-tenant-id') tenantId: string, @Param('id', ParseUUIDPipe) id: string) {
+    return this.send(MESSAGE_PATTERNS.PAYROLL_COMPENSATION.CANCEL_SALARY_REQUEST, { tenantId, id, dto: { decision: 'REJECT' } });
   }
 
   @Get('employees/:employeeId/recurring')

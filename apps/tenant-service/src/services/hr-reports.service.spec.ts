@@ -1,4 +1,5 @@
 import { HttpStatus } from '@nestjs/common';
+import { Op } from 'sequelize';
 import { HrReportFormat, HrReportRange, HrReportType, LeaveRequestStatus } from '@app/common';
 import { HrReportsService } from './hr-reports.service';
 
@@ -18,6 +19,7 @@ describe('HrReportsService', () => {
   let newHireModel: any;
   let taskModel: any;
   let departmentModel: any;
+  let modelProvider: any;
   let service: HrReportsService;
 
   beforeEach(() => {
@@ -32,7 +34,7 @@ describe('HrReportsService', () => {
     taskModel = { findAll: jest.fn().mockResolvedValue([]) };
     departmentModel = { findAll: jest.fn().mockResolvedValue([]) };
 
-    const modelProvider = {
+    modelProvider = {
       getHrReportRunModel: jest.fn().mockResolvedValue(runModel),
       getEmployeeModel: jest.fn().mockResolvedValue(employeeModel),
       getAttendanceRecordModel: jest.fn().mockResolvedValue(attendanceModel),
@@ -357,5 +359,23 @@ describe('HrReportsService', () => {
       expect(result).toHaveProperty('rows');
       expect(result).toHaveProperty('truncated', false);
     });
+  });
+
+  it('limits an employee report to the people the caller can see', async () => {
+    const scoped = new HrReportsService(modelProvider, {
+      employeeWhere: async (_tenant: string, field: string) => ({ [field]: { [Op.in]: ['emp-1'] } }),
+    } as any);
+
+    await scoped.generate(
+      TENANT,
+      { type: HrReportType.EMPLOYEE, range: HrReportRange.THIS_MONTH } as any,
+      USER,
+    );
+
+    expect(employeeModel.findAll).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ id: { [Op.in]: ['emp-1'] } }),
+      }),
+    );
   });
 });

@@ -33,6 +33,7 @@ import {
   UpdateEmployeeDto,
   UpdateEmployeeStatusDto,
   BulkDeleteEmployeesDto,
+  UpdateEmployeeReportingDto,
 } from '@app/common';
 import {
   JwtAuthGuard,
@@ -269,6 +270,68 @@ export class EmployeesController {
       employeeId,
       dto,
     });
+  }
+
+  // ==========================================
+  // Department Hierarchy: one employee's place in the structure.
+  // Narrowed to the caller's data scope in the tenant service.
+  // ==========================================
+
+  @ApiTags(TAGS.ORG_DEPARTMENTS)
+  @Get(':employeeId/reporting')
+  @RequireModule(HRMSModuleKey.EMPLOYEE, ModuleAction.VIEW)
+  @RequirePermissions('employee.view', 'employee.manage')
+  @ApiOperation({
+    summary:
+      "An employee's reporting position: department, designation, reporting manager, the chain of managers above them (the approval route), their direct reports and the departments they head",
+  })
+  @ApiParam({ name: 'employeeId', format: 'uuid' })
+  getEmployeeReporting(
+    @Headers('x-tenant-id') tenantId: string,
+    @Param('employeeId') employeeId: string,
+  ) {
+    return this.tenantClient.send(
+      MESSAGE_PATTERNS.ORGANIZATION_HIERARCHY.GET_EMPLOYEE_REPORTING,
+      { tenantId, employeeId },
+    );
+  }
+
+  @ApiTags(TAGS.ORG_DEPARTMENTS)
+  @Get(':employeeId/reporting/history')
+  @RequireModule(HRMSModuleKey.EMPLOYEE, ModuleAction.VIEW)
+  @RequirePermissions('employee.view', 'employee.manage')
+  @ApiOperation({
+    summary: 'Every manager, department and designation change for this employee, newest first',
+  })
+  @ApiParam({ name: 'employeeId', format: 'uuid' })
+  getEmployeeReportingHistory(
+    @Headers('x-tenant-id') tenantId: string,
+    @Param('employeeId') employeeId: string,
+  ) {
+    return this.tenantClient.send(
+      MESSAGE_PATTERNS.ORGANIZATION_HIERARCHY.GET_EMPLOYEE_REPORTING_HISTORY,
+      { tenantId, employeeId },
+    );
+  }
+
+  @ApiTags(TAGS.ORG_DEPARTMENTS)
+  @Patch(':employeeId/reporting')
+  @RequireModule(HRMSModuleKey.EMPLOYEE, ModuleAction.EDIT)
+  @RequirePermissions('employee.edit', 'employee.manage')
+  @ApiOperation({
+    summary:
+      'Move an employee: new reporting manager, department and/or designation, with an effective date and note. Refuses a circular reporting line; recorded in the reporting history',
+  })
+  @ApiParam({ name: 'employeeId', format: 'uuid' })
+  updateEmployeeReporting(
+    @Headers('x-tenant-id') tenantId: string,
+    @Param('employeeId') employeeId: string,
+    @Body() dto: UpdateEmployeeReportingDto,
+  ) {
+    return this.tenantClient.send(
+      MESSAGE_PATTERNS.ORGANIZATION_HIERARCHY.UPDATE_EMPLOYEE_REPORTING,
+      { tenantId, employeeId, dto },
+    );
   }
 
   @ApiTags(TAGS.ORG_EMPLOYEES)

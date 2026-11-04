@@ -10,7 +10,7 @@ import {
   BelongsTo,
   HasMany,
 } from 'sequelize-typescript';
-import { WorkspaceProjectStatus } from '@app/common';
+import { WorkspaceProjectPriority, WorkspaceProjectStatus } from '@app/common';
 import { Employee } from './employee.model';
 import { Department } from './department.model';
 import { WorkspaceTask } from './workspace-task.model';
@@ -67,12 +67,38 @@ export class WorkspaceProject extends Model {
   @Column({ type: DataType.ENUM(...Object.values(WorkspaceProjectStatus)), allowNull: false })
   declare status: WorkspaceProjectStatus;
 
+  /** Optional. A task due date should fall on or after this day. */
+  @Column({ type: DataType.DATEONLY, allowNull: true })
+  declare startDate: string | null;
+
+  /** Expected end. A task due date should fall on or before this day. */
   @Column({ type: DataType.DATEONLY, allowNull: true })
   declare dueDate: string | null;
+
+  /** Nullable so an existing database can gain the column without a backfill. Reads treat a missing value as Medium. */
+  @Default(WorkspaceProjectPriority.MEDIUM)
+  @Column({ type: DataType.ENUM(...Object.values(WorkspaceProjectPriority)), allowNull: true })
+  declare priority: WorkspaceProjectPriority | null;
+
+  /** Free-text place. Not an office or branch. */
+  @Column({ type: DataType.STRING(150), allowNull: true })
+  declare location: string | null;
+
+  /** Short labels. Null means none; the service never returns null. */
+  @Column({ type: DataType.JSONB, allowNull: true })
+  declare tags: string[] | null;
 
   /** The next milestone, e.g. "UAT sign-off". */
   @Column({ type: DataType.STRING(150), allowNull: true })
   declare milestone: string | null;
+
+  /**
+   * Hidden from people who are not on the project, unless their role can view
+   * confidential projects. Null is the same as not confidential.
+   */
+  @Default(false)
+  @Column({ type: DataType.BOOLEAN, allowNull: true })
+  declare confidential: boolean | null;
 
   @Column({ type: DataType.UUID, allowNull: true })
   declare createdByUserId: string | null;

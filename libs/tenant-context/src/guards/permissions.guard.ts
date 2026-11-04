@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { IS_PUBLIC_KEY } from '@app/common';
-import { PERMISSIONS_KEY } from '../decorators/permissions.decorator';
+import { ALLOW_PROJECT_OWNER_KEY, PERMISSIONS_KEY } from '../decorators/permissions.decorator';
 
 @Injectable()
 export class PermissionsGuard implements CanActivate {
@@ -79,6 +79,13 @@ export class PermissionsGuard implements CanActivate {
     });
 
     if (!hasPermission) {
+      // A route marked for project owners lets the caller through; the service
+      // behind it decides whether they own the project it is about.
+      const deferToOwner = this.reflector.getAllAndOverride<boolean>(ALLOW_PROJECT_OWNER_KEY, [
+        context.getHandler(),
+        context.getClass(),
+      ]);
+      if (deferToOwner === true) return true;
       throw new ForbiddenException(
         `User missing required permissions: ${requiredPermissions.join(', ')}`,
       );

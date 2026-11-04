@@ -543,7 +543,7 @@ export class TenantProvisioningService {
       }
 
       // Step B: Initialize Base Schema & Migrations idempotently (Phase I)
-      await this.runMigrationsAndBaseSchema(databaseName);
+      await this.runMigrationsAndBaseSchema(databaseName, tenantId);
       BaseTenantModelProvider.markTenantSynced(tenant.id);
 
       // Step C: Save / Update TenantDatabaseConfig (Phase H)
@@ -715,6 +715,7 @@ export class TenantProvisioningService {
    */
   private async runMigrationsAndBaseSchema(
     databaseName: string,
+    tenantId: string,
   ): Promise<void> {
     const creds = resolveDbCredentials('tenant');
     const sequelize = new Sequelize({
@@ -753,6 +754,17 @@ export class TenantProvisioningService {
 
       // Sync base tables idempotently
       await sequelize.sync({ force: false });
+
+      // New organizations start on the two-step approval. A row already
+      // there is left alone, so retrying provisioning never flips an
+      // organization that has since chosen the single step.
+      const ApprovalSetting = sequelize.models.ApprovalSetting;
+      if (ApprovalSetting) {
+        await ApprovalSetting.findOrCreate({
+          where: { tenantId },
+          defaults: { tenantId, flow: 'MANAGER_THEN_HR' },
+        });
+      }
 
       // Ensure designation code index is scoped per department, not globally
       // eslint-disable-next-line no-restricted-syntax -- static DDL for index schema fix

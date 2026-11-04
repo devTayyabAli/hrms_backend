@@ -11,6 +11,7 @@ import {
 } from 'sequelize-typescript';
 import { EmployeeStatus } from '@app/common';
 import { Department } from './department.model';
+import { Branch } from './branch.model';
 import { Designation } from './designation.model';
 
 /**
@@ -73,6 +74,14 @@ export class Employee extends Model {
 
   @BelongsTo(() => Department, 'departmentId')
   declare department: Department;
+
+  /** The office or location they work from. Null until one is chosen. */
+  @ForeignKey(() => Branch)
+  @Column({ type: DataType.UUID, allowNull: true })
+  declare branchId: string | null;
+
+  @BelongsTo(() => Branch, 'branchId')
+  declare branch: Branch;
 
   /** Surfaces as the "Role" column on the Employees screen. */
   @ForeignKey(() => Designation)

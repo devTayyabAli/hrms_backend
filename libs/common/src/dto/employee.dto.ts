@@ -88,6 +88,11 @@ export class GetEmployeesQueryDto {
   @IsUUID()
   departmentId?: string;
 
+  @ApiProperty({ required: false, description: 'Filter by branch id' })
+  @IsOptional()
+  @IsUUID()
+  branchId?: string;
+
   @ApiProperty({ required: false, description: 'Filter by designation id' })
   @IsOptional()
   @IsUUID()
@@ -131,6 +136,11 @@ export class ExportEmployeesQueryDto {
   @IsOptional()
   @IsUUID()
   departmentId?: string;
+
+  @ApiProperty({ required: false, description: 'Branch (office or location)' })
+  @IsOptional()
+  @IsUUID()
+  branchId?: string;
 
   @ApiProperty({ required: false })
   @IsOptional()
@@ -373,6 +383,11 @@ export class CreateEmployeeDto extends EmployeeProfileFieldsDto {
   @IsUUID()
   departmentId?: string;
 
+  @ApiProperty({ required: false, description: 'Branch (office or location) they work from' })
+  @IsOptional()
+  @IsUUID()
+  branchId?: string;
+
   @ApiProperty({
     required: false,
     description: 'Designation — the Role column on the Employees screen',
@@ -457,6 +472,11 @@ export class UpdateEmployeeDto extends EmployeeProfileFieldsDto {
   @IsOptional()
   @IsUUID()
   departmentId?: string;
+
+  @ApiProperty({ required: false, description: 'Branch (office or location)' })
+  @IsOptional()
+  @IsUUID()
+  branchId?: string;
 
   @ApiProperty({ required: false })
   @IsOptional()

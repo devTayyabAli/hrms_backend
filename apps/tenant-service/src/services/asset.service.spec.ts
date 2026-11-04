@@ -1,5 +1,5 @@
 import { Op, UniqueConstraintError } from 'sequelize';
-import { AssetCondition, AssetStatus, EmployeeStatus } from '@app/common';
+import { AssetCondition, AssetStatus, EmployeeNotificationKind, EmployeeStatus } from '@app/common';
 import { AssetService, DEFAULT_ASSET_CATEGORIES } from './asset.service';
 
 const TENANT = '11111111-1111-4111-8111-111111111111';
@@ -33,6 +33,8 @@ describe('AssetService', () => {
   let categoryModel: any;
   let eventModel: any;
   let maintenanceModel: any;
+  let deductionModel: any;
+  let notificationModel: any;
   let employeeModel: any;
   let sequelize: any;
   let people: Record<string, any>;
@@ -83,6 +85,12 @@ describe('AssetService', () => {
       findOne: jest.fn().mockResolvedValue(null),
       create: jest.fn(async (values: any) => row({ id: 'job-1', ...values })),
     };
+    deductionModel = {
+      findOne: jest.fn().mockResolvedValue(null),
+      findAll: jest.fn().mockResolvedValue([]),
+      create: jest.fn().mockResolvedValue({}),
+    };
+    notificationModel = { create: jest.fn().mockResolvedValue({}) };
     employeeModel = { findOne: jest.fn(async ({ where }: any) => people[where.id] ?? null) };
 
     const provider: any = {
@@ -90,6 +98,8 @@ describe('AssetService', () => {
       getAssetCategoryModel: jest.fn().mockResolvedValue(categoryModel),
       getAssetEventModel: jest.fn().mockResolvedValue(eventModel),
       getAssetMaintenanceModel: jest.fn().mockResolvedValue(maintenanceModel),
+      getAssetDeductionFlagModel: jest.fn().mockResolvedValue(deductionModel),
+      getEmployeeNotificationModel: jest.fn().mockResolvedValue(notificationModel),
       getDepartmentModel: jest.fn().mockResolvedValue({}),
       getEmployeeModel: jest.fn().mockResolvedValue(employeeModel),
     };
@@ -495,6 +505,54 @@ describe('AssetService', () => {
     });
   });
 
+  describe('telling the employee', () => {
+    it('sends a notification pointing at My Assets when an asset is assigned', async () => {
+      afterAction(existing());
+
+      await service.assign(actor, ASSET, { employeeId: AYESHA, checklist: CHECKLIST });
+
+      expect(notificationModel.create).toHaveBeenCalledTimes(1);
+      expect(notificationModel.create.mock.calls[0][0]).toMatchObject({
+        tenantId: TENANT,
+        employeeId: AYESHA,
+        kind: EmployeeNotificationKind.ASSET,
+        title: 'Asset assigned to you',
+        readAt: null,
+      });
+      expect(notificationModel.create.mock.calls[0][0].body).toContain('MacBook Pro 14" (AST-0001)');
+      expect(notificationModel.create.mock.calls[0][0].body).toContain('My Assets');
+    });
+
+    it('also tells them when the asset is given to them as it is added', async () => {
+      assetModel.findOne.mockResolvedValue(existing({ status: AssetStatus.IN_USE, assignedEmployeeId: AYESHA, assetCode: 'AST-0009', name: 'Phone' }));
+
+      await service.createAsset(actor, { name: 'Phone', categoryId: CATEGORY, assignedEmployeeId: AYESHA, checklist: CHECKLIST });
+
+      expect(notificationModel.create.mock.calls[0][0]).toMatchObject({ employeeId: AYESHA, kind: 'ASSET' });
+      expect(notificationModel.create.mock.calls[0][0].body).toContain('Phone (AST-0009)');
+    });
+
+    it('says nothing when there is no one to tell, or the handover was refused', async () => {
+      assetModel.findOne.mockResolvedValue(existing());
+      await service.createAsset(actor, { name: 'Spare', categoryId: CATEGORY });
+
+      afterAction(existing({ status: AssetStatus.DISPOSED }));
+      await expect(service.assign(actor, ASSET, { employeeId: AYESHA, checklist: CHECKLIST })).rejects.toMatchObject({ status: 409 });
+
+      expect(notificationModel.create).not.toHaveBeenCalled();
+    });
+
+    it('still completes the handover when the notification cannot be stored', async () => {
+      const asset = existing();
+      afterAction(asset);
+      notificationModel.create.mockRejectedValue(new Error('older tenant schema'));
+
+      await expect(service.assign(actor, ASSET, { employeeId: AYESHA, checklist: CHECKLIST })).resolves.toBeDefined();
+
+      expect(asset.update.mock.calls[0][0]).toMatchObject({ status: 'IN_USE', assignedEmployeeId: AYESHA });
+    });
+  });
+
   describe('returning', () => {
     it('puts it back in stock when it comes back in good or fair condition, recording the condition and the former holder', async () => {
       const asset = existing({ status: AssetStatus.IN_USE, assignedEmployeeId: AYESHA });
@@ -502,7 +560,7 @@ describe('AssetService', () => {
 
       await service.returnAsset(actor, ASSET, { condition: AssetCondition.FAIR, note: 'Left the company' });
 
-      expect(asset.update.mock.calls[0][0]).toEqual({ status: 'AVAILABLE', assignedEmployeeId: null, assignedAt: null });
+      expect(asset.update.mock.calls[0][0]).toEqual({ status: 'AVAILABLE', assignedEmployeeId: null, assignedAt: null, acceptedAt: null, acceptedSignature: null });
       expect(recorded()[0]).toMatchObject({
         type: 'RETURNED',
         toStatus: 'AVAILABLE',
@@ -519,7 +577,7 @@ describe('AssetService', () => {
 
       await service.returnAsset(actor, ASSET, { condition: AssetCondition.DAMAGED });
 
-      expect(asset.update.mock.calls[0][0]).toEqual({ status: 'DAMAGED', assignedEmployeeId: null, assignedAt: null });
+      expect(asset.update.mock.calls[0][0]).toEqual({ status: 'DAMAGED', assignedEmployeeId: null, assignedAt: null, acceptedAt: null, acceptedSignature: null });
       expect(recorded()[0]).toMatchObject({ toStatus: 'DAMAGED', details: { condition: 'DAMAGED' } });
     });
 
@@ -731,6 +789,97 @@ describe('AssetService', () => {
       afterAction(existing({ status: AssetStatus.DISPOSED }));
 
       await expect(service.dispose(actor, ASSET, {})).rejects.toMatchObject({ status: 409 });
+    });
+  });
+
+  describe('salary deductions for lost and damaged assets', () => {
+    it('raises a pending deduction, suggesting what the asset cost, when an asset someone holds is reported lost', async () => {
+      afterAction(existing({ status: AssetStatus.IN_USE, assignedEmployeeId: AYESHA, purchaseCost: '1899.50' }));
+
+      await service.markLost(actor, ASSET, 'Left on a train');
+
+      expect(deductionModel.create.mock.calls[0][0]).toMatchObject({
+        assetId: ASSET,
+        employeeId: AYESHA,
+        reason: 'LOST',
+        status: 'PENDING',
+        suggestedAmount: '1899.50',
+        note: 'Left on a train',
+        raisedBy: 'admin@example.com',
+      });
+    });
+
+    it('raises one when it is reported damaged, or comes back damaged', async () => {
+      afterAction(existing({ status: AssetStatus.IN_USE, assignedEmployeeId: AYESHA }));
+      await service.markDamaged(actor, ASSET, 'Dropped');
+      expect(deductionModel.create.mock.calls[0][0]).toMatchObject({ reason: 'DAMAGED', employeeId: AYESHA, suggestedAmount: null });
+
+      deductionModel.create.mockClear();
+      afterAction(existing({ status: AssetStatus.IN_USE, assignedEmployeeId: AYESHA }));
+      await service.returnAsset(actor, ASSET, { condition: AssetCondition.DAMAGED });
+      expect(deductionModel.create.mock.calls[0][0]).toMatchObject({ reason: 'DAMAGED', employeeId: AYESHA });
+    });
+
+    it('raises none for an asset nobody has, or one handed back in good condition', async () => {
+      afterAction(existing());
+      await service.markLost(actor, ASSET);
+
+      afterAction(existing({ status: AssetStatus.IN_USE, assignedEmployeeId: AYESHA }));
+      await service.returnAsset(actor, ASSET, { condition: AssetCondition.GOOD });
+
+      expect(deductionModel.create).not.toHaveBeenCalled();
+    });
+
+    it('does not raise the same damage twice: reported, then returned damaged', async () => {
+      deductionModel.findOne.mockResolvedValue({ id: 'existing-flag' });
+      afterAction(existing({ status: AssetStatus.DAMAGED, assignedEmployeeId: AYESHA }));
+
+      await service.returnAsset(actor, ASSET, { condition: AssetCondition.DAMAGED });
+
+      expect(deductionModel.create).not.toHaveBeenCalled();
+    });
+
+    it('shows the deductions raised on the asset on its detail', async () => {
+      afterAction(existing());
+      deductionModel.findAll.mockResolvedValue([
+        row({ id: 'f1', reason: 'LOST', status: 'APPROVED', suggestedAmount: '100.00', amount: '80.00', payrollPeriod: '2026-11', createdAt: new Date('2026-10-05'), employee: { id: AYESHA, firstName: 'Ayesha', lastName: 'Khan' } }),
+      ]);
+
+      const result = await service.getAsset(TENANT, ASSET);
+
+      expect(result.deductions).toEqual([
+        { id: 'f1', reason: 'LOST', status: 'APPROVED', employee: { employeeId: AYESHA, name: 'Ayesha Khan' }, suggestedAmount: 100, amount: 80, payrollPeriod: '2026-11', raisedAt: new Date('2026-10-05') },
+      ]);
+    });
+  });
+
+  describe('handover acceptance on the asset', () => {
+    it('clears an earlier signature when the asset changes hands, and when it is returned', async () => {
+      const signed = existing({ status: AssetStatus.IN_USE, assignedEmployeeId: BILAL, acceptedAt: new Date(), acceptedSignature: 'Bilal Ahmed' });
+      afterAction(signed);
+      await service.assign(actor, ASSET, { employeeId: AYESHA, checklist: CHECKLIST });
+      expect(signed.update.mock.calls[0][0]).toMatchObject({ acceptedAt: null, acceptedSignature: null });
+
+      const signed2 = existing({ status: AssetStatus.IN_USE, assignedEmployeeId: AYESHA, acceptedAt: new Date(), acceptedSignature: 'Ayesha Khan' });
+      afterAction(signed2);
+      await service.returnAsset(actor, ASSET, { condition: AssetCondition.GOOD });
+      expect(signed2.update.mock.calls[0][0]).toMatchObject({ acceptedAt: null, acceptedSignature: null });
+    });
+
+    it('shows on the row whether the holder has signed, and nothing when nobody holds it', async () => {
+      const when = new Date('2026-10-03T10:00:00Z');
+      assetModel.findAndCountAll.mockResolvedValue({
+        count: 2,
+        rows: [
+          existing({ status: AssetStatus.IN_USE, assignedEmployeeId: AYESHA, assignee: person(AYESHA, 'Ayesha', 'Khan'), acceptedAt: when, acceptedSignature: 'Ayesha Khan' }),
+          existing({ id: 'a2', assignee: null }),
+        ],
+      });
+
+      const result = await service.getAssets(TENANT, {});
+
+      expect(result.data[0].handover).toEqual({ accepted: true, acceptedAt: when, signedName: 'Ayesha Khan' });
+      expect(result.data[1].handover).toBeNull();
     });
   });
 

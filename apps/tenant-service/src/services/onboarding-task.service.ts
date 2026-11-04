@@ -14,6 +14,7 @@ import {
   OnboardingTaskSortableField,
 } from '@app/common';
 import { TenantModelProviderService } from './tenant-model-provider.service';
+import { notifyTaskOwners } from './department-checklist';
 
 /** Flattened row for the checklist and the Upcoming Tasks panel. */
 export interface OnboardingTaskRow {
@@ -337,6 +338,7 @@ export class OnboardingTaskService {
       sortOrder: dto.sortOrder ?? 0,
       description: dto.description ?? null,
     });
+    await notifyTaskOwners(this.modelProvider, tenantId, dto.newHireId, [{ assignedToEmployeeId: dto.assignedToEmployeeId, title: dto.title }]);
 
     return this.getOne(tenantId, created.id);
   }
@@ -367,6 +369,7 @@ export class OnboardingTaskService {
       }
     }
 
+    const previousOwner = record.assignedToEmployeeId ?? null;
     await record.update({
       ...(dto.title !== undefined ? { title: dto.title } : {}),
       ...(dto.category !== undefined ? { category: dto.category } : {}),
@@ -381,6 +384,10 @@ export class OnboardingTaskService {
         ? { description: dto.description }
         : {}),
     });
+    // Someone newly given the task is told; whoever already had it is not told again.
+    if (dto.assignedToEmployeeId && dto.assignedToEmployeeId !== previousOwner) {
+      await notifyTaskOwners(this.modelProvider, tenantId, record.newHireId, [{ assignedToEmployeeId: dto.assignedToEmployeeId, title: record.title }]);
+    }
 
     return this.getOne(tenantId, taskId);
   }
@@ -399,12 +406,14 @@ export class OnboardingTaskService {
     taskId: string,
     dto: SetOnboardingTaskStatusDto,
     actorUserId?: string,
+    /** Only a task of this category can be ticked: the IT desk reaches IT setup items and nothing else. */
+    onlyCategory?: OnboardingTaskCategory,
   ): Promise<OnboardingTaskRow> {
     const OnboardingTaskModel =
       await this.modelProvider.getOnboardingTaskModel(tenantId);
 
     const record: any = await OnboardingTaskModel.findOne({
-      where: { id: taskId, tenantId },
+      where: { id: taskId, tenantId, ...(onlyCategory ? { category: onlyCategory } : {}) },
     });
     if (!record) this.notFound(taskId);
 

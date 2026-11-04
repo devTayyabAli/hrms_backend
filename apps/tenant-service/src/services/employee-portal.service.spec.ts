@@ -772,13 +772,9 @@ describe('EmployeePortalService', () => {
       }),
       USER,
     );
-    expect(notificationModel.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        employeeId: EMPLOYEE,
-        kind: EmployeeNotificationKind.LEAVE,
-        body: expect.stringContaining('Sick Leave'),
-      }),
-    );
+    // The leave service writes the inbox row (and tells the approver). A second
+    // one here would tell the employee twice.
+    expect(notificationModel.create).not.toHaveBeenCalled();
   });
 
   it('files a request against the signed-in employee and refuses a backwards range', async () => {
@@ -1005,6 +1001,98 @@ describe('EmployeePortalService', () => {
       expect(row.update).toHaveBeenCalledWith(
         expect.objectContaining({ status: EmployeeRequestStatus.REJECTED, decisionNote: 'No' }),
       );
+    });
+
+    describe('when the organization uses manager, then HR', () => {
+      const MANAGER = '66666666-6666-4666-8666-666666666666';
+      const managed = () =>
+        pendingRequest({
+          resolution: {
+            stage: 'MANAGER_PENDING',
+            managerId: MANAGER,
+            managerName: 'Ali Khan',
+            workflow: [
+              { step: 'MANAGER_REVIEW', title: 'Team Lead / Manager Review', status: 'PENDING' },
+              { step: 'HR_APPROVAL', title: 'HR Final Approval', status: 'WAITING' },
+            ],
+          },
+        });
+
+      beforeEach(() => {
+        (service as any).modelProvider.getApprovalSettingModel = jest.fn().mockResolvedValue({
+          findOne: jest.fn().mockResolvedValue({ flow: 'MANAGER_THEN_HR' }),
+        });
+      });
+
+      it('lets the reporting manager move it to HR without applying it', async () => {
+        employeeModel.findOne.mockResolvedValue({ id: MANAGER, firstName: 'Ali', lastName: 'Khan' });
+        const row = managed();
+        requestModel.findOne.mockResolvedValue(row);
+
+        await service.decideRequest(TENANT, 'r1', { status: EmployeeRequestStatus.APPROVED, note: 'Ok' } as any, MANAGER);
+
+        expect(attendanceService.update).not.toHaveBeenCalled();
+        expect(attendanceService.create).not.toHaveBeenCalled();
+        const saved = row.update.mock.calls[0][0];
+        expect(saved.status).toBeUndefined();
+        expect(saved.resolution.stage).toBe('HR_PENDING');
+        expect(saved.resolution.workflow[0]).toMatchObject({ status: 'COMPLETED', description: expect.stringContaining('Ali Khan') });
+        expect(saved.resolution.workflow[1].status).toBe('PENDING');
+        expect(notificationModel.create).toHaveBeenCalledWith(
+          expect.objectContaining({ body: expect.stringContaining('now with HR') }),
+        );
+      });
+
+      it('lets the reporting manager reject it outright', async () => {
+        employeeModel.findOne.mockResolvedValue({ id: MANAGER, firstName: 'Ali', lastName: 'Khan' });
+        const row = managed();
+        requestModel.findOne.mockResolvedValue(row);
+
+        await service.decideRequest(TENANT, 'r1', { status: EmployeeRequestStatus.REJECTED, note: 'No' } as any, MANAGER);
+
+        expect(row.update).toHaveBeenCalledWith(
+          expect.objectContaining({ status: EmployeeRequestStatus.REJECTED, decisionNote: 'No' }),
+        );
+        expect(attendanceService.update).not.toHaveBeenCalled();
+      });
+
+      it('refuses a team lead who is not the manager, and lets HR skip that step', async () => {
+        const team = new EmployeePortalService(
+          (service as any).modelProvider,
+          leaveRequests as any,
+          attendanceService as any,
+          { scope: () => 'TEAM', employeeWhere: async () => ({}) } as any,
+        );
+        employeeModel.findOne.mockResolvedValue({ id: OTHER, firstName: 'Sam', lastName: 'Lee' });
+        const row = managed();
+        requestModel.findOne.mockResolvedValue(row);
+
+        await expect(
+          team.decideRequest(
+            TENANT,
+            'r1',
+            { status: EmployeeRequestStatus.APPROVED, checkInAt: '2026-09-20T04:30:00.000Z' } as any,
+            OTHER,
+          ),
+        ).rejects.toMatchObject({ message: expect.stringContaining('Ali Khan') });
+        expect(row.update).not.toHaveBeenCalled();
+
+        // Organization-wide HR (no data scope) may decide it immediately.
+        employeeModel.findOne.mockResolvedValue(null);
+        attendanceModel.findOne.mockResolvedValue({ id: 'att-9', status: 'ABSENT', notes: null });
+        await service.decideRequest(
+          TENANT,
+          'r1',
+          { status: EmployeeRequestStatus.APPROVED, checkInAt: '2026-09-20T04:30:00.000Z' } as any,
+          HR,
+        );
+        const saved = row.update.mock.calls[0][0];
+        expect(saved.status).toBe(EmployeeRequestStatus.APPROVED);
+        expect(saved.resolution.workflow[0]).toMatchObject({
+          status: 'SKIPPED',
+          description: expect.stringContaining('skipped'),
+        });
+      });
     });
 
     it('marks a check-in on an approved work-from-home day as remote', async () => {

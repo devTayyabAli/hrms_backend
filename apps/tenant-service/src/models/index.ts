@@ -9,8 +9,19 @@ export {
   TenantDbStatus,
 } from './tenant-database-config.model';
 export { Department } from './department.model';
+export { Branch } from './branch.model';
+export { HelpdeskTicket } from './helpdesk-ticket.model';
+export { EmployeeAssignment } from './employee-assignment.model';
+export { DepartmentChecklistItem } from './department-checklist-item.model';
+export { PerformanceCycle } from './performance-cycle.model';
+export { KpiTemplate, ReviewKpi } from './performance-kpi.model';
 export { Designation } from './designation.model';
 export { Employee } from './employee.model';
+export {
+  HierarchyChange,
+  HierarchyChangeType,
+  HierarchySubjectType,
+} from './hierarchy-change.model';
 export { AttendanceRecord } from './attendance-record.model';
 export {
   OrganizationAdminInvitation,
@@ -23,6 +34,15 @@ export { AssetCategory } from './asset-category.model';
 export { Asset } from './asset.model';
 export { AssetEvent } from './asset-event.model';
 export { AssetMaintenance } from './asset-maintenance.model';
+export { AssetRequest } from './asset-request.model';
+export { AssetDeductionFlag } from './asset-deduction-flag.model';
+export { AssetClearance } from './asset-clearance.model';
+export { TrainingCourse } from './training-course.model';
+export { TrainingMaterial } from './training-material.model';
+export { TrainingAssignment } from './training-assignment.model';
+export { TrainingProgress } from './training-progress.model';
+export { LearningSetting } from './learning-setting.model';
+export { TrainingRecommendation } from './training-recommendation.model';
 export { ChatConversation } from './chat-conversation.model';
 export { ChatParticipant } from './chat-participant.model';
 export { ChatMessage } from './chat-message.model';
@@ -34,6 +54,7 @@ export {
 } from './leave-policy.model';
 export { LeaveRequest } from './leave-request.model';
 export { AttendancePolicy } from './attendance-policy.model';
+export { ApprovalSetting } from './approval-setting.model';
 export { OrganizationPolicy } from './organization-policy.model';
 export { OrganizationModuleAccess } from './organization-module-access.model';
 export { Plan } from './plan.model';
@@ -112,7 +133,19 @@ export {
 export { EmployeeInvitationLookup } from './employee-invitation-lookup.model';
 export { HrReportRun } from './hr-report-run.model';
 export { WorkspaceProject } from './workspace-project.model';
+export { WorkspaceProjectMember } from './workspace-project-member.model';
 export { WorkspaceTask } from './workspace-task.model';
+export { WorkspaceTaskAssignee } from './workspace-task-assignee.model';
+export { WorkspaceTaskComment } from './workspace-task-comment.model';
+export { WorkspaceTaskChecklistItem } from './workspace-task-checklist-item.model';
+export { WorkspaceTaskAttachment } from './workspace-task-attachment.model';
+export { WorkspaceSetting } from './workspace-setting.model';
 export { CalendarEvent } from './calendar-event.model';
 export { CompanyDocument } from './company-document.model';
+export { ApprovalPolicy } from './approval-policy.model';
+export { OffboardingSetting, OffboardingCase, OffboardingClearance } from './offboarding.model';
+export { FinalSettlement } from './final-settlement.model';
+export { SalaryRevisionRequest } from './salary-revision-request.model';
+export { CompanyDocumentAcknowledgement } from './company-document-acknowledgement.model';
+export { CompanyDocumentAckNotice } from './company-document-ack-notice.model';
 export { PlatformHealthSample } from './platform-health-sample.model';

@@ -115,4 +115,12 @@ export class LeaveRequest extends Model {
   /** Who filed the request — an admin using Add Leave Request, today. */
   @Column({ type: DataType.UUID, allowNull: true })
   declare appliedByUserId: string | null;
+
+  /**
+   * Where a pending request sits, and the trail the employee is shown.
+   * Null on requests filed before this flow: those stay a single approval.
+   * Shape is owned by LeaveRequestService (`LeaveApproval`).
+   */
+  @Column({ type: DataType.JSONB, allowNull: true })
+  declare approval: Record<string, unknown> | null;
 }

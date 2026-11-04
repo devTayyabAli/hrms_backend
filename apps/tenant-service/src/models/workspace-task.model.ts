@@ -64,6 +64,23 @@ export class WorkspaceTask extends Model {
   @Column({ type: DataType.DATEONLY, allowNull: false })
   declare dueDate: string;
 
+  /**
+   * True when an authorized editor kept a due date outside the project's
+   * start and expected end. Null is the same as false.
+   */
+  @Default(false)
+  @Column({ type: DataType.BOOLEAN, allowNull: true })
+  declare dueDateException: boolean | null;
+
+  /**
+   * True when an assignee has left the organization and this task is still
+   * open. Completed tasks are never flagged, and they keep their assignee.
+   * Null is the same as false.
+   */
+  @Default(false)
+  @Column({ type: DataType.BOOLEAN, allowNull: true })
+  declare needsReassignment: boolean | null;
+
   @Default(WorkspaceTaskPriority.NORMAL)
   @Column({ type: DataType.ENUM(...Object.values(WorkspaceTaskPriority)), allowNull: false })
   declare priority: WorkspaceTaskPriority;
@@ -72,9 +89,30 @@ export class WorkspaceTask extends Model {
   @Column({ type: DataType.ENUM(...Object.values(WorkspaceTaskStatus)), allowNull: false })
   declare status: WorkspaceTaskStatus;
 
+  /** Honoured only when the organization has task review turned on. */
+  @Default(false)
+  @Column({ type: DataType.BOOLEAN, allowNull: true })
+  declare requiresReview: boolean | null;
+
+  /** PENDING while a reviewer has not decided. Null when review is not in play. */
+  @Column({ type: DataType.STRING(16), allowNull: true })
+  declare reviewStatus: 'PENDING' | 'APPROVED' | 'RETURNED' | null;
+
   @Column({ type: DataType.DATE, allowNull: true })
   declare completedAt: Date | null;
 
   @Column({ type: DataType.UUID, allowNull: true })
   declare createdByUserId: string | null;
+
+  /** Set after the one upcoming-deadline notice, so it is not sent again. */
+  @Column({ type: DataType.BOOLEAN, allowNull: true })
+  declare deadlineReminderSent: boolean | null;
+
+  /** Set after the one overdue notice. Cleared when the due date moves. */
+  @Column({ type: DataType.BOOLEAN, allowNull: true })
+  declare overdueReminderSent: boolean | null;
+
+  /** Set after one follow-up while a task is still waiting for review. */
+  @Column({ type: DataType.BOOLEAN, allowNull: true })
+  declare reviewReminderSent: boolean | null;
 }

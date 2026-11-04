@@ -182,6 +182,26 @@ export class EmployeePortalController {
     return this.tenantClient.send(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.GET_MY_TEAM, { tenantId, userId, email });
   }
 
+  @Get('departments')
+  @ApiOperation({
+    summary:
+      'The departments I head: each with its sub-departments, managers and their teams, every employee, and the people who also work for it through an additional assignment. Only for department heads',
+  })
+  getMyDepartments(@Headers('x-tenant-id') tenantId: string, @CurrentUser('id') userId: string,
+    @CurrentUser('email') email: string) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.GET_MY_DEPARTMENTS, { tenantId, userId, email });
+  }
+
+  @Get('employment-history')
+  @ApiOperation({
+    summary:
+      'My employment history — when I joined, each change of reporting manager, department or designation, and when I left. Who recorded a change and HR notes are not shown',
+  })
+  getMyEmploymentHistory(@Headers('x-tenant-id') tenantId: string, @CurrentUser('id') userId: string,
+    @CurrentUser('email') email: string) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.GET_MY_EMPLOYMENT_HISTORY, { tenantId, userId, email });
+  }
+
   @Get('hierarchy')
   @ApiOperation({
     summary:
@@ -745,6 +765,26 @@ export class EmployeePortalController {
       userId, email,
       requestId,
     });
+  }
+
+  @Get('approvals/requests')
+  @ApiOperation({ summary: 'Employee requests waiting for me to approve (the route names me)' })
+  getRequestsWaitingOnMe(@Headers('x-tenant-id') tenantId: string, @CurrentUser('id') userId: string,
+    @CurrentUser('email') email: string) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.MY_REQUEST_APPROVALS, { tenantId, userId, email });
+  }
+
+  @Patch('approvals/requests/:requestId/decision')
+  @ApiParam({ name: 'requestId' })
+  @ApiOperation({ summary: 'Approve (moves on to the next stage) or reject a request that is waiting for me' })
+  decideRequestWaitingOnMe(
+    @Headers('x-tenant-id') tenantId: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('email') email: string,
+    @Param('requestId') requestId: string,
+    @Body() dto: DecideEmployeeRequestDto,
+  ) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.DECIDE_MY_REQUEST_APPROVAL, { tenantId, userId, email, requestId, dto });
   }
 
   @Patch('requests/:requestId/cancel')

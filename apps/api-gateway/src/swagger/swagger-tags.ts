@@ -40,6 +40,7 @@ export const TAGS = {
   ORG_ATTENDANCE: 'Organization: Attendance',
   ORG_MESSAGES: 'Organization: Messages',
   ORG_ASSETS: 'Organization: Assets',
+  ORG_LEARNING: 'Organization: Learning',
   ORG_LEAVE: 'Organization: Leave Management',
   ORG_RECRUITMENT: 'Organization: Recruitment',
   ORG_WORKSPACE: 'Organization: Workspace (Tasks, Projects, Calendar)',
@@ -165,12 +166,17 @@ export const SWAGGER_TAG_GROUPS: ReadonlyArray<{
   {
     name: TAGS.ORG_DEPARTMENTS,
     description:
-      'Departments screen. KPI cards (Total Departments, Total Employees, Avg Department Size, Top Department), the table enriched with per-row headcount and manager, department manager assignment, and CSV export. Add / edit / delete reuse the Setup Wizard department endpoints.',
+      'Departments screen. KPI cards (Total Departments, Total Employees, Avg Department Size, Top Department), the table enriched with per-row headcount and manager, department manager assignment, and CSV export. Add / edit / delete reuse the Setup Wizard department endpoints. Department Hierarchy: the nested department tree (sub-departments, head, headcount, branch/location), the reporting tree (who reports to whom), moving an employee to a new manager / department / designation, handing a departing manager\'s reports to someone else, and the history of every such change. Trees are narrowed to the caller\'s data scope.',
   },
   {
     name: TAGS.ORG_ATTENDANCE,
     description:
       "Attendance screen. KPI cards (Present / Late / Absent / On Leave today), the Attendance Overview trend chart, the Department Wise Attendance breakdown, Today's Attendance table, CSV export, and admin manual entry — single record create/correct/delete plus whole-day bulk marking. For HR: the whole screen in one call, the All Employees Attendance register (per-employee monthly summary, with CSV export), one employee's attendance calendar, and the list of employees still unmarked for a day. Present vs Late is derived from the tenant's attendance policy grace period against its configured working hours.",
+  },
+  {
+    name: TAGS.ORG_LEARNING,
+    description:
+      'Learning: the training courses an organization offers. Create, edit, publish, archive and duplicate courses, and attach PDFs, documents, video links and other resources. Needs the `learning` module.',
   },
   {
     name: TAGS.ORG_ASSETS,
@@ -303,6 +309,7 @@ export const SWAGGER_PORTALS: ReadonlyArray<{
       TAGS.ORG_WORKSPACE,
       TAGS.ORG_MESSAGES,
       TAGS.ORG_ASSETS,
+      TAGS.ORG_LEARNING,
     ],
   },
   {

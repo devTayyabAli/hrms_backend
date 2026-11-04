@@ -28,6 +28,7 @@ import {
   TenantLeavePolicyIdDto,
   UpdateLeavePolicyMessageDto,
   UpdateAttendancePolicyMessageDto,
+  UpdateApprovalFlowMessageDto,
   // Platform Organizations DTOs
   GetPlatformOrganizationsQueryDto,
   UpdateOrganizationStatusMessageDto,
@@ -83,6 +84,10 @@ import {
   GetDepartmentsOverviewMessageDto,
   ExportDepartmentsMessageDto,
   AssignDepartmentManagerMessageDto,
+  // Department Hierarchy DTOs
+  GetReportingTreeMessageDto,
+  UpdateEmployeeReportingMessageDto,
+  ReassignReportsMessageDto,
   // Admin Attendance screen DTOs
   GetAttendanceMessageDto,
   ExportAttendanceMessageDto,
@@ -108,7 +113,18 @@ import {
   CreateShiftMessageDto,
   UpdateShiftMessageDto,
   AssignShiftEmployeesMessageDto,
+  AssetAcceptMessageDto,
+  GetReviewEvidenceMessageDto,
+  AssetActorDto,
   AssetCategoryIdMessageDto,
+  AssetClearanceMessageDto,
+  ApproveAssetDeductionMessageDto,
+  ConfirmAssetClearanceMessageDto,
+  CreateAssetRequestMessageDto,
+  GetAssetDeductionsMessageDto,
+  GetAssetRequestsMessageDto,
+  UpdateAssetRequestMessageDto,
+  WaiveAssetDeductionMessageDto,
   AssetIdMessageDto,
   AssetNoteMessageDto,
   CompleteMaintenanceMessageDto,
@@ -168,6 +184,45 @@ import {
   CreateOnboardingTaskMessageDto,
   UpdateOnboardingTaskMessageDto,
   SetOnboardingTaskStatusMessageDto,
+  OnboardingTaskCategory,
+  RoleDashboardActorDto,
+  SettlementCaseMessageDto,
+  SettlementIdMessageDto,
+  GetSettlementsMessageDto,
+  UpdateSettlementMessageDto,
+  AddSettlementLineMessageDto,
+  SettlementLineIdMessageDto,
+  UpdateSettlementLineMessageDto,
+  DecideSettlementMessageDto,
+  OffboardingActorDto,
+  UpdateOffboardingSettingsMessageDto,
+  GetOffboardingCasesMessageDto,
+  OffboardingCaseIdMessageDto,
+  InitiateOffboardingMessageDto,
+  UpdateOffboardingMessageDto,
+  CancelOffboardingMessageDto,
+  OffboardingStageMessageDto,
+  ClearMyOffboardingMessageDto,
+  GetBranchesMessageDto,
+  BranchIdMessageDto,
+  CreateBranchMessageDto,
+  UpdateBranchMessageDto,
+  AssignBranchEmployeesMessageDto,
+  BranchesFromLocationsMessageDto,
+  SalaryRevisionRequestQueryMessageDto,
+  MyReimbursementApprovalDecisionMessageDto,
+  ApprovalPolicyTenantMessageDto,
+  ApprovalPolicyTypeMessageDto,
+  UpdateApprovalPolicyMessageDto,
+  GetMyPoliciesMessageDto,
+  GetPolicyAcknowledgementsMessageDto,
+  PolicyActorDto,
+  PolicyDocumentIdMessageDto,
+  SetPolicyDistributionMessageDto,
+  PerformanceActorDto,
+  PerformanceReviewIdMessageDto,
+  SubmitSelfAssessmentMessageDto,
+  UpdateMyGoalProgressMessageDto,
   GetUpcomingOnboardingTasksMessageDto,
   TenantOnboardingTaskIdDto,
   CreatePayrollRunMessageDto,
@@ -270,6 +325,16 @@ import {
   UpdateWorkspaceTaskMessageDto,
   GetMyTasksMessageDto,
   UpdateMyTaskStatusMessageDto,
+  UpdateWorkspaceSettingsMessageDto,
+  DecideWorkspaceTaskReviewMessageDto,
+  AddTaskCommentMessageDto,
+  DeleteTaskCommentMessageDto,
+  AddChecklistItemMessageDto,
+  UpdateChecklistItemMessageDto,
+  DeleteChecklistItemMessageDto,
+  AddTaskAttachmentMessageDto,
+  DeleteTaskAttachmentMessageDto,
+  GetTaskAttachmentMessageDto,
   GetWorkspaceProjectsMessageDto,
   WorkspaceProjectIdMessageDto,
   CreateWorkspaceProjectMessageDto,
@@ -287,6 +352,32 @@ import {
   UpdateCompanyDocumentMessageDto,
   CompanyDocumentIdMessageDto,
   PlatformNotificationCategory,
+  WORKSPACE_GRANTS,
+  AddTrainingMaterialMessageDto,
+  CreateTrainingCourseMessageDto,
+  GetTrainingCoursesMessageDto,
+  SetTrainingMaterialOrderMessageDto,
+  TrainingCourseIdMessageDto,
+  TrainingMaterialIdMessageDto,
+  TrainingTenantMessageDto,
+  GetEmployeeLearningMessageDto,
+  GetLearningReportMessageDto,
+  CreateTrainingRecommendationMessageDto,
+  GetTrainingRecommendationsMessageDto,
+  ApproveTrainingRecommendationMessageDto,
+  DismissTrainingRecommendationMessageDto,
+  UpdateLearningSettingsMessageDto,
+  UpdateTrainingCourseMessageDto,
+  UpdateTrainingMaterialMessageDto,
+  AssignTrainingMessageDto,
+  CancelTrainingAssignmentMessageDto,
+  CompleteMyLearningMessageDto,
+  GetMyLearningHistoryMessageDto,
+  GetMyLearningMessageDto,
+  GetTrainingAssignmentsMessageDto,
+  MyTrainingMaterialMessageDto,
+  TrainingAssignmentIdMessageDto,
+  UpdateTrainingAssignmentMessageDto,
 } from '@app/common';
 import { AllowUnsignedRpc } from '@app/tenant-context';
 import { TenantService } from './services/tenant.service';
@@ -316,14 +407,26 @@ import type {
 import { EmployeeService } from './services/employee.service';
 import { AttendanceService } from './services/attendance.service';
 import { OrganizationDepartmentsService } from './services/organization-departments.service';
+import { OrganizationHierarchyService } from './services/organization-hierarchy.service';
 import { LeaveRequestService } from './services/leave-request.service';
 import { LeaveBalanceService } from './services/leave-balance.service';
 import { ShiftService } from './services/shift.service';
 import { ChatService } from './services/chat.service';
 import { AssetService } from './services/asset.service';
+import { WorkspaceAccessService } from './services/workspace-access.service';
+import { LearningCourseService } from './services/learning-course.service';
+import { LearningAssignmentService } from './services/learning-assignment.service';
+import { LearningSelfService } from './services/learning-self.service';
+import { LearningNotificationService } from './services/learning-notification.service';
+import { LearningRecommendationService } from './services/learning-recommendation.service';
+import { LearningReportService } from './services/learning-report.service';
+import { AssetSelfService } from './services/asset-self.service';
+import { AssetRequestService } from './services/asset-request.service';
+import { AssetClearanceService } from './services/asset-clearance.service';
 import { JobOpeningService } from './services/job-opening.service';
 import { WorkspaceTaskService } from './services/workspace-task.service';
 import { WorkspaceProjectService } from './services/workspace-project.service';
+import { WorkspaceDashboardService } from './services/workspace-dashboard.service';
 import { PlatformNotifierService } from './services/platform-notifier.service';
 import { PlatformClientContactsService } from './services/platform-client-contacts.service';
 import { CalendarService } from './services/calendar.service';
@@ -336,6 +439,20 @@ import { OnboardingService } from './services/onboarding.service';
 import { OnboardingTaskService } from './services/onboarding-task.service';
 import { EmployeeInvitationService } from './services/employee-invitation.service';
 import { PerformanceDashboardService } from './services/performance-dashboard.service';
+import { PerformanceSelfService } from './services/performance-self.service';
+import { PolicyAcknowledgementService } from './services/policy-acknowledgement.service';
+import { ApprovalPolicyService } from './services/approval-policy.service';
+import { BranchService } from './services/branch.service';
+import { HelpdeskService } from './services/helpdesk.service';
+import { EmployeeAssignmentService } from './services/employee-assignment.service';
+import { DepartmentChecklistService } from './services/department-checklist.service';
+import { PerformanceCycleService } from './services/performance-cycle.service';
+import { KpiTemplateService } from './services/kpi-template.service';
+import { PerformancePlanService } from './services/performance-plan.service';
+import { PerformanceSyncService } from './services/performance-sync.service';
+import { OffboardingService } from './services/offboarding.service';
+import { FinalSettlementService } from './services/final-settlement.service';
+import { RoleDashboardService } from './services/role-dashboard.service';
 import { PayrollDashboardService } from './services/payroll-dashboard.service';
 import { EmployeePortalService } from './services/employee-portal.service';
 import { MyTeamService } from './services/my-team.service';
@@ -368,14 +485,26 @@ export class TenantServiceController {
     private employeeService: EmployeeService,
     private attendanceService: AttendanceService,
     private departmentsService: OrganizationDepartmentsService,
+    private hierarchyService: OrganizationHierarchyService,
     private leaveRequestService: LeaveRequestService,
     private leaveBalanceService: LeaveBalanceService,
     private shiftService: ShiftService,
     private chatService: ChatService,
     private assetService: AssetService,
+    private assetSelfService: AssetSelfService,
+    private assetRequestService: AssetRequestService,
+    private assetClearanceService: AssetClearanceService,
     private jobOpeningService: JobOpeningService,
     private workspaceTaskService: WorkspaceTaskService,
     private workspaceProjectService: WorkspaceProjectService,
+    private workspaceAccess: WorkspaceAccessService,
+    private learningCourseService: LearningCourseService,
+    private learningAssignmentService: LearningAssignmentService,
+    private learningSelfService: LearningSelfService,
+    private learningNotifications: LearningNotificationService,
+    private learningRecommendationService: LearningRecommendationService,
+    private learningReportService: LearningReportService,
+    private workspaceDashboardService: WorkspaceDashboardService,
     private calendarService: CalendarService,
     private companyDocumentService: CompanyDocumentService,
     private candidateService: CandidateService,
@@ -386,6 +515,20 @@ export class TenantServiceController {
     private onboardingTaskService: OnboardingTaskService,
     private employeeInvitationService: EmployeeInvitationService,
     private performanceDashboardService: PerformanceDashboardService,
+    private performanceSelfService: PerformanceSelfService,
+    private policyAcknowledgementService: PolicyAcknowledgementService,
+    private approvalPolicyService: ApprovalPolicyService,
+    private branchService: BranchService,
+    private helpdeskService: HelpdeskService,
+    private employeeAssignmentService: EmployeeAssignmentService,
+    private departmentChecklistService: DepartmentChecklistService,
+    private performanceCycleService: PerformanceCycleService,
+    private kpiTemplateService: KpiTemplateService,
+    private performancePlanService: PerformancePlanService,
+    private performanceSyncService: PerformanceSyncService,
+    private offboardingService: OffboardingService,
+    private finalSettlementService: FinalSettlementService,
+    private roleDashboardService: RoleDashboardService,
     private payrollDashboardService: PayrollDashboardService,
     private employeePortalService: EmployeePortalService,
     private myTeamService: MyTeamService,
@@ -715,8 +858,8 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION_SETUP.GET_DEPARTMENTS)
-  async getDepartmentsMessage(@Payload() data: TenantIdDto) {
-    return this.setupService.getDepartments(data.tenantId);
+  async getDepartmentsMessage(@Payload() data: { tenantId: string; branchId?: string }) {
+    return this.setupService.getDepartments(data.tenantId, data.branchId);
   }
 
   @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION_SETUP.CREATE_DEPARTMENT)
@@ -811,6 +954,16 @@ export class TenantServiceController {
     @Payload() data: UpdateAttendancePolicyMessageDto,
   ) {
     return this.setupService.updateAttendancePolicy(data.tenantId, data.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION_SETUP.GET_APPROVAL_FLOW)
+  async getApprovalFlowMessage(@Payload() data: TenantIdDto) {
+    return this.setupService.getApprovalFlow(data.tenantId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION_SETUP.UPDATE_APPROVAL_FLOW)
+  async updateApprovalFlowMessage(@Payload() data: UpdateApprovalFlowMessageDto) {
+    return this.setupService.updateApprovalFlow(data.tenantId, data.dto);
   }
 
   @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION_SETUP.COMPLETE_SETUP)
@@ -1490,6 +1643,45 @@ export class TenantServiceController {
   }
 
   // ==========================================
+  // DEPARTMENT HIERARCHY: trees, reporting assignments, history
+  // ==========================================
+
+  @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION_HIERARCHY.GET_DEPARTMENT_TREE)
+  async handleGetDepartmentTree(@Payload() payload: TenantIdDto) {
+    return this.hierarchyService.getDepartmentTree(payload.tenantId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION_HIERARCHY.GET_DEPARTMENT_HISTORY)
+  async handleGetDepartmentHistory(@Payload() payload: TenantDepartmentIdDto) {
+    return this.hierarchyService.getDepartmentHistory(payload.tenantId, payload.departmentId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION_HIERARCHY.GET_REPORTING_TREE)
+  async handleGetReportingTree(@Payload() payload: GetReportingTreeMessageDto) {
+    return this.hierarchyService.getReportingTree(payload.tenantId, payload.query?.rootEmployeeId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION_HIERARCHY.GET_EMPLOYEE_REPORTING)
+  async handleGetEmployeeReporting(@Payload() payload: TenantEmployeeIdDto) {
+    return this.hierarchyService.getEmployeeReporting(payload.tenantId, payload.employeeId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION_HIERARCHY.GET_EMPLOYEE_REPORTING_HISTORY)
+  async handleGetEmployeeReportingHistory(@Payload() payload: TenantEmployeeIdDto) {
+    return this.hierarchyService.getEmployeeHistory(payload.tenantId, payload.employeeId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION_HIERARCHY.UPDATE_EMPLOYEE_REPORTING)
+  async handleUpdateEmployeeReporting(@Payload() payload: UpdateEmployeeReportingMessageDto) {
+    return this.hierarchyService.updateEmployeeReporting(payload.tenantId, payload.employeeId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ORGANIZATION_HIERARCHY.REASSIGN_REPORTS)
+  async handleReassignReports(@Payload() payload: ReassignReportsMessageDto) {
+    return this.hierarchyService.reassignReports(payload.tenantId, payload.dto);
+  }
+
+  // ==========================================
   // ADMIN: ATTENDANCE SCREEN
   // ==========================================
 
@@ -1859,6 +2051,66 @@ export class TenantServiceController {
     return this.assetService.dispose(payload, payload.assetId, payload.dto);
   }
 
+  @MessagePattern(MESSAGE_PATTERNS.ASSET.GET_MY_ASSETS)
+  async handleGetMyAssets(@Payload() payload: AssetActorDto) {
+    return this.assetSelfService.getMyAssets(payload);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ASSET.ACCEPT_MY_ASSET)
+  async handleAcceptMyAsset(@Payload() payload: AssetAcceptMessageDto) {
+    return this.assetSelfService.acceptHandover(payload, payload.assetId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ASSET.CREATE_MY_REQUEST)
+  async handleCreateMyAssetRequest(@Payload() payload: CreateAssetRequestMessageDto) {
+    return this.assetRequestService.createMyRequest(payload, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ASSET.GET_MY_REQUESTS)
+  async handleGetMyAssetRequests(@Payload() payload: AssetActorDto) {
+    return this.assetRequestService.getMyRequests(payload);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ASSET.GET_REQUESTS)
+  async handleGetAssetRequests(@Payload() payload: GetAssetRequestsMessageDto) {
+    return this.assetRequestService.getRequests(payload.tenantId, payload.query);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ASSET.GET_ALERTS)
+  async handleGetAssetAlerts(@Payload() payload: AssetTenantMessageDto) {
+    return this.assetRequestService.getAlerts(payload.tenantId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ASSET.UPDATE_REQUEST)
+  async handleUpdateAssetRequest(@Payload() payload: UpdateAssetRequestMessageDto) {
+    return this.assetRequestService.updateRequest(payload, payload.requestId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ASSET.GET_DEDUCTIONS)
+  async handleGetAssetDeductions(@Payload() payload: GetAssetDeductionsMessageDto) {
+    return this.assetClearanceService.getDeductions(payload.tenantId, payload.query);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ASSET.APPROVE_DEDUCTION)
+  async handleApproveAssetDeduction(@Payload() payload: ApproveAssetDeductionMessageDto) {
+    return this.assetClearanceService.approveDeduction(payload, payload.deductionId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ASSET.WAIVE_DEDUCTION)
+  async handleWaiveAssetDeduction(@Payload() payload: WaiveAssetDeductionMessageDto) {
+    return this.assetClearanceService.waiveDeduction(payload, payload.deductionId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ASSET.GET_CLEARANCE)
+  async handleGetAssetClearance(@Payload() payload: AssetClearanceMessageDto) {
+    return this.assetClearanceService.getClearance(payload.tenantId, payload.employeeId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ASSET.CONFIRM_CLEARANCE)
+  async handleConfirmAssetClearance(@Payload() payload: ConfirmAssetClearanceMessageDto) {
+    return this.assetClearanceService.confirmClearance(payload, payload.employeeId, payload.dto);
+  }
+
   @MessagePattern(MESSAGE_PATTERNS.ASSET.GET_CATEGORIES)
   async handleGetAssetCategories(@Payload() payload: AssetTenantMessageDto) {
     return this.assetService.getCategories(payload.tenantId);
@@ -1877,6 +2129,204 @@ export class TenantServiceController {
   @MessagePattern(MESSAGE_PATTERNS.ASSET.DELETE_CATEGORY)
   async handleDeleteAssetCategory(@Payload() payload: AssetCategoryIdMessageDto) {
     return this.assetService.deleteCategory(payload, payload.categoryId);
+  }
+
+  // ==========================================
+  // LEARNING — courses and materials
+  // ==========================================
+
+  @MessagePattern(MESSAGE_PATTERNS.LEARNING_COURSE.GET_ALL)
+  async handleGetTrainingCourses(@Payload() payload: GetTrainingCoursesMessageDto) {
+    return this.learningCourseService.getCourses(payload.tenantId, payload.query);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.LEARNING_COURSE.GET_CATEGORIES)
+  async handleGetTrainingCategories(@Payload() payload: TrainingTenantMessageDto) {
+    return this.learningCourseService.getCategories(payload.tenantId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.LEARNING_COURSE.GET_ONE)
+  async handleGetTrainingCourse(@Payload() payload: TrainingCourseIdMessageDto) {
+    return this.learningCourseService.getCourse(payload.tenantId, payload.courseId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.LEARNING_COURSE.CREATE)
+  async handleCreateTrainingCourse(@Payload() payload: CreateTrainingCourseMessageDto) {
+    return this.learningCourseService.createCourse(payload, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.LEARNING_COURSE.UPDATE)
+  async handleUpdateTrainingCourse(@Payload() payload: UpdateTrainingCourseMessageDto) {
+    return this.learningCourseService.updateCourse(payload, payload.courseId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.LEARNING_COURSE.DELETE)
+  async handleDeleteTrainingCourse(@Payload() payload: TrainingCourseIdMessageDto) {
+    return this.learningCourseService.deleteCourse(payload, payload.courseId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.LEARNING_COURSE.PUBLISH)
+  async handlePublishTrainingCourse(@Payload() payload: TrainingCourseIdMessageDto) {
+    return this.learningCourseService.publish(payload, payload.courseId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.LEARNING_COURSE.ARCHIVE)
+  async handleArchiveTrainingCourse(@Payload() payload: TrainingCourseIdMessageDto) {
+    return this.learningCourseService.archive(payload, payload.courseId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.LEARNING_COURSE.UNARCHIVE)
+  async handleUnarchiveTrainingCourse(@Payload() payload: TrainingCourseIdMessageDto) {
+    return this.learningCourseService.unarchive(payload, payload.courseId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.LEARNING_COURSE.DUPLICATE)
+  async handleDuplicateTrainingCourse(@Payload() payload: TrainingCourseIdMessageDto) {
+    return this.learningCourseService.duplicate(payload, payload.courseId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.LEARNING_COURSE.ADD_MATERIAL)
+  async handleAddTrainingMaterial(@Payload() payload: AddTrainingMaterialMessageDto) {
+    return this.learningCourseService.addMaterial(payload, payload.courseId, payload.dto, payload.file);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.LEARNING_COURSE.UPDATE_MATERIAL)
+  async handleUpdateTrainingMaterial(@Payload() payload: UpdateTrainingMaterialMessageDto) {
+    return this.learningCourseService.updateMaterial(payload, payload.courseId, payload.materialId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.LEARNING_COURSE.DELETE_MATERIAL)
+  async handleDeleteTrainingMaterial(@Payload() payload: TrainingMaterialIdMessageDto) {
+    return this.learningCourseService.deleteMaterial(payload, payload.courseId, payload.materialId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.LEARNING_COURSE.SET_MATERIAL_ORDER)
+  async handleSetTrainingMaterialOrder(@Payload() payload: SetTrainingMaterialOrderMessageDto) {
+    return this.learningCourseService.setMaterialOrder(payload, payload.courseId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.LEARNING_COURSE.GET_MATERIAL_FILE)
+  async handleGetTrainingMaterialFile(@Payload() payload: TrainingMaterialIdMessageDto) {
+    return this.learningCourseService.getMaterialFile(payload.tenantId, payload.courseId, payload.materialId);
+  }
+
+  // ==========================================
+  // LEARNING — assigning, and the employee's own courses
+  // ==========================================
+
+  @MessagePattern(MESSAGE_PATTERNS.LEARNING_ASSIGNMENT.ASSIGN)
+  async handleAssignTraining(@Payload() payload: AssignTrainingMessageDto) {
+    return this.learningAssignmentService.assign(payload, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.LEARNING_ASSIGNMENT.GET_ALL)
+  async handleGetTrainingAssignments(@Payload() payload: GetTrainingAssignmentsMessageDto) {
+    return this.learningAssignmentService.getAssignments(payload.tenantId, payload.query);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.LEARNING_ASSIGNMENT.GET_ONE)
+  async handleGetTrainingAssignment(@Payload() payload: TrainingAssignmentIdMessageDto) {
+    return this.learningAssignmentService.getAssignment(payload.tenantId, payload.assignmentId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.LEARNING_ASSIGNMENT.UPDATE)
+  async handleUpdateTrainingAssignment(@Payload() payload: UpdateTrainingAssignmentMessageDto) {
+    return this.learningAssignmentService.updateAssignment(payload, payload.assignmentId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.LEARNING_ASSIGNMENT.CANCEL)
+  async handleCancelTrainingAssignment(@Payload() payload: CancelTrainingAssignmentMessageDto) {
+    return this.learningAssignmentService.cancelAssignment(payload, payload.assignmentId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.LEARNING_ASSIGNMENT.GET_ALERTS)
+  async handleGetLearningAlerts(@Payload() payload: TrainingTenantMessageDto) {
+    return this.learningAssignmentService.getAlerts(payload.tenantId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.LEARNING_ASSIGNMENT.GET_FOR_EMPLOYEE)
+  async handleGetEmployeeLearning(@Payload() payload: GetEmployeeLearningMessageDto) {
+    return this.learningAssignmentService.getForEmployee(payload.tenantId, payload.employeeId, payload.query);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.LEARNING_ASSIGNMENT.EXPORT)
+  async handleExportTrainingAssignments(@Payload() payload: GetTrainingAssignmentsMessageDto) {
+    return this.learningAssignmentService.exportAssignments(payload.tenantId, payload.query);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.LEARNING_ASSIGNMENT.GET_DASHBOARD)
+  async handleGetLearningDashboard(@Payload() payload: TrainingTenantMessageDto) {
+    return this.learningReportService.getDashboard(payload.tenantId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.LEARNING_ASSIGNMENT.GET_REPORT)
+  async handleGetLearningReport(@Payload() payload: GetLearningReportMessageDto) {
+    return this.learningReportService.getReport(payload.tenantId, payload.group, payload.query);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.LEARNING_ASSIGNMENT.GET_SETTINGS)
+  async handleGetLearningSettings(@Payload() payload: TrainingTenantMessageDto) {
+    return this.learningNotifications.getSettings(payload.tenantId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.LEARNING_ASSIGNMENT.UPDATE_SETTINGS)
+  async handleUpdateLearningSettings(@Payload() payload: UpdateLearningSettingsMessageDto) {
+    return this.learningNotifications.updateSettings(payload.tenantId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.LEARNING_RECOMMENDATION.CREATE)
+  async handleCreateTrainingRecommendation(@Payload() payload: CreateTrainingRecommendationMessageDto) {
+    return this.learningRecommendationService.recommend(payload, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.LEARNING_RECOMMENDATION.GET_ALL)
+  async handleGetTrainingRecommendations(@Payload() payload: GetTrainingRecommendationsMessageDto) {
+    return this.learningRecommendationService.getRecommendations(payload.tenantId, payload.query);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.LEARNING_RECOMMENDATION.APPROVE)
+  async handleApproveTrainingRecommendation(@Payload() payload: ApproveTrainingRecommendationMessageDto) {
+    return this.learningRecommendationService.approve(payload, payload.recommendationId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.LEARNING_RECOMMENDATION.DISMISS)
+  async handleDismissTrainingRecommendation(@Payload() payload: DismissTrainingRecommendationMessageDto) {
+    return this.learningRecommendationService.dismiss(payload, payload.recommendationId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.LEARNING_SELF.GET_MINE)
+  async handleGetMyLearning(@Payload() payload: GetMyLearningMessageDto) {
+    return this.learningSelfService.getMine(payload, payload.query);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.LEARNING_SELF.GET_MINE_ONE)
+  async handleGetMyLearningOne(@Payload() payload: TrainingAssignmentIdMessageDto) {
+    return this.learningSelfService.getMineOne(payload, payload.assignmentId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.LEARNING_SELF.START)
+  async handleStartMyLearning(@Payload() payload: TrainingAssignmentIdMessageDto) {
+    return this.learningSelfService.start(payload, payload.assignmentId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.LEARNING_SELF.OPEN_MATERIAL)
+  async handleOpenMyLearningMaterial(@Payload() payload: MyTrainingMaterialMessageDto) {
+    return this.learningSelfService.openMaterial(payload, payload.assignmentId, payload.materialId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.LEARNING_SELF.COMPLETE)
+  async handleCompleteMyLearning(@Payload() payload: CompleteMyLearningMessageDto) {
+    return this.learningSelfService.complete(payload, payload.assignmentId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.LEARNING_SELF.GET_HISTORY)
+  async handleGetMyLearningHistory(@Payload() payload: GetMyLearningHistoryMessageDto) {
+    return this.learningSelfService.getHistory(payload, payload.query);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.LEARNING_SELF.GET_MATERIAL_FILE)
+  async handleGetMyLearningMaterialFile(@Payload() payload: MyTrainingMaterialMessageDto) {
+    return this.learningSelfService.getMaterialFile(payload, payload.assignmentId, payload.materialId);
   }
 
   // ==========================================
@@ -2267,6 +2717,19 @@ export class TenantServiceController {
     );
   }
 
+  @MessagePattern(MESSAGE_PATTERNS.ONBOARDING_TASK.SET_IT_STATUS)
+  async handleSetItOnboardingTaskStatus(
+    @Payload() payload: SetOnboardingTaskStatusMessageDto,
+  ) {
+    return this.onboardingTaskService.setStatus(
+      payload.tenantId,
+      payload.taskId,
+      payload.dto,
+      payload.actorUserId,
+      OnboardingTaskCategory.IT_SETUP,
+    );
+  }
+
   @MessagePattern(MESSAGE_PATTERNS.ONBOARDING_TASK.SET_STATUS)
   async handleSetOnboardingTaskStatus(
     @Payload() payload: SetOnboardingTaskStatusMessageDto,
@@ -2342,6 +2805,17 @@ export class TenantServiceController {
     );
   }
 
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE.GET_REVIEW_EVIDENCE)
+  async handleGetPerformanceReviewEvidence(
+    @Payload() payload: GetReviewEvidenceMessageDto,
+  ) {
+    return this.performanceDashboardService.getReviewEvidence(
+      payload.tenantId,
+      payload.reviewId,
+      payload.query,
+    );
+  }
+
   @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE.CREATE_REVIEW)
   async handleCreatePerformanceReview(
     @Payload() payload: CreatePerformanceReviewMessageDto,
@@ -2361,6 +2835,61 @@ export class TenantServiceController {
       payload.reviewId,
       payload.dto,
     );
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE.PUBLISH_REVIEW)
+  async handlePublishPerformanceReview(@Payload() payload: PerformanceReviewIdMessageDto) {
+    return this.performanceDashboardService.publishReview(payload.tenantId, payload.reviewId, payload.email);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE.UNPUBLISH_REVIEW)
+  async handleUnpublishPerformanceReview(@Payload() payload: PerformanceReviewIdMessageDto) {
+    return this.performanceDashboardService.unpublishReview(payload.tenantId, payload.reviewId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_SELF.GET_REVIEWS)
+  async handleGetMyPerformanceReviews(@Payload() payload: PerformanceActorDto) {
+    return this.performanceSelfService.getReviews(payload);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_SELF.GET_REVIEW)
+  async handleGetMyPerformanceReview(@Payload() payload: PerformanceReviewIdMessageDto) {
+    return this.performanceSelfService.getReview(payload, payload.reviewId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_SELF.SUBMIT_SELF_ASSESSMENT)
+  async handleSubmitSelfAssessment(@Payload() payload: SubmitSelfAssessmentMessageDto) {
+    return this.performanceSelfService.submitSelfAssessment(payload, payload.reviewId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE.SET_REVIEW_ACCESS)
+  async handleSetReviewAccess(@Payload() payload: { tenantId: string; reviewId: string; email?: string; dto: any }) {
+    return this.performanceDashboardService.setReviewAccess(payload.tenantId, payload.reviewId, payload.dto, payload.email);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_SELF.GET_REVIEWING)
+  async handleGetReviewing(@Payload() payload: PerformanceActorDto) {
+    return this.performanceSelfService.getReviewing(payload);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_SELF.GET_REVIEWING_ONE)
+  async handleGetReviewingOne(@Payload() payload: PerformanceReviewIdMessageDto) {
+    return this.performanceSelfService.getReviewingOne(payload, payload.reviewId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_SELF.SUBMIT_EVALUATION)
+  async handleSubmitEvaluation(@Payload() payload: PerformanceActorDto & { reviewId: string; dto: any }) {
+    return this.performanceSelfService.submitEvaluation(payload, payload.reviewId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_SELF.GET_GOALS)
+  async handleGetMyPerformanceGoals(@Payload() payload: PerformanceActorDto) {
+    return this.performanceSelfService.getGoals(payload);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_SELF.UPDATE_GOAL_PROGRESS)
+  async handleUpdateMyGoalProgress(@Payload() payload: UpdateMyGoalProgressMessageDto) {
+    return this.performanceSelfService.updateGoalProgress(payload, payload.goalId, payload.dto.progress);
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE.DELETE_REVIEW)
@@ -2841,6 +3370,31 @@ export class TenantServiceController {
     );
   }
 
+  @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPENSATION.LIST_SALARY_REQUESTS)
+  handleListSalaryRevisionRequests(@Payload() payload: SalaryRevisionRequestQueryMessageDto) {
+    return this.compensationService.listSalaryRevisionRequests(payload.tenantId, payload.query ?? {});
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPENSATION.DECIDE_SALARY_REQUEST)
+  handleDecideSalaryRevision(@Payload() payload: DecideReimbursementMessageDto) {
+    return this.compensationService.decideSalaryRevision(payload.tenantId, payload.id, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPENSATION.CANCEL_SALARY_REQUEST)
+  handleCancelSalaryRevisionRequest(@Payload() payload: DecideReimbursementMessageDto) {
+    return this.compensationService.cancelSalaryRevisionRequest(payload.tenantId, payload.id);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPENSATION.MY_APPROVALS_LIST)
+  handleMyReimbursementApprovals(@Payload() payload: EmployeeActorDto) {
+    return this.compensationService.myReimbursementApprovals(payload.tenantId, payload.userId, payload.email);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPENSATION.MY_APPROVALS_DECIDE)
+  handleDecideMyReimbursementApproval(@Payload() payload: MyReimbursementApprovalDecisionMessageDto) {
+    return this.compensationService.decideMyReimbursementApproval(payload.tenantId, payload.userId, payload.email, payload.id, payload.dto);
+  }
+
   @MessagePattern(MESSAGE_PATTERNS.PAYROLL_COMPENSATION.LIST_ADJUSTMENTS)
   handleListAdjustmentEntries(
     @Payload() payload: AdjustmentEntryQueryMessageDto,
@@ -3099,6 +3653,16 @@ export class TenantServiceController {
       payload.userId,
       payload.email,
     );
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.GET_MY_EMPLOYMENT_HISTORY)
+  handleMyEmploymentHistory(@Payload() payload: EmployeeActorDto) {
+    return this.myTeamService.getMyEmploymentHistory(payload.tenantId, payload.userId, payload.email);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.GET_MY_DEPARTMENTS)
+  handleMyDepartments(@Payload() payload: EmployeeActorDto) {
+    return this.myTeamService.getMyDepartments(payload.tenantId, payload.userId, payload.email);
   }
 
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.GET_MY_TEAM)
@@ -3436,6 +4000,16 @@ export class TenantServiceController {
     return this.employeePortalService.getRequestStats(payload.tenantId);
   }
 
+  @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.MY_REQUEST_APPROVALS)
+  handleMyRequestApprovals(@Payload() payload: EmployeeActorDto) {
+    return this.employeePortalService.myRequestApprovals(payload.tenantId, payload.userId, payload.email);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.DECIDE_MY_REQUEST_APPROVAL)
+  handleDecideMyRequestApproval(@Payload() payload: { tenantId: string; userId: string; email?: string; requestId: string; dto: any }) {
+    return this.employeePortalService.decideMyRequestApproval(payload.tenantId, payload.userId, payload.email, payload.requestId, payload.dto);
+  }
+
   @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_PORTAL.DECIDE_REQUEST)
   handleDecideEmployeeRequest(
     @Payload() payload: DecideEmployeeRequestMessageDto,
@@ -3654,7 +4228,8 @@ export class TenantServiceController {
   // ==========================================
 
   @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_TASK.GET_ALL)
-  handleGetWorkspaceTasks(@Payload() payload: GetWorkspaceTasksMessageDto) {
+  async handleGetWorkspaceTasks(@Payload() payload: GetWorkspaceTasksMessageDto) {
+    await this.workspaceAccess.assertViewOrOwn(payload.tenantId, WORKSPACE_GRANTS.taskView);
     return this.workspaceTaskService.getAll(payload.tenantId, payload.query);
   }
 
@@ -3676,12 +4251,14 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_TASK.GET_ONE)
-  handleGetWorkspaceTask(@Payload() payload: WorkspaceTaskIdMessageDto) {
+  async handleGetWorkspaceTask(@Payload() payload: WorkspaceTaskIdMessageDto) {
+    await this.workspaceAccess.assertTask(payload.tenantId, WORKSPACE_GRANTS.taskView, payload.taskId);
     return this.workspaceTaskService.getOne(payload.tenantId, payload.taskId);
   }
 
   @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_TASK.CREATE)
-  handleCreateWorkspaceTask(@Payload() payload: CreateWorkspaceTaskMessageDto) {
+  async handleCreateWorkspaceTask(@Payload() payload: CreateWorkspaceTaskMessageDto) {
+    await this.workspaceAccess.assertCreateTask(payload.tenantId, WORKSPACE_GRANTS.taskCreate, payload.dto.projectId);
     return this.workspaceTaskService.create(
       payload.tenantId,
       payload.dto,
@@ -3690,7 +4267,8 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_TASK.UPDATE)
-  handleUpdateWorkspaceTask(@Payload() payload: UpdateWorkspaceTaskMessageDto) {
+  async handleUpdateWorkspaceTask(@Payload() payload: UpdateWorkspaceTaskMessageDto) {
+    await this.workspaceAccess.assertEditTask(payload.tenantId, WORKSPACE_GRANTS.taskEdit, payload.taskId, payload.dto.projectId);
     return this.workspaceTaskService.update(
       payload.tenantId,
       payload.taskId,
@@ -3704,8 +4282,19 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_TASK.GET_PEOPLE)
-  handleGetWorkspacePeople(@Payload() payload: TenantIdDto) {
+  async handleGetWorkspacePeople(@Payload() payload: TenantIdDto) {
+    await this.workspaceAccess.assertViewOrOwn(payload.tenantId, WORKSPACE_GRANTS.people);
     return this.workspaceTaskService.getPeople(payload.tenantId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_TASK.GET_DASHBOARD)
+  handleGetWorkspaceDashboard(@Payload() payload: TenantIdDto) {
+    return this.workspaceDashboardService.getForCaller(payload.tenantId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_TASK.GET_MY_DASHBOARD)
+  handleGetMyWorkspaceDashboard(@Payload() payload: EmployeeActorDto) {
+    return this.workspaceDashboardService.getMine(payload.tenantId, payload.userId, payload.email);
   }
 
   @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_TASK.GET_MINE)
@@ -3726,6 +4315,105 @@ export class TenantServiceController {
       payload.email,
       payload.taskId,
       payload.status,
+    );
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_TASK.GET_SETTINGS)
+  handleGetWorkspaceSettings(@Payload() payload: TenantIdDto) {
+    return this.workspaceTaskService.getSettings(payload.tenantId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_TASK.UPDATE_SETTINGS)
+  handleUpdateWorkspaceSettings(@Payload() payload: UpdateWorkspaceSettingsMessageDto) {
+    return this.workspaceTaskService.updateSettings(payload.tenantId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_TASK.DECIDE_REVIEW)
+  handleDecideWorkspaceTaskReview(@Payload() payload: DecideWorkspaceTaskReviewMessageDto) {
+    return this.workspaceTaskService.decideReview(payload.tenantId, payload.taskId, payload.decision, payload.canManage);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_TASK.ADD_COMMENT)
+  async handleAddTaskComment(@Payload() payload: AddTaskCommentMessageDto) {
+    if (payload.scope === 'manage') await this.workspaceAccess.assertTask(payload.tenantId, WORKSPACE_GRANTS.taskActivity, payload.taskId);
+    return this.workspaceTaskService.addComment(payload.tenantId, payload.taskId, payload.body, payload.userId, payload.email, payload.scope);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_TASK.DELETE_COMMENT)
+  async handleDeleteTaskComment(@Payload() payload: DeleteTaskCommentMessageDto) {
+    if (payload.scope === 'manage') await this.workspaceAccess.assertTask(payload.tenantId, WORKSPACE_GRANTS.taskActivity, payload.taskId);
+    return this.workspaceTaskService.deleteComment(
+      payload.tenantId,
+      payload.taskId,
+      payload.commentId,
+      payload.userId,
+      payload.canModerate,
+      payload.scope,
+    );
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_TASK.ADD_CHECKLIST)
+  async handleAddChecklistItem(@Payload() payload: AddChecklistItemMessageDto) {
+    await this.workspaceAccess.assertTask(payload.tenantId, WORKSPACE_GRANTS.taskEdit, payload.taskId);
+    return this.workspaceTaskService.addChecklistItem(payload.tenantId, payload.taskId, payload.label);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_TASK.UPDATE_CHECKLIST)
+  async handleUpdateChecklistItem(@Payload() payload: UpdateChecklistItemMessageDto) {
+    if (payload.scope === 'manage') await this.workspaceAccess.assertTask(payload.tenantId, WORKSPACE_GRANTS.taskEdit, payload.taskId);
+    return this.workspaceTaskService.updateChecklistItem(
+      payload.tenantId,
+      payload.taskId,
+      payload.itemId,
+      { label: payload.label, done: payload.done },
+      payload.scope,
+      payload.userId,
+      payload.email,
+    );
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_TASK.DELETE_CHECKLIST)
+  async handleDeleteChecklistItem(@Payload() payload: DeleteChecklistItemMessageDto) {
+    await this.workspaceAccess.assertTask(payload.tenantId, WORKSPACE_GRANTS.taskEdit, payload.taskId);
+    return this.workspaceTaskService.deleteChecklistItem(payload.tenantId, payload.taskId, payload.itemId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_TASK.ADD_ATTACHMENT)
+  async handleAddTaskAttachment(@Payload() payload: AddTaskAttachmentMessageDto) {
+    if (payload.scope === 'manage') await this.workspaceAccess.assertTask(payload.tenantId, WORKSPACE_GRANTS.taskActivity, payload.taskId);
+    return this.workspaceTaskService.addAttachment(
+      payload.tenantId,
+      payload.taskId,
+      { fileId: payload.fileId, fileName: payload.fileName, mimeType: payload.mimeType, sizeBytes: payload.sizeBytes },
+      payload.userId,
+      payload.email,
+      payload.scope,
+    );
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_TASK.DELETE_ATTACHMENT)
+  async handleDeleteTaskAttachment(@Payload() payload: DeleteTaskAttachmentMessageDto) {
+    if (payload.scope === 'manage') await this.workspaceAccess.assertTask(payload.tenantId, WORKSPACE_GRANTS.taskActivity, payload.taskId);
+    return this.workspaceTaskService.deleteAttachment(
+      payload.tenantId,
+      payload.taskId,
+      payload.attachmentId,
+      payload.userId,
+      payload.canModerate,
+      payload.scope,
+    );
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_TASK.GET_ATTACHMENT)
+  async handleGetTaskAttachment(@Payload() payload: GetTaskAttachmentMessageDto) {
+    if (payload.scope === 'manage') await this.workspaceAccess.assertTask(payload.tenantId, WORKSPACE_GRANTS.taskActivityView, payload.taskId);
+    return this.workspaceTaskService.attachmentFile(
+      payload.tenantId,
+      payload.taskId,
+      payload.attachmentId,
+      payload.userId,
+      payload.email,
+      payload.scope,
     );
   }
 
@@ -3767,14 +4455,23 @@ export class TenantServiceController {
   }
 
   @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_PROJECT.UPDATE)
-  handleUpdateWorkspaceProject(
+  async handleUpdateWorkspaceProject(
     @Payload() payload: UpdateWorkspaceProjectMessageDto,
   ) {
+    await this.workspaceAccess.assertProject(payload.tenantId, WORKSPACE_GRANTS.projectEdit, payload.projectId);
     return this.workspaceProjectService.update(
       payload.tenantId,
       payload.projectId,
       payload.dto,
+      payload.actorUserId,
+      payload.canReopen === true,
     );
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_PROJECT.GET_OPEN_TASKS)
+  async handleGetProjectOpenTasks(@Payload() payload: WorkspaceProjectIdMessageDto) {
+    await this.workspaceAccess.assertProject(payload.tenantId, WORKSPACE_GRANTS.projectOpenTasks, payload.projectId);
+    return this.workspaceProjectService.openWork(payload.tenantId, payload.projectId);
   }
 
   @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_PROJECT.DELETE)
@@ -3849,7 +4546,480 @@ export class TenantServiceController {
     return this.companyDocumentService.getPublished(
       payload.tenantId,
       payload.query,
+      { userId: payload.userId, email: payload.email },
     );
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ROLE_DASHBOARD.FINANCE)
+  handleFinanceDashboard(@Payload() payload: RoleDashboardActorDto) {
+    return this.roleDashboardService.getFinance(payload.tenantId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ROLE_DASHBOARD.IT)
+  handleItDashboard(@Payload() payload: RoleDashboardActorDto) {
+    return this.roleDashboardService.getIt(payload.tenantId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.ROLE_DASHBOARD.MANAGER)
+  handleManagerDashboard(@Payload() payload: RoleDashboardActorDto) {
+    return this.roleDashboardService.getManager(payload.tenantId, payload.userId, payload.email);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.FINAL_SETTLEMENT.GET_FOR_CASE)
+  handleGetSettlementForCase(@Payload() payload: SettlementCaseMessageDto) {
+    return this.finalSettlementService.getForCase(payload.tenantId, payload.caseId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.FINAL_SETTLEMENT.PREPARE)
+  handlePrepareSettlement(@Payload() payload: SettlementCaseMessageDto) {
+    return this.finalSettlementService.prepare(payload.tenantId, payload.caseId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.FINAL_SETTLEMENT.GET_ALL)
+  handleGetSettlements(@Payload() payload: GetSettlementsMessageDto) {
+    return this.finalSettlementService.getSettlements(payload.tenantId, payload.query);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.FINAL_SETTLEMENT.GET_PDF)
+  handleGetSettlementPdf(@Payload() payload: SettlementIdMessageDto) {
+    return this.finalSettlementService.getSettlementPdf(payload.tenantId, payload.settlementId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.FINAL_SETTLEMENT.GET_ONE)
+  handleGetSettlement(@Payload() payload: SettlementIdMessageDto) {
+    return this.finalSettlementService.getSettlement(payload.tenantId, payload.settlementId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.FINAL_SETTLEMENT.UPDATE)
+  handleUpdateSettlement(@Payload() payload: UpdateSettlementMessageDto) {
+    return this.finalSettlementService.update(payload.tenantId, payload.settlementId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.FINAL_SETTLEMENT.ADD_LINE)
+  handleAddSettlementLine(@Payload() payload: AddSettlementLineMessageDto) {
+    return this.finalSettlementService.addLine(payload.tenantId, payload.settlementId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.FINAL_SETTLEMENT.UPDATE_LINE)
+  handleUpdateSettlementLine(@Payload() payload: UpdateSettlementLineMessageDto) {
+    return this.finalSettlementService.updateLine(payload.tenantId, payload.settlementId, payload.lineId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.FINAL_SETTLEMENT.REMOVE_LINE)
+  handleRemoveSettlementLine(@Payload() payload: SettlementLineIdMessageDto) {
+    return this.finalSettlementService.removeLine(payload.tenantId, payload.settlementId, payload.lineId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.FINAL_SETTLEMENT.SUBMIT)
+  handleSubmitSettlement(@Payload() payload: SettlementIdMessageDto) {
+    return this.finalSettlementService.submit(payload.tenantId, payload.settlementId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.FINAL_SETTLEMENT.DECIDE)
+  handleDecideSettlement(@Payload() payload: DecideSettlementMessageDto) {
+    return this.finalSettlementService.decide(payload.tenantId, payload.settlementId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.FINAL_SETTLEMENT.CANCEL)
+  handleCancelSettlement(@Payload() payload: SettlementIdMessageDto) {
+    return this.finalSettlementService.cancel(payload.tenantId, payload.settlementId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.FINAL_SETTLEMENT.MARK_PAID)
+  handleMarkSettlementPaid(@Payload() payload: SettlementIdMessageDto) {
+    return this.finalSettlementService.markPaid(payload.tenantId, payload.settlementId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.OFFBOARDING.GET_SETTINGS)
+  handleGetOffboardingSettings(@Payload() payload: OffboardingActorDto) {
+    return this.offboardingService.getSettings(payload.tenantId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.OFFBOARDING.UPDATE_SETTINGS)
+  handleUpdateOffboardingSettings(@Payload() payload: UpdateOffboardingSettingsMessageDto) {
+    return this.offboardingService.updateSettings(payload.tenantId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.OFFBOARDING.GET_CASES)
+  handleGetOffboardingCases(@Payload() payload: GetOffboardingCasesMessageDto) {
+    return this.offboardingService.getCases(payload.tenantId, payload.query);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.OFFBOARDING.GET_CASE)
+  handleGetOffboardingCase(@Payload() payload: OffboardingCaseIdMessageDto) {
+    return this.offboardingService.getCase(payload.tenantId, payload.caseId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.OFFBOARDING.INITIATE)
+  handleInitiateOffboarding(@Payload() payload: InitiateOffboardingMessageDto) {
+    return this.offboardingService.initiate(payload.tenantId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.OFFBOARDING.UPDATE)
+  handleUpdateOffboarding(@Payload() payload: UpdateOffboardingMessageDto) {
+    return this.offboardingService.update(payload.tenantId, payload.caseId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.OFFBOARDING.CANCEL)
+  handleCancelOffboarding(@Payload() payload: CancelOffboardingMessageDto) {
+    return this.offboardingService.cancel(payload.tenantId, payload.caseId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.OFFBOARDING.CLEAR_STAGE)
+  handleClearOffboardingStage(@Payload() payload: OffboardingStageMessageDto) {
+    return this.offboardingService.clearStage(payload.tenantId, payload.caseId, payload.stage, payload.dto.note);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.OFFBOARDING.REOPEN_STAGE)
+  handleReopenOffboardingStage(@Payload() payload: OffboardingStageMessageDto) {
+    return this.offboardingService.reopenStage(payload.tenantId, payload.caseId, payload.stage, payload.dto.note);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.OFFBOARDING.GET_WAITING_ON_ME)
+  handleGetOffboardingWaitingOnMe(@Payload() payload: OffboardingActorDto) {
+    return this.offboardingService.getWaitingOnMe(payload.tenantId, payload.userId, payload.email);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.OFFBOARDING.CLEAR_AS_MANAGER)
+  handleClearOffboardingAsManager(@Payload() payload: ClearMyOffboardingMessageDto) {
+    return this.offboardingService.clearAsManager(payload.tenantId, payload.userId, payload.email, payload.caseId, payload.dto.note, payload.dto.stage);
+  }
+
+  // ── Changes to a person with an open review ───────────────────────────────
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_SYNC.PENDING)
+  handlePendingReviewChanges(@Payload() payload: { tenantId: string }) {
+    return this.performanceSyncService.pending(payload.tenantId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_SYNC.DECIDE)
+  handleDecideReviewChange(@Payload() payload: { tenantId: string; reviewId: string; dto: any }) {
+    return this.performanceSyncService.decide(payload.tenantId, payload.reviewId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_SYNC.REOPEN)
+  handleReopenReview(@Payload() payload: { tenantId: string; reviewId: string }) {
+    return this.performanceSyncService.reopen(payload.tenantId, payload.reviewId);
+  }
+
+  // ── KPI templates and review plans ────────────────────────────────────────
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_PLAN.TEMPLATE_LIST)
+  handleListKpiTemplates(@Payload() payload: { tenantId: string }) {
+    return this.kpiTemplateService.list(payload.tenantId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_PLAN.TEMPLATE_GET)
+  handleGetKpiTemplate(@Payload() payload: { tenantId: string; id: string }) {
+    return this.kpiTemplateService.get(payload.tenantId, payload.id);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_PLAN.TEMPLATE_CREATE)
+  handleCreateKpiTemplate(@Payload() payload: { tenantId: string; dto: any }) {
+    return this.kpiTemplateService.create(payload.tenantId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_PLAN.TEMPLATE_UPDATE)
+  handleUpdateKpiTemplate(@Payload() payload: { tenantId: string; id: string; dto: any }) {
+    return this.kpiTemplateService.update(payload.tenantId, payload.id, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_PLAN.TEMPLATE_DELETE)
+  handleDeleteKpiTemplate(@Payload() payload: { tenantId: string; id: string }) {
+    return this.kpiTemplateService.remove(payload.tenantId, payload.id);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_PLAN.TEMPLATE_MATCH)
+  handleMatchKpiTemplate(@Payload() payload: { tenantId: string; employeeId: string }) {
+    return this.kpiTemplateService.match(payload.tenantId, payload.employeeId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_PLAN.REVIEWER_GET)
+  handleReviewerPlan(@Payload() payload: { tenantId: string; userId: string; email?: string; reviewId: string }) {
+    return this.performancePlanService.reviewerPlan(payload.tenantId, payload.userId, payload.email, payload.reviewId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_PLAN.REVIEWER_SAVE)
+  handleReviewerSavePlan(@Payload() payload: { tenantId: string; userId: string; email?: string; reviewId: string; dto: any }) {
+    return this.performancePlanService.reviewerSave(payload.tenantId, payload.userId, payload.email, payload.reviewId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_PLAN.REVIEWER_PUBLISH)
+  handleReviewerPublishPlan(@Payload() payload: { tenantId: string; userId: string; email?: string; reviewId: string }) {
+    return this.performancePlanService.reviewerPublish(payload.tenantId, payload.userId, payload.email, payload.reviewId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_PLAN.ADMIN_GET)
+  handleAdminPlan(@Payload() payload: { tenantId: string; reviewId: string }) {
+    return this.performancePlanService.adminPlan(payload.tenantId, payload.reviewId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_PLAN.ADMIN_SAVE)
+  handleAdminSavePlan(@Payload() payload: { tenantId: string; reviewId: string; dto: any }) {
+    return this.performancePlanService.adminSave(payload.tenantId, payload.reviewId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_PLAN.ADMIN_PUBLISH)
+  handleAdminPublishPlan(@Payload() payload: { tenantId: string; reviewId: string; email?: string }) {
+    return this.performancePlanService.adminPublish(payload.tenantId, payload.reviewId, payload.email);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_PLAN.ADMIN_UNPUBLISH)
+  handleAdminUnpublishPlan(@Payload() payload: { tenantId: string; reviewId: string }) {
+    return this.performancePlanService.adminUnpublish(payload.tenantId, payload.reviewId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_PLAN.HISTORY)
+  handleReviewHistory(@Payload() payload: { tenantId: string; reviewId: string }) {
+    return this.performancePlanService.history(payload.tenantId, payload.reviewId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_PLAN.MINE)
+  handleMyPlans(@Payload() payload: { tenantId: string; userId: string; email?: string }) {
+    return this.performancePlanService.myPlans(payload.tenantId, payload.userId, payload.email);
+  }
+
+  // ── Performance review cycles ─────────────────────────────────────────────
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_CYCLE.LIST)
+  handleListCycles(@Payload() payload: { tenantId: string; query: any }) {
+    return this.performanceCycleService.list(payload.tenantId, payload.query);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_CYCLE.GET)
+  handleGetCycle(@Payload() payload: { tenantId: string; id: string }) {
+    return this.performanceCycleService.get(payload.tenantId, payload.id);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_CYCLE.CREATE)
+  handleCreateCycle(@Payload() payload: { tenantId: string; dto: any }) {
+    return this.performanceCycleService.create(payload.tenantId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_CYCLE.UPDATE)
+  handleUpdateCycle(@Payload() payload: { tenantId: string; id: string; dto: any }) {
+    return this.performanceCycleService.update(payload.tenantId, payload.id, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_CYCLE.DELETE)
+  handleDeleteCycle(@Payload() payload: { tenantId: string; id: string }) {
+    return this.performanceCycleService.remove(payload.tenantId, payload.id);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_CYCLE.PREVIEW)
+  handlePreviewCycle(@Payload() payload: { tenantId: string; id: string }) {
+    return this.performanceCycleService.preview(payload.tenantId, payload.id);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_CYCLE.LAUNCH)
+  handleLaunchCycle(@Payload() payload: { tenantId: string; id: string }) {
+    return this.performanceCycleService.launch(payload.tenantId, payload.id);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_CYCLE.CLOSE)
+  handleCloseCycle(@Payload() payload: { tenantId: string; id: string }) {
+    return this.performanceCycleService.close(payload.tenantId, payload.id);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_CYCLE.QUEUE)
+  handleCycleQueue(@Payload() payload: { tenantId: string; id: string }) {
+    return this.performanceCycleService.queue(payload.tenantId, payload.id);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_CYCLE.ENROL)
+  handleEnrolInCycle(@Payload() payload: { tenantId: string; id: string; dto: any }) {
+    return this.performanceCycleService.enrol(payload.tenantId, payload.id, payload.dto);
+  }
+
+  // ── Department checklists ─────────────────────────────────────────────────
+
+  @MessagePattern(MESSAGE_PATTERNS.DEPARTMENT_CHECKLIST.LIST)
+  handleListDepartmentChecklist(@Payload() payload: { tenantId: string; query: any }) {
+    return this.departmentChecklistService.list(payload.tenantId, payload.query);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.DEPARTMENT_CHECKLIST.CREATE)
+  handleCreateDepartmentChecklistItem(@Payload() payload: { tenantId: string; dto: any }) {
+    return this.departmentChecklistService.create(payload.tenantId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.DEPARTMENT_CHECKLIST.UPDATE)
+  handleUpdateDepartmentChecklistItem(@Payload() payload: { tenantId: string; id: string; dto: any }) {
+    return this.departmentChecklistService.update(payload.tenantId, payload.id, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.DEPARTMENT_CHECKLIST.DELETE)
+  handleDeleteDepartmentChecklistItem(@Payload() payload: { tenantId: string; id: string }) {
+    return this.departmentChecklistService.remove(payload.tenantId, payload.id);
+  }
+
+  // ── Additional assignments ────────────────────────────────────────────────
+
+  @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_ASSIGNMENT.LIST)
+  handleListAssignments(@Payload() payload: { tenantId: string; employeeId: string }) {
+    return this.employeeAssignmentService.list(payload.tenantId, payload.employeeId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_ASSIGNMENT.ADD)
+  handleAddAssignment(@Payload() payload: { tenantId: string; employeeId: string; dto: any }) {
+    return this.employeeAssignmentService.add(payload.tenantId, payload.employeeId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_ASSIGNMENT.UPDATE)
+  handleUpdateAssignment(@Payload() payload: { tenantId: string; employeeId: string; assignmentId: string; dto: any }) {
+    return this.employeeAssignmentService.update(payload.tenantId, payload.employeeId, payload.assignmentId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_ASSIGNMENT.END)
+  handleEndAssignment(@Payload() payload: { tenantId: string; employeeId: string; assignmentId: string; dto: any }) {
+    return this.employeeAssignmentService.end(payload.tenantId, payload.employeeId, payload.assignmentId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.EMPLOYEE_ASSIGNMENT.MINE)
+  handleMyAssignments(@Payload() payload: { tenantId: string; userId: string; email?: string }) {
+    return this.employeeAssignmentService.listMine(payload.tenantId, payload.userId, payload.email);
+  }
+
+  // ── Helpdesk ──────────────────────────────────────────────────────────────
+
+  @MessagePattern(MESSAGE_PATTERNS.HELPDESK.MY_LIST)
+  handleMyTickets(@Payload() payload: { tenantId: string; userId: string; email?: string }) {
+    return this.helpdeskService.listMine(payload.tenantId, payload.userId, payload.email);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.HELPDESK.MY_GET)
+  handleMyTicket(@Payload() payload: { tenantId: string; userId: string; email?: string; id: string }) {
+    return this.helpdeskService.getMine(payload.tenantId, payload.userId, payload.email, payload.id);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.HELPDESK.MY_CREATE)
+  handleCreateMyTicket(@Payload() payload: { tenantId: string; userId: string; email?: string; dto: any }) {
+    return this.helpdeskService.create(payload.tenantId, payload.userId, payload.email, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.HELPDESK.MY_COMMENT)
+  handleCommentMyTicket(@Payload() payload: { tenantId: string; userId: string; email?: string; id: string; dto: any }) {
+    return this.helpdeskService.commentMine(payload.tenantId, payload.userId, payload.email, payload.id, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.HELPDESK.MY_REOPEN)
+  handleReopenMyTicket(@Payload() payload: { tenantId: string; userId: string; email?: string; id: string }) {
+    return this.helpdeskService.reopenMine(payload.tenantId, payload.userId, payload.email, payload.id);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.HELPDESK.MY_CLOSE)
+  handleCloseMyTicket(@Payload() payload: { tenantId: string; userId: string; email?: string; id: string }) {
+    return this.helpdeskService.closeMine(payload.tenantId, payload.userId, payload.email, payload.id);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.HELPDESK.LIST)
+  handleListTickets(@Payload() payload: { tenantId: string; userId?: string; email?: string; query: any }) {
+    return this.helpdeskService.list(payload.tenantId, payload.query, { userId: payload.userId, email: payload.email });
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.HELPDESK.GET)
+  handleGetTicket(@Payload() payload: { tenantId: string; id: string }) {
+    return this.helpdeskService.get(payload.tenantId, payload.id);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.HELPDESK.UPDATE)
+  handleUpdateTicket(@Payload() payload: { tenantId: string; userId?: string; email?: string; id: string; dto: any }) {
+    return this.helpdeskService.update(payload.tenantId, payload.id, payload.dto, { userId: payload.userId, email: payload.email });
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.HELPDESK.COMMENT)
+  handleCommentTicket(@Payload() payload: { tenantId: string; userId?: string; email?: string; id: string; dto: any }) {
+    return this.helpdeskService.comment(payload.tenantId, payload.id, payload.dto, { userId: payload.userId, email: payload.email });
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.BRANCH.GET_ALL)
+  handleGetBranches(@Payload() payload: GetBranchesMessageDto) {
+    return this.branchService.getBranches(payload.tenantId, payload.query);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.BRANCH.GET_ONE)
+  handleGetBranch(@Payload() payload: BranchIdMessageDto) {
+    return this.branchService.getBranch(payload.tenantId, payload.branchId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.BRANCH.CREATE)
+  handleCreateBranch(@Payload() payload: CreateBranchMessageDto) {
+    return this.branchService.createBranch(payload.tenantId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.BRANCH.UPDATE)
+  handleUpdateBranch(@Payload() payload: UpdateBranchMessageDto) {
+    return this.branchService.updateBranch(payload.tenantId, payload.branchId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.BRANCH.DELETE)
+  handleDeleteBranch(@Payload() payload: BranchIdMessageDto) {
+    return this.branchService.deleteBranch(payload.tenantId, payload.branchId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.BRANCH.ASSIGN_EMPLOYEES)
+  handleAssignBranchEmployees(@Payload() payload: AssignBranchEmployeesMessageDto) {
+    return this.branchService.assignEmployees(payload.tenantId, payload.branchId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.BRANCH.REMOVE_EMPLOYEES)
+  handleRemoveBranchEmployees(@Payload() payload: AssignBranchEmployeesMessageDto) {
+    return this.branchService.removeEmployees(payload.tenantId, payload.branchId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.BRANCH.FROM_LOCATIONS)
+  handleBranchesFromLocations(@Payload() payload: BranchesFromLocationsMessageDto) {
+    return this.branchService.fromLocations(payload.tenantId, payload.dto.apply === true);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.APPROVAL_POLICY.GET_ALL)
+  handleGetApprovalPolicies(@Payload() payload: ApprovalPolicyTenantMessageDto) {
+    return this.approvalPolicyService.list(payload.tenantId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.APPROVAL_POLICY.UPDATE)
+  handleUpdateApprovalPolicy(@Payload() payload: UpdateApprovalPolicyMessageDto) {
+    return this.approvalPolicyService.update(payload.tenantId, payload.requestType, payload.dto, payload.email);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.APPROVAL_POLICY.RESET)
+  handleResetApprovalPolicy(@Payload() payload: ApprovalPolicyTypeMessageDto) {
+    return this.approvalPolicyService.reset(payload.tenantId, payload.requestType, payload.email);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.POLICY_ACK.SET_DISTRIBUTION)
+  handleSetPolicyDistribution(@Payload() payload: SetPolicyDistributionMessageDto) {
+    return this.policyAcknowledgementService.setDistribution(payload, payload.documentId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.POLICY_ACK.REQUEST_REACK)
+  handleRequestPolicyReacknowledgement(@Payload() payload: PolicyDocumentIdMessageDto) {
+    return this.policyAcknowledgementService.requestReacknowledgement(payload, payload.documentId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.POLICY_ACK.GET_ACKS)
+  handleGetPolicyAcknowledgements(@Payload() payload: GetPolicyAcknowledgementsMessageDto) {
+    return this.policyAcknowledgementService.getAcknowledgements(payload.tenantId, payload.documentId, payload.query);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.POLICY_ACK.OVERVIEW)
+  handlePolicyAcknowledgementOverview(@Payload() payload: PolicyActorDto) {
+    return this.policyAcknowledgementService.overview(payload.tenantId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.POLICY_ACK.REMIND)
+  handleRemindPolicyAcknowledgement(@Payload() payload: PolicyDocumentIdMessageDto) {
+    return this.policyAcknowledgementService.remind(payload, payload.documentId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.POLICY_ACK.GET_MINE)
+  handleGetMyPolicies(@Payload() payload: GetMyPoliciesMessageDto) {
+    return this.policyAcknowledgementService.getMine(payload, payload.query);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.POLICY_ACK.ACKNOWLEDGE)
+  handleAcknowledgePolicy(@Payload() payload: PolicyDocumentIdMessageDto) {
+    return this.policyAcknowledgementService.acknowledge(payload, payload.documentId);
   }
 
   @MessagePattern(MESSAGE_PATTERNS.COMPANY_DOCUMENT.CREATE)

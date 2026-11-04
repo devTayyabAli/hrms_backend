@@ -205,6 +205,53 @@ export class MyTeamService {
   }
 
   /**
+   * My own employment history: when I joined, each time my manager,
+   * department or designation changed, and when I left. Only what the
+   * person themselves should read: who recorded a change and the note HR
+   * wrote with it stay on the admin side.
+   */
+  async getMyEmploymentHistory(tenantId: string, userId: string, email?: string) {
+    const me = await this.findMe(tenantId, userId, email);
+    if (!me) this.notFound('No employee profile is linked to this login.');
+    const Employee = await this.modelProvider.getEmployeeModel(tenantId);
+    const Change = await this.modelProvider.getHierarchyChangeModel(tenantId);
+    const [employee, changes] = await Promise.all([
+      Employee.findOne({ where: { id: me.id, tenantId }, include: await this.include(tenantId) }) as Promise<any>,
+      Change.findAll({ where: { tenantId, subjectType: 'EMPLOYEE', subjectId: me.id }, order: [['effectiveFrom', 'DESC'], ['createdAt', 'DESC']], raw: true }) as Promise<any[]>,
+    ]);
+    const person = this.person(employee ?? me);
+
+    const WHAT: Record<string, string> = { REPORTING_MANAGER: 'Reporting manager', DEPARTMENT: 'Department', DESIGNATION: 'Designation' };
+    type Entry = { type: string; title: string; from: string | null; to: string | null; date: string; recordedAt: Date | null };
+    const entries: Entry[] = changes
+      .filter((row) => WHAT[row.changeType])
+      .map((row) => ({
+        type: row.changeType,
+        title: row.previousLabel || row.previousId ? `${WHAT[row.changeType]} changed` : `${WHAT[row.changeType]} set`,
+        from: row.previousLabel ?? null,
+        to: row.nextLabel ?? null,
+        date: String(row.effectiveFrom).slice(0, 10),
+        recordedAt: row.createdAt ?? null,
+      }));
+    if (person.joiningDate) entries.push({ type: 'JOINED', title: 'Joined the organization', from: null, to: null, date: String(person.joiningDate).slice(0, 10), recordedAt: null });
+    if (employee?.exitDate && person.status === EmployeeStatus.RESIGNED) {
+      entries.push({ type: 'LEFT', title: 'Left the organization', from: null, to: null, date: String(employee.exitDate).slice(0, 10), recordedAt: null });
+    }
+    entries.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+
+    return {
+      current: {
+        status: person.status,
+        joiningDate: person.joiningDate,
+        designation: person.designation,
+        department: person.department,
+        reportingManager: person.reportingManagerId ? { id: person.reportingManagerId, name: person.reportingManagerName } : null,
+      },
+      data: entries,
+    };
+  }
+
+  /**
    * My Team: who I report to, who reports to me (with what they're doing
    * today), and — for a department head — the whole department.
    */
@@ -283,6 +330,131 @@ export class MyTeamService {
           name: department.name,
           members: rows,
           summary: this.summarize(rows.map((row) => row.today).filter(Boolean) as TodayStatus[]),
+        };
+      }),
+    };
+  }
+
+  /**
+   * A department head's view of what they head: each department with its
+   * sub-departments, the managers in it and their teams, everyone who works in
+   * it, and the people who also work for it through an additional assignment.
+   * Only for someone who heads a department; it reaches nothing outside them.
+   */
+  async getMyDepartments(tenantId: string, userId: string, email?: string) {
+    const me = await this.findMe(tenantId, userId, email);
+    if (!me) this.notFound('No employee profile is linked to this login.');
+    const Department = await this.modelProvider.getDepartmentModel(tenantId);
+    const Employee = await this.modelProvider.getEmployeeModel(tenantId);
+    const headed = (await Department.findAll({ where: { tenantId, managerId: me.id }, order: [['name', 'ASC']] })) as any[];
+    if (!headed.length) this.forbidden('This view is for people who head a department.');
+
+    const departments = (await Department.findAll({ where: { tenantId }, attributes: ['id', 'name', 'code', 'parentDepartmentId', 'managerId', 'branchIds', 'isActive'] })) as any[];
+    const childrenOf = new Map<string, any[]>();
+    for (const department of departments) {
+      if (!department.parentDepartmentId) continue;
+      childrenOf.set(department.parentDepartmentId, [...(childrenOf.get(department.parentDepartmentId) ?? []), department]);
+    }
+    const subtreeIds = (rootId: string): string[] => {
+      const seen = new Set<string>([rootId]);
+      const queue = [rootId];
+      while (queue.length) {
+        for (const child of childrenOf.get(queue.shift() as string) ?? []) {
+          if (seen.has(child.id)) continue; // a bad data loop must not hang the request
+          seen.add(child.id);
+          queue.push(child.id);
+        }
+      }
+      return [...seen];
+    };
+
+    const wanted = [...new Set(headed.flatMap((department) => subtreeIds(department.id)))];
+    const include = await this.include(tenantId);
+    const people = (await Employee.findAll({
+      where: { tenantId, status: { [Op.in]: CURRENT }, departmentId: { [Op.in]: wanted } },
+      include,
+      order: [['firstName', 'ASC']],
+    })) as any[];
+
+    const today = new Date().toISOString().slice(0, 10);
+    const statuses = await this.todayFor(tenantId, people.map((person) => person.id), today);
+    const inDepartment = new Set(people.map((person) => person.id));
+    const reportsOf = new Map<string, any[]>();
+    for (const person of people) {
+      if (person.reportingManagerId && inDepartment.has(person.reportingManagerId)) {
+        reportsOf.set(person.reportingManagerId, [...(reportsOf.get(person.reportingManagerId) ?? []), person]);
+      }
+    }
+    const row = (person: any) => ({ ...this.person(person), today: statuses.get(person.id) ?? null, reportCount: (reportsOf.get(person.id) ?? []).length });
+
+    // Heads and branch names, once.
+    const headIds = [...new Set(departments.map((department) => department.managerId).filter(Boolean))] as string[];
+    const heads = new Map<string, any>(
+      headIds.length ? ((await Employee.findAll({ where: { tenantId, id: { [Op.in]: headIds } }, attributes: ['id', 'firstName', 'lastName'], raw: true })) as any[]).map((head) => [head.id, head]) : [],
+    );
+    const branchNames = new Map<string, string>();
+    const branchIds = [...new Set(departments.flatMap((department) => (Array.isArray(department.branchIds) ? department.branchIds : [])))] as string[];
+    if (branchIds.length) {
+      try {
+        const Branch = await this.modelProvider.getBranchModel(tenantId);
+        for (const branch of (await Branch.findAll({ where: { tenantId, id: { [Op.in]: branchIds } }, attributes: ['id', 'name'], raw: true })) as any[]) branchNames.set(branch.id, branch.name);
+      } catch {
+        /* branches unreadable: the departments still show */
+      }
+    }
+    const branchesOf = (department: any) => (Array.isArray(department.branchIds) ? department.branchIds : []).filter((id: string) => branchNames.has(id)).map((id: string) => ({ id, name: branchNames.get(id) as string }));
+
+    const node = (department: any, seen = new Set<string>()): any => {
+      seen.add(department.id);
+      const subs = (childrenOf.get(department.id) ?? []).filter((child) => !seen.has(child.id)).map((child) => node(child, seen));
+      const own = people.filter((person) => person.departmentId === department.id).length;
+      return {
+        id: department.id,
+        name: department.name,
+        code: department.code ?? null,
+        isActive: department.isActive !== false,
+        head: department.managerId && heads.get(department.managerId) ? { id: department.managerId, name: nameOf(heads.get(department.managerId)) } : null,
+        branches: branchesOf(department),
+        directHeadcount: own,
+        headcount: own + subs.reduce((sum: number, sub: any) => sum + sub.headcount, 0),
+        subDepartments: subs,
+      };
+    };
+
+    // People who also work for these departments through an additional assignment, best effort.
+    const alsoHere = new Map<string, any[]>();
+    try {
+      const Assignment = await this.modelProvider.getEmployeeAssignmentModel(tenantId);
+      const rows = (await Assignment.findAll({ where: { tenantId, departmentId: { [Op.in]: wanted } } as any, order: [['startDate', 'DESC']], limit: 500 })) as any[];
+      const live = rows.filter((assignment) => !assignment.endDate || String(assignment.endDate).slice(0, 10) >= today);
+      const personIds = [...new Set(live.map((assignment) => assignment.employeeId))] as string[];
+      const found = personIds.length ? ((await Employee.findAll({ where: { tenantId, id: { [Op.in]: personIds }, status: { [Op.in]: CURRENT } }, include })) as any[]) : [];
+      const byId = new Map(found.map((person) => [person.id, person]));
+      for (const assignment of live) {
+        const person = byId.get(assignment.employeeId);
+        if (!person) continue;
+        const entry = { employee: { id: person.id, name: nameOf(person), employeeCode: person.employeeCode ?? null, designation: person.designation?.title ?? null, primaryDepartment: person.department?.name ?? null }, title: assignment.title ?? null, since: String(assignment.startDate).slice(0, 10) };
+        alsoHere.set(assignment.departmentId, [...(alsoHere.get(assignment.departmentId) ?? []), entry]);
+      }
+    } catch (error: any) {
+      this.logger.warn(`Could not read additional assignments for the department view: ${error?.message ?? error}`);
+    }
+
+    return {
+      date: today,
+      departments: headed.map((department) => {
+        const ids = new Set(subtreeIds(department.id));
+        const members = people.filter((person) => ids.has(person.departmentId) && person.id !== me.id);
+        const memberRows = members.map(row);
+        const managers = memberRows
+          .filter((member) => member.reportCount > 0)
+          .map((manager) => ({ ...manager, team: (reportsOf.get(manager.id) ?? []).map((report: any) => ({ id: report.id, name: nameOf(report), designation: report.designation?.title ?? null })) }));
+        return {
+          ...node(department),
+          managers,
+          employees: memberRows,
+          alsoWorkingHere: [...ids].flatMap((id) => alsoHere.get(id) ?? []),
+          summary: this.summarize(memberRows.map((member) => member.today).filter(Boolean) as TodayStatus[]),
         };
       }),
     };

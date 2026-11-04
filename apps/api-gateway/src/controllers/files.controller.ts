@@ -32,6 +32,7 @@ import {
   FileQueryDto,
   TenantOptional,
   Public,
+  grantsPermission,
 } from '@app/common';
 import {
   CurrentUser,
@@ -246,7 +247,10 @@ export class FilesController {
     );
   }
 
-  /** Listing every file is an administrator's view — not for ordinary users. */
+  /**
+   * Listing every file is an administrator's view — not for ordinary users.
+   * Within an organization that means whoever manages its settings.
+   */
   @ApiTags(TAGS.PLATFORM_FILES)
   @Get()
   @ApiOperation({
@@ -257,7 +261,7 @@ export class FilesController {
     const superAdmin = isSuperAdminCaller(user);
     if (
       !superAdmin &&
-      !(user?.isFullAccess || user?.permissions?.includes('*'))
+      !grantsPermission(user?.permissions ?? [], 'settings.manage')
     ) {
       throw new ForbiddenException(
         'Only an organization administrator can list files.',

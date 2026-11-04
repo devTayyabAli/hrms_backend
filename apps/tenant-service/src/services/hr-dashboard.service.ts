@@ -11,7 +11,9 @@ import {
   LeaveApprovalUrgency,
   LeaveApprovalsQueryDto,
   LeaveRequestStatus,
+  grantsPermission,
 } from '@app/common';
+import { currentRpcActor } from '@app/tenant-context';
 import { EmployeeService } from './employee.service';
 import { AttendanceService } from './attendance.service';
 import { OnboardingService } from './onboarding.service';
@@ -548,6 +550,12 @@ export class HrDashboardService {
     const counted = { [Op.in]: [EmployeeStatus.ACTIVE, EmployeeStatus.ON_LEAVE] };
     // Organization admins see everyone; a scoped caller who reaches this sees their people only.
     const adminScope = await this.scopeWhere(tenantId, 'id');
+    // The payroll card is payroll data: only for callers who may view
+    // payroll. The admin role doesn't carry that by default, so an admin
+    // without the grant gets the card empty rather than the figures.
+    const actor = currentRpcActor();
+    const canSeePayroll =
+      !actor || Boolean(actor.isFullAccess) || grantsPermission(actor.permissions ?? [], 'payroll.view');
 
     const [headline, leave, statistics, departments, performance, attendance, tasks, recentJoiners, payroll] =
       await Promise.all([
@@ -676,7 +684,8 @@ export class HrDashboardService {
           const completed = count('COMPLETED');
           const inProgress = count('IN_PROGRESS');
           const pending = count('PENDING');
-          return { range, total: completed + inProgress + pending, completed, inProgress, pending };
+          const blocked = count('BLOCKED');
+          return { range, total: completed + inProgress + pending + blocked, completed, inProgress, pending, blocked };
         }, null),
 
         safe(async () => {
@@ -702,6 +711,7 @@ export class HrDashboardService {
         }, [] as any[]),
 
         safe(async () => {
+          if (!canSeePayroll) return null;
           const range = query.payrollRange ?? AdminDashboardRange.THIS_MONTH;
           const { from, to } = rangeBounds(range, today);
           const Run = await this.modelProvider.getPayrollRunModel(tenantId);

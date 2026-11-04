@@ -73,6 +73,9 @@ export enum EmployeeNotificationKind {
   LEAVE_BALANCE = 'LEAVE_BALANCE',
   REQUEST = 'REQUEST',
   DOCUMENT = 'DOCUMENT',
+  ASSET = 'ASSET',
+  LEARNING = 'LEARNING',
+  PERFORMANCE = 'PERFORMANCE',
   GENERAL = 'GENERAL',
 }
 

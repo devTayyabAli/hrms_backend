@@ -56,13 +56,26 @@ import { PlatformSchemaService } from './services/platform-schema.service';
 import { EmployeeService } from './services/employee.service';
 import { AttendanceService } from './services/attendance.service';
 import { OrganizationDepartmentsService } from './services/organization-departments.service';
+import { OrganizationHierarchyService } from './services/organization-hierarchy.service';
 import { LeaveRequestService } from './services/leave-request.service';
 import { LeaveBalanceService } from './services/leave-balance.service';
 import { ShiftService } from './services/shift.service';
 import { ChatService } from './services/chat.service';
 import { AssetService } from './services/asset.service';
+import { WorkspaceAccessService } from './services/workspace-access.service';
+import { LearningCourseService } from './services/learning-course.service';
+import { LearningAssignmentService } from './services/learning-assignment.service';
+import { LearningSelfService } from './services/learning-self.service';
+import { LearningNotificationService } from './services/learning-notification.service';
+import { LearningRecommendationService } from './services/learning-recommendation.service';
+import { LearningReportService } from './services/learning-report.service';
+import { LearningReminderScheduler } from './services/learning-reminder.scheduler';
+import { AssetSelfService } from './services/asset-self.service';
+import { AssetRequestService } from './services/asset-request.service';
+import { AssetClearanceService } from './services/asset-clearance.service';
 import { JobOpeningService } from './services/job-opening.service';
 import { WorkspaceTaskService } from './services/workspace-task.service';
+import { WorkspaceDashboardService } from './services/workspace-dashboard.service';
 import { WorkspaceProjectService } from './services/workspace-project.service';
 import { PlatformNotifierService } from './services/platform-notifier.service';
 import { PlatformClientContactsService } from './services/platform-client-contacts.service';
@@ -77,7 +90,24 @@ import { OnboardingTaskService } from './services/onboarding-task.service';
 import { SubscriptionLimitService } from './services/subscription-limit.service';
 import { BillingScheduler } from './services/billing.scheduler';
 import { AttendanceAutoCheckoutScheduler } from './services/attendance-auto-checkout.scheduler';
+import { WorkspaceReminderScheduler } from './services/workspace-reminder.scheduler';
 import { PerformanceDashboardService } from './services/performance-dashboard.service';
+import { PerformanceSelfService } from './services/performance-self.service';
+import { PolicyAcknowledgementService } from './services/policy-acknowledgement.service';
+import { ApprovalPolicyService } from './services/approval-policy.service';
+import { PermissionHoldersService } from './services/permission-holders.service';
+import { BranchService } from './services/branch.service';
+import { HelpdeskService } from './services/helpdesk.service';
+import { EmployeeAssignmentService } from './services/employee-assignment.service';
+import { DepartmentChecklistService } from './services/department-checklist.service';
+import { PerformanceCycleService } from './services/performance-cycle.service';
+import { KpiTemplateService } from './services/kpi-template.service';
+import { PerformancePlanService } from './services/performance-plan.service';
+import { PerformanceSyncService } from './services/performance-sync.service';
+import { OffboardingService } from './services/offboarding.service';
+import { FinalSettlementService } from './services/final-settlement.service';
+import { RoleDashboardService } from './services/role-dashboard.service';
+import { PolicyAckReminderScheduler } from './services/policy-ack-reminder.scheduler';
 import { PayrollDashboardService } from './services/payroll-dashboard.service';
 import { EmployeePortalService } from './services/employee-portal.service';
 import { MyTeamService } from './services/my-team.service';
@@ -231,14 +261,28 @@ import { PaymentProviderFactory } from './billing/providers/payment-provider.fac
     EmployeeService,
     AttendanceService,
     AttendanceAutoCheckoutScheduler,
+    WorkspaceReminderScheduler,
     OrganizationDepartmentsService,
+    OrganizationHierarchyService,
     LeaveRequestService,
     LeaveBalanceService,
     ShiftService,
     ChatService,
     AssetService,
+    WorkspaceAccessService,
+    LearningCourseService,
+    LearningAssignmentService,
+    LearningSelfService,
+    LearningNotificationService,
+    LearningRecommendationService,
+    LearningReportService,
+    LearningReminderScheduler,
+    AssetSelfService,
+    AssetRequestService,
+    AssetClearanceService,
     WorkspaceTaskService,
     WorkspaceProjectService,
+    WorkspaceDashboardService,
     PlatformNotifierService,
     PlatformClientContactsService,
     CalendarService,
@@ -251,6 +295,22 @@ import { PaymentProviderFactory } from './billing/providers/payment-provider.fac
     OnboardingService,
     OnboardingTaskService,
     PerformanceDashboardService,
+    PerformanceSelfService,
+    PolicyAcknowledgementService,
+    ApprovalPolicyService,
+    PermissionHoldersService,
+    BranchService,
+    HelpdeskService,
+    EmployeeAssignmentService,
+    DepartmentChecklistService,
+    PerformanceCycleService,
+    KpiTemplateService,
+    PerformancePlanService,
+    PerformanceSyncService,
+    OffboardingService,
+    FinalSettlementService,
+    RoleDashboardService,
+    PolicyAckReminderScheduler,
     PayrollDashboardService,
     EmployeePortalService,
     MyTeamService,

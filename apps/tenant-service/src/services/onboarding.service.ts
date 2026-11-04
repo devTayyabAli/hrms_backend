@@ -18,6 +18,7 @@ import {
 } from '@app/common';
 import { TenantModelProviderService } from './tenant-model-provider.service';
 import { buildDefaultChecklist } from './onboarding-checklist';
+import { notifyTaskOwners, onboardingTasksFor } from './department-checklist';
 
 /** Flattened row for the New Hires table. */
 export interface NewHireRow {
@@ -700,9 +701,14 @@ export class OnboardingService {
     if (dto.seedDefaultTasks !== false) {
       const OnboardingTaskModel =
         await this.modelProvider.getOnboardingTaskModel(tenantId);
-      await OnboardingTaskModel.bulkCreate(
-        buildDefaultChecklist(tenantId, created.id, joiningDate) as any[],
-      );
+      // What the hire's department adds, owned by the people it names.
+      const departmentTasks = await onboardingTasksFor(this.modelProvider, tenantId, created.id, {
+        departmentId: (created as any).departmentId,
+        joiningDate,
+        reportingManagerEmployeeId: (created as any).reportingManagerEmployeeId,
+      });
+      await OnboardingTaskModel.bulkCreate([...buildDefaultChecklist(tenantId, created.id, joiningDate), ...departmentTasks] as any[]);
+      await notifyTaskOwners(this.modelProvider, tenantId, created.id, departmentTasks as any[]);
     }
 
     return this.getOne(tenantId, created.id);

@@ -108,7 +108,7 @@ export class PayslipService {
     };
   }
 
-  private async organization(tenantId: string): Promise<PayslipOrganization> {
+  async organization(tenantId: string): Promise<PayslipOrganization> {
     try {
       const tenant: any = await this.tenantService?.getTenantById(tenantId);
       if (tenant) {
@@ -129,7 +129,7 @@ export class PayslipService {
   }
 
   /** The organization's logo bytes, from file storage. Missing or unreadable → text header. */
-  private async logoBytes(logoUrl: string | null): Promise<Buffer | null> {
+  async logoBytes(logoUrl: string | null): Promise<Buffer | null> {
     const fileId = logoUrl?.match(/files\/public\/([0-9a-f-]{36})/i)?.[1];
     if (!fileId || !this.authClient) return null;
     try {

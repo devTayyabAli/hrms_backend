@@ -10,8 +10,9 @@
  */
 
 /**
- * The permission claim a full-access role (the Organization Admin) carries.
- * Explicit on purpose: an empty `permissions` claim means "no permissions",
+ * The wildcard permission claim a full-access role carries. The Organization
+ * Admin has it. The Administration role does not: that role is granted only
+ * what is listed on it. An empty `permissions` claim means "no permissions",
  * never "everything".
  */
 export const FULL_ACCESS_PERMISSION = '*';
@@ -24,6 +25,34 @@ export enum EmployeePortalRole {
 
 export const ORG_ADMIN_ROLE_NAME = 'ORGANIZATION_ADMIN';
 
+/** Operational admin: the grants we keep off the full-access Organization Admin. */
+export const ADMINISTRATION_ROLE_NAME = 'Administration';
+
+/**
+ * What Administration can never lose. Without these nobody holding only that
+ * role could open Roles & Permissions or Settings again. The Organization
+ * Admin is unaffected: that role is full access and is not edited here.
+ */
+export const ADMIN_REQUIRED_PERMISSIONS: readonly string[] = ['user_management.manage', 'settings.manage'];
+
+/**
+ * Whose records a role's permissions reach. Permissions say *what* someone
+ * may do (view employees, approve leave); the data scope says *on whom*:
+ *
+ * - ORGANIZATION — everyone.
+ * - BRANCH       — the branch(es) they head, or the branch they work in.
+ * - DEPARTMENT   — the department(s) they manage, or their own department.
+ * - TEAM         — the people who report to them, directly or further down.
+ * - SELF         — only their own record.
+ */
+export enum DataScope {
+  ORGANIZATION = 'ORGANIZATION',
+  BRANCH = 'BRANCH',
+  DEPARTMENT = 'DEPARTMENT',
+  TEAM = 'TEAM',
+  SELF = 'SELF',
+}
+
 export interface SystemTenantRoleDef {
   /** `roles.name` in the tenant database. */
   name: string;
@@ -32,10 +61,22 @@ export interface SystemTenantRoleDef {
   description: string;
   defaultPermissions: string[];
   /**
-   * Full access, never editable. The admin tier signs in with an empty
-   * `permissions` claim, which PermissionsGuard treats as "unrestricted".
+   * Full access, never editable. Only the Organization Admin. It signs in
+   * with `*` and `isFullAccess`, which PermissionsGuard treats as unrestricted.
    */
-  locked: boolean;
+  locked?: boolean;
+  /**
+   * Whose records the role reaches the first time it is seeded. Omitted
+   * means the historical default (SELF for Employee, ORGANIZATION otherwise).
+   * Written once; an organization can change it later when `scopeEditable`.
+   */
+  dataScope?: DataScope;
+  /**
+   * The name stays fixed and the role cannot be deleted, but an admin may
+   * change whose records it reaches. Used by the starter roles (Finance,
+   * Department Head, Team Lead, IT). HR and Employee stay fixed.
+   */
+  scopeEditable?: boolean;
 }
 
 export const SYSTEM_TENANT_ROLES: SystemTenantRoleDef[] = [
@@ -47,6 +88,41 @@ export const SYSTEM_TENANT_ROLES: SystemTenantRoleDef[] = [
     locked: true,
   },
   {
+    name: ADMINISTRATION_ROLE_NAME,
+    credentialRole: ADMINISTRATION_ROLE_NAME,
+    description:
+      'Runs day-to-day administration: settings, structure, users, roles, modules, billing and policies. Payroll, performance reviews and recruitment are not included until granted here.',
+    // Not full access. No payroll (any area), no performance, no recruitment
+    // or onboarding. Those are granted on the matrix when the organization
+    // wants them. Always sees the whole organization.
+    defaultPermissions: [
+      ...ADMIN_REQUIRED_PERMISSIONS,
+      'dashboard.view',
+      'departments.manage',
+      // Chooses who approves each kind of request.
+      'workflows.manage',
+      'billing.manage',
+      'reports.view',
+      'reports.export',
+      'employee.view',
+      'employee.create',
+      'employee.edit',
+      'attendance.view',
+      'leave_management.view',
+      'projects.view',
+      'tasks.view',
+      'calendar.manage',
+      'documents.manage',
+      'messages.manage',
+      'assets.view',
+      'tickets.view',
+      // Sees who is leaving, not their clearance or settlement.
+      'offboarding.view',
+      'learning.manage',
+    ],
+    dataScope: DataScope.ORGANIZATION,
+  },
+  {
     name: EmployeePortalRole.HR,
     credentialRole: EmployeePortalRole.HR,
     description: 'Human Resources portal role',
@@ -56,8 +132,16 @@ export const SYSTEM_TENANT_ROLES: SystemTenantRoleDef[] = [
       'attendance.manage',
       'leave_management.manage',
       'onboarding.manage',
+      // Starts offboarding and clears HR's part of it.
+      'offboarding.manage',
       'recruitment.manage',
       'performance.manage',
+      // Runs training: builds courses and assigns them. Deleting one stays a separate grant.
+      'learning.view',
+      'learning.create',
+      'learning.edit',
+      'learning.assign',
+      'learning.export',
       // Prepares payroll; approving it is a separate grant (payroll.approve).
       'payroll.view',
       'payroll.create',
@@ -66,20 +150,113 @@ export const SYSTEM_TENANT_ROLES: SystemTenantRoleDef[] = [
       // payroll.compliance.manage, which HR doesn't start with.
       'payroll.tax.manage',
       'payroll.compliance.view',
-      // Workspace: HR runs the team's tasks, projects and company calendar.
-      'tasks.manage',
-      'projects.manage',
+      // Workspace is view-only until an admin grants edit. Organizations that
+      // already configured this role keep whatever they saved.
+      'tasks.view',
+      'projects.view',
       'calendar.manage',
       'documents.manage',
     ],
-    locked: false,
   },
   {
     name: EmployeePortalRole.EMPLOYEE,
     credentialRole: EmployeePortalRole.EMPLOYEE,
     description: 'Employee self-service portal role',
     defaultPermissions: [],
-    locked: false,
+  },
+  {
+    name: 'Finance',
+    credentialRole: 'Finance',
+    description:
+      'Payroll, compensation, loans, adjustments and payroll approval. No performance reviews or general HR records. Permissions and data access can be changed.',
+    // No payroll.manage: that would also open tax rules and compliance setup.
+    // No reports.view: that catalogue includes workforce reports.
+    defaultPermissions: [
+      'payroll.view',
+      'payroll.create',
+      'payroll.edit',
+      'payroll.approve',
+      'payroll.export',
+      'payroll.compensation.view',
+      'payroll.compensation.manage',
+      // Approves proposed salary changes (never its own: the proposer cannot approve).
+      'payroll.compensation.approve',
+      'payroll.components.view',
+      'payroll.components.manage',
+      'payroll.loans.view',
+      'payroll.loans.manage',
+      'payroll.adjustments.view',
+      'payroll.adjustments.manage',
+    ],
+    dataScope: DataScope.ORGANIZATION,
+    scopeEditable: true,
+  },
+  {
+    name: 'Department Head',
+    credentialRole: 'Department Head',
+    description:
+      'Sees the department they manage: employee directory, attendance, leave decisions, goals and reviews, projects and tasks. Not payroll or company-wide settings. Permissions and data access can be changed.',
+    // leave_management.edit is what approves a request. It is also the grant
+    // for editing a leave policy; the policies screen stays hidden unless the
+    // role is organization-wide.
+    // Performance and projects follow the data scope, so goals, reviews and
+    // projects here are the department's own.
+    defaultPermissions: [
+      'employee.view',
+      'attendance.view',
+      'leave_management.view',
+      'leave_management.edit',
+      'performance.view',
+      'performance.create',
+      'performance.edit',
+      'projects.view',
+      'projects.create',
+      'projects.edit',
+      'tasks.view',
+      'tasks.create',
+      'tasks.edit',
+      'learning.view',
+    ],
+    dataScope: DataScope.DEPARTMENT,
+    scopeEditable: true,
+  },
+  {
+    name: 'Team Lead',
+    credentialRole: 'Team Lead',
+    description:
+      'Same actions as a Department Head, limited to people who report to them rather than the whole department. Permissions and data access can be changed.',
+    defaultPermissions: [
+      'employee.view',
+      'attendance.view',
+      'leave_management.view',
+      'leave_management.edit',
+      'performance.view',
+      'performance.create',
+      'performance.edit',
+      'projects.view',
+      'tasks.view',
+      'tasks.create',
+      'tasks.edit',
+      'learning.view',
+    ],
+    dataScope: DataScope.TEAM,
+    scopeEditable: true,
+  },
+  {
+    name: 'IT',
+    credentialRole: 'IT',
+    description:
+      'Assets and support tickets for equipment, accounts and clearance. Not employee HR files, payroll or performance. Permissions and data access can be changed.',
+    defaultPermissions: [
+      'assets.view',
+      'assets.create',
+      'assets.edit',
+      'assets.export',
+      'tickets.view',
+      'tickets.manage',
+    ],
+    dataScope: DataScope.ORGANIZATION,
+    scopeEditable: true,
   },
 ];
 
@@ -97,25 +274,10 @@ export const isAdminTierCredentialRole = (role: string | null | undefined): bool
 export const roleNameForCredentialRole = (role: string): string =>
   isAdminTierCredentialRole(role) ? ORG_ADMIN_ROLE_NAME : role;
 
-/**
- * Whose records a role's permissions reach. Permissions say *what* someone
- * may do (view employees, approve leave); the data scope says *on whom*:
- *
- * - ORGANIZATION — everyone (Organization Admin, HR).
- * - DEPARTMENT   — the department(s) they manage, or their own department.
- * - TEAM         — the people who report to them, directly or further down.
- * - SELF         — only their own record.
- */
-export enum DataScope {
-  ORGANIZATION = 'ORGANIZATION',
-  DEPARTMENT = 'DEPARTMENT',
-  TEAM = 'TEAM',
-  SELF = 'SELF',
-}
-
 /** Broadest first: a user with several roles gets the widest scope among them. */
 export const DATA_SCOPE_ORDER: readonly DataScope[] = [
   DataScope.ORGANIZATION,
+  DataScope.BRANCH,
   DataScope.DEPARTMENT,
   DataScope.TEAM,
   DataScope.SELF,

@@ -1,5 +1,5 @@
 import { HttpStatus, Injectable, Logger, Optional } from '@nestjs/common';
-import { Op, col, fn, literal } from 'sequelize';
+import { Op, col, fn, literal, where as sqlWhere } from 'sequelize';
 import {
   ApplyMyLeaveDto,
   AttendanceSource,
@@ -29,6 +29,7 @@ import {
   SELF_EDITABLE_PROFILE_FIELDS,
   TenantErrorCode,
   TenantException,
+  DataScope,
   UpdateMyProfileDto,
   UploadMyDocumentDto,
 } from '@app/common';
@@ -37,6 +38,23 @@ import { AttendanceService } from './attendance.service';
 import { DataScopeService } from './data-scope.service';
 import { AttendanceRules, ipAllowed, isWorkingDay, normalizeIp } from './attendance-rules';
 import { TenantModelProviderService } from './tenant-model-provider.service';
+import { ApprovalFlow, DecisionKind, RequestStage, decisionKind } from './approval-flow';
+import { currentRpcActor } from '@app/tenant-context';
+import {
+  Actor,
+  Approval,
+  advanceApproval,
+  buildApproval,
+  canActOnStage,
+  completeApproval,
+  handOnApproval,
+  rejectApproval,
+  rerouteApproval,
+  resolveStages,
+  stagesOf,
+} from './approval-engine';
+import { createRouteLookup, loadPolicyStages } from './approval-route-lookup';
+import { PermissionHoldersService } from './permission-holders.service';
 import { fiscalYear, fiscalYearContaining, fiscalYearStarting, roundDays } from './leave-fiscal-year';
 
 const REQUEST_CARDS: { type: EmployeeRequestType; title: string; description: string }[] = [
@@ -201,6 +219,7 @@ export class EmployeePortalService {
     private readonly leaveRequestService: LeaveRequestService,
     private readonly attendanceService: AttendanceService,
     @Optional() private readonly dataScope?: DataScopeService,
+    @Optional() private readonly holders?: PermissionHoldersService,
   ) {}
 
   /**
@@ -879,11 +898,6 @@ export class EmployeePortalService {
       },
       userId,
     );
-    await this.notify(tenantId, employee.id, {
-      kind: EmployeeNotificationKind.LEAVE,
-      title: 'Leave Request',
-      body: `Your ${created.leaveType?.name ?? 'leave'} request for ${periodLabel(created.fromDate, created.toDate)} is under review.`,
-    });
     return created;
   }
 
@@ -1108,6 +1122,9 @@ export class EmployeePortalService {
       decisionNote: row.decisionNote ?? null,
       decidedAt: row.decidedAt ?? null,
       appliedOn: row.createdAt ?? null,
+      /** Where a pending request is, e.g. "With Tayyaba Sabir (Team Lead). Not approved yet." */
+      statusText: row.approval?.statusText ?? null,
+      approval: row.approval ?? null,
       canCancel: pendingRow,
       canEdit: pendingRow,
     };
@@ -1523,7 +1540,13 @@ export class EmployeePortalService {
       : null;
     const stage = managerName ? 'MANAGER_PENDING' : 'HR_PENDING';
 
-    const resolution: Record<string, any> = {
+    // An organization that saved a route for employee requests: it decides who approves.
+    const policy = await loadPolicyStages(this.modelProvider, tenantId, 'EMPLOYEE_REQUEST');
+    const approval = policy
+      ? buildApproval(await resolveStages(policy, employee.id, await createRouteLookup(this.modelProvider, tenantId)), [employee.firstName, employee.lastName].filter(Boolean).join(' ') || 'the employee')
+      : null;
+
+    const resolution: Record<string, any> = approval ? this.resolutionOf({}, approval) : {
       stage,
       managerName: managerName || null,
       managerId: employee.reportingManagerId || null,
@@ -1565,6 +1588,7 @@ export class EmployeePortalService {
       timeTo: dto.timeTo ?? null,
       status: EmployeeRequestStatus.PENDING,
       resolution,
+      approval,
     });
     const when = dto.fromDate
       ? periodLabel(dto.fromDate, dto.toDate ?? dto.fromDate)
@@ -1577,6 +1601,16 @@ export class EmployeePortalService {
       title: requestTitle(dto.type),
       body: `Your ${requestTitle(dto.type).toLowerCase()} request for ${when} is under review.`,
     });
+    const firstApprover = approval ? approval.currentApproverId : employee.reportingManagerId;
+    if (firstApprover) {
+      const who = [employee.firstName, employee.lastName].filter(Boolean).join(' ') || 'An employee';
+      await this.notify(tenantId, firstApprover, {
+        kind: EmployeeNotificationKind.REQUEST,
+        title: requestTitle(dto.type),
+        body: `${who} submitted a ${requestTitle(dto.type).toLowerCase()} request for ${when}. It is waiting for your review.`,
+      });
+    }
+    await this.holders?.tell(tenantId, approval, [employee.id], requestTitle(dto.type), `${[employee.firstName, employee.lastName].filter(Boolean).join(' ') || 'An employee'} submitted a ${requestTitle(dto.type).toLowerCase()} request for ${when}. It is waiting for your review.`);
     return this.requestRow(created, employee);
   }
 
@@ -1697,6 +1731,337 @@ export class EmployeePortalService {
     return employee?.id ?? null;
   }
 
+  /** No saved setting means a single approval step. A missing table does too. */
+  private async approvalFlow(tenantId: string): Promise<ApprovalFlow> {
+    try {
+      const Setting = await this.modelProvider.getApprovalSettingModel(tenantId);
+      const row = await Setting.findOne({ where: { tenantId }, attributes: ['flow'] });
+      return row?.flow === 'MANAGER_THEN_HR' ? 'MANAGER_THEN_HR' : 'SINGLE';
+    } catch {
+      return 'SINGLE';
+    }
+  }
+
+  private actorScope(): { orgWide: boolean; departmentScope: boolean } {
+    const scope = this.dataScope?.scope() ?? DataScope.ORGANIZATION;
+    return {
+      orgWide: scope === DataScope.ORGANIZATION,
+      // A branch head decides the manager's step the way a department head does.
+      departmentScope: scope === DataScope.DEPARTMENT || scope === DataScope.BRANCH,
+    };
+  }
+
+  private stageOf(row: { resolution?: Record<string, any> | null }): RequestStage {
+    const res = row.resolution || {};
+    if (res.stage === 'HR_PENDING' || res.stage === 'MANAGER_PENDING') return res.stage;
+    return res.managerId || res.managerName ? 'MANAGER_PENDING' : 'HR_PENDING';
+  }
+
+  /** True when `managerId` is the employee's reporting manager, or above them. */
+  private async inManagerChain(tenantId: string, employeeId: string, managerId: string): Promise<boolean> {
+    const Employee = await this.modelProvider.getEmployeeModel(tenantId);
+    let current: string | null = employeeId;
+    const seen = new Set<string>();
+    for (let depth = 0; current && depth < 12 && !seen.has(current); depth += 1) {
+      seen.add(current);
+      const row = await Employee.findOne({
+        where: { tenantId, id: current },
+        attributes: ['reportingManagerId'],
+      });
+      const next = row?.reportingManagerId ?? null;
+      if (!next) return false;
+      if (next === managerId) return true;
+      current = next;
+    }
+    return false;
+  }
+
+  private async actorDisplayName(tenantId: string, userId?: string, email?: string): Promise<string> {
+    const Employee = await this.modelProvider.getEmployeeModel(tenantId);
+    const row = userId
+      ? await Employee.findOne({ where: { tenantId, userId }, attributes: ['firstName', 'lastName'] })
+      : null;
+    const named = row ? [row.firstName, row.lastName].filter(Boolean).join(' ') : '';
+    if (named) return named;
+    return email?.trim() || 'HR';
+  }
+
+  /**
+   * What the viewer may do with one pending request. `manager` only moves it
+   * on to HR; `final` applies it. Null when it is not their turn.
+   */
+  private async decisionFor(
+    tenantId: string,
+    row: any,
+    actorEmployeeId: string | null,
+    flow: ApprovalFlow,
+    scope: { orgWide: boolean; departmentScope: boolean },
+  ): Promise<'final' | 'manager' | null> {
+    if (row.status !== EmployeeRequestStatus.PENDING) return null;
+    if (actorEmployeeId && actorEmployeeId === row.employeeId) return null;
+    if (row.approval) {
+      const { stages, index } = stagesOf(row.approval as Approval);
+      if (!canActOnStage(stages[index], this.approverActor(actorEmployeeId, scope.orgWide))) return null;
+      return index === stages.length - 1 ? 'final' : 'manager';
+    }
+    const res = (row.resolution as Record<string, any>) || {};
+    const stage = this.stageOf(row);
+    const inManagerChain =
+      flow === 'MANAGER_THEN_HR' && stage === 'MANAGER_PENDING' && actorEmployeeId
+        ? actorEmployeeId === res.managerId || (await this.inManagerChain(tenantId, row.employeeId, actorEmployeeId))
+        : false;
+    const kind: DecisionKind = decisionKind({
+      flow,
+      stage,
+      hasManager: Boolean(res.managerId || res.managerName),
+      inManagerChain,
+      departmentScope: scope.departmentScope,
+      orgWide: scope.orgWide,
+    });
+    if (kind === 'wait') return null;
+    return kind === 'manager' ? 'manager' : 'final';
+  }
+
+  // ── Employee requests with a saved route ──────────────────────────────────
+
+  /** Who is deciding, as the approval engine sees them. */
+  private approverActor(employeeId: string | null, orgWide: boolean): Actor {
+    const rpc = currentRpcActor();
+    return { employeeId, orgWide, permissions: rpc?.permissions ?? [], isFullAccess: rpc?.isFullAccess === true };
+  }
+
+  /** The request's own record of where it is, kept in step with its route for the screens that read `resolution`. */
+  private resolutionOf(base: Record<string, any>, approval: Approval): Record<string, any> {
+    return {
+      ...base,
+      stage: approval.finalStep ? 'HR_PENDING' : 'MANAGER_PENDING',
+      managerName: approval.currentApproverName ?? null,
+      managerId: approval.currentApproverId ?? null,
+      workflow: approval.workflow,
+    };
+  }
+
+  /** Tells the employee and whoever the request is now waiting on. */
+  private async announceRequestMove(tenantId: string, row: any, approval: Approval) {
+    const title = requestTitle(row.type);
+    await this.notify(tenantId, row.employeeId, {
+      kind: EmployeeNotificationKind.REQUEST,
+      title,
+      body: `Your ${title.toLowerCase()} request changed hands. ${approval.statusText}`,
+    });
+    if (approval.currentApproverId) {
+      await this.notify(tenantId, approval.currentApproverId, {
+        kind: EmployeeNotificationKind.REQUEST,
+        title,
+        body: `A ${title.toLowerCase()} request is waiting for your review.`,
+      });
+    }
+    await this.holders?.tell(tenantId, approval, [row.employeeId], title, `A ${title.toLowerCase()} request is waiting for your review.`);
+  }
+
+  /**
+   * One stage of a request's route. A stage that is not the last only moves the
+   * request on; the last one applies it to the records, as HR's decision always has.
+   */
+  private async decideStagedRequest(tenantId: string, row: any, dto: DecideEmployeeRequestDto, actorUserId: string, actorEmployeeId: string | null) {
+    const approval = row.approval as Approval;
+    const { stages, index } = stagesOf(approval);
+    if (!canActOnStage(stages[index], this.approverActor(actorEmployeeId, this.actorScope().orgWide))) {
+      throw new TenantException(
+        TenantErrorCode.INVALID_TENANT_CONTEXT,
+        `This request is ${approval.statusText.charAt(0).toLowerCase()}${approval.statusText.slice(1)}`,
+        HttpStatus.FORBIDDEN,
+      );
+    }
+    const last = index === stages.length - 1;
+    const label = approval.currentApproverName
+      ? `${approval.currentApproverName}${approval.currentApproverTitle ? ` (${approval.currentApproverTitle})` : ''}`
+      : (stages[index].title ?? 'HR');
+    const res = (row.resolution as Record<string, any>) || {};
+    const title = requestTitle(row.type).toLowerCase();
+    const note = dto.note?.trim();
+    const noteText = note ? ` Note: ${note}` : '';
+
+    if (dto.status === EmployeeRequestStatus.REJECTED) {
+      const next = rejectApproval(approval, label);
+      await row.update({
+        status: EmployeeRequestStatus.REJECTED,
+        decisionNote: dto.note ?? null,
+        decidedByUserId: actorUserId,
+        decidedAt: new Date(),
+        approval: next,
+        resolution: { ...this.resolutionOf(res, next), stage: 'REJECTED' },
+      });
+      await this.notify(tenantId, row.employeeId, { kind: EmployeeNotificationKind.REQUEST, title: requestTitle(row.type), body: `Your ${title} request was rejected by ${label}.${noteText}` });
+      return this.requestRow(row);
+    }
+
+    if (!last) {
+      const next = advanceApproval(approval, label);
+      await row.update({ approval: next, resolution: this.resolutionOf(res, next) });
+      await this.notify(tenantId, row.employeeId, { kind: EmployeeNotificationKind.REQUEST, title: requestTitle(row.type), body: `Your ${title} request was approved by ${label}. ${next.statusText}${noteText}` });
+      if (next.currentApproverId) {
+        await this.notify(tenantId, next.currentApproverId, { kind: EmployeeNotificationKind.REQUEST, title: requestTitle(row.type), body: `${label} approved a ${title} request. It is now waiting for your review.` });
+      }
+      await this.holders?.tell(tenantId, next, [row.employeeId], requestTitle(row.type), `${label} approved a ${title} request. It is now waiting for your review.`);
+      return this.requestRow(row);
+    }
+
+    // Applying comes first: a failure leaves the request waiting to be tried again.
+    const applied = await this.applyApproval(tenantId, row, dto, actorUserId);
+    const done = completeApproval(approval, label);
+    await row.update({
+      status: EmployeeRequestStatus.APPROVED,
+      decisionNote: dto.note ?? null,
+      decidedByUserId: actorUserId,
+      decidedAt: new Date(),
+      ...applied.patch,
+      approval: done,
+      resolution: { ...this.resolutionOf(res, done), ...(applied.resolution || {}), stage: 'APPROVED' },
+    });
+    await this.notify(tenantId, row.employeeId, { kind: EmployeeNotificationKind.REQUEST, title: requestTitle(row.type), body: `Your ${title} request has been approved.${applied.summary}${noteText}` });
+    return this.requestRow(row);
+  }
+
+  /** Requests waiting on the signed-in person: the ones whose current stage names them. */
+  async myRequestApprovals(tenantId: string, userId: string, email?: string) {
+    const me = await this.me(tenantId, userId, email);
+    const Request = await this.modelProvider.getEmployeeRequestModel(tenantId);
+    const Employee = await this.modelProvider.getEmployeeModel(tenantId);
+    const rows = (await Request.findAll({
+      where: { tenantId, status: EmployeeRequestStatus.PENDING, [Op.and]: [sqlWhere(literal(`"EmployeeRequest"."approval"->>'currentApproverId'`), me.id)] } as any,
+      order: [['createdAt', 'ASC']],
+      limit: 200,
+    })) as any[];
+    const ids = [...new Set(rows.map((row) => row.employeeId))];
+    const people = ids.length ? ((await Employee.findAll({ where: { tenantId, id: { [Op.in]: ids } }, raw: true })) as any[]) : [];
+    const byId = new Map(people.map((person) => [person.id, person]));
+    return {
+      data: rows.map((row) => {
+        const person = byId.get(row.employeeId);
+        return {
+          ...this.requestRow(row),
+          employee: person ? { id: person.id, employeeCode: person.employeeCode, name: [person.firstName, person.lastName].filter(Boolean).join(' '), avatarUrl: person.avatarUrl ?? null } : null,
+          canDecide: true,
+        };
+      }),
+      total: rows.length,
+    };
+  }
+
+  /** The signed-in person decides the stage of a request that is waiting on them. */
+  async decideMyRequestApproval(tenantId: string, userId: string, email: string | undefined, requestId: string, dto: DecideEmployeeRequestDto) {
+    const me = await this.me(tenantId, userId, email);
+    const Request = await this.modelProvider.getEmployeeRequestModel(tenantId);
+    const row: any = await Request.findOne({ where: { id: requestId, tenantId } });
+    if (!row || !row.approval) this.notFound('Request not found.');
+    if (row.status !== EmployeeRequestStatus.PENDING) this.conflict(`This request is already ${String(row.status).toLowerCase()}.`);
+    if (row.employeeId === me.id) {
+      throw new TenantException(TenantErrorCode.INVALID_TENANT_CONTEXT, "You can't approve or reject your own request. Another approver needs to decide it.", HttpStatus.FORBIDDEN);
+    }
+    return this.decideStagedRequest(tenantId, row, dto, userId, me.id);
+  }
+
+  /**
+   * Someone's reporting line changed. Their pending requests, and their direct
+   * reports', follow the new route (see the same rule for leave). Requests
+   * without a saved route are left alone. Returns how many moved.
+   */
+  async rerouteRequestsAfterReportingChange(tenantId: string, employeeId: string): Promise<number> {
+    const Employee = await this.modelProvider.getEmployeeModel(tenantId);
+    const reports = (await Employee.findAll({ where: { tenantId, reportingManagerId: employeeId }, attributes: ['id'], raw: true })) as unknown as { id: string }[];
+    const Request = await this.modelProvider.getEmployeeRequestModel(tenantId);
+    const pending = ((await Request.findAll({
+      where: { tenantId, status: EmployeeRequestStatus.PENDING, employeeId: { [Op.in]: [employeeId, ...reports.map((row) => row.id)] } },
+    })) as any[]).filter((row) => row.approval);
+    if (!pending.length) return 0;
+
+    const policy = await loadPolicyStages(this.modelProvider, tenantId, 'EMPLOYEE_REQUEST');
+    if (!policy) return 0;
+    const lookup = await createRouteLookup(this.modelProvider, tenantId);
+    let moved = 0;
+    for (const row of pending) {
+      const next = rerouteApproval(row.approval as Approval, await resolveStages(policy, row.employeeId, lookup));
+      if (!next) continue;
+      await row.update({ approval: next, resolution: this.resolutionOf((row.resolution as Record<string, any>) || {}, next) });
+      await this.announceRequestMove(tenantId, row, next);
+      moved++;
+    }
+    return moved;
+  }
+
+  /** Someone left: requests that were waiting on them go to the next stage, or HR. */
+  async releaseRequestsWaitingOn(tenantId: string, approverId: string): Promise<number> {
+    const Request = await this.modelProvider.getEmployeeRequestModel(tenantId);
+    const waiting = (await Request.findAll({
+      where: { tenantId, status: EmployeeRequestStatus.PENDING, [Op.and]: [sqlWhere(literal(`"EmployeeRequest"."approval"->>'currentApproverId'`), approverId)] } as any,
+    })) as any[];
+    let moved = 0;
+    for (const row of waiting) {
+      const approval = row.approval as Approval | null;
+      if (!approval || approval.currentApproverId !== approverId) continue;
+      const next = handOnApproval(approval, `${approval.currentApproverName ?? 'The approver'} is no longer with the organization.`);
+      await row.update({ approval: next, resolution: this.resolutionOf((row.resolution as Record<string, any>) || {}, next) });
+      await this.announceRequestMove(tenantId, row, next);
+      moved++;
+    }
+    return moved;
+  }
+
+  /** The manager's step. Approval does not apply the request; rejection ends it. */
+  private async recordManagerStep(
+    tenantId: string,
+    row: any,
+    dto: DecideEmployeeRequestDto,
+    actorUserId: string,
+    actorEmail?: string,
+  ) {
+    const currentRes = (row.resolution as Record<string, any>) || {};
+    const workflow = Array.isArray(currentRes.workflow) ? currentRes.workflow.map((step: any) => ({ ...step })) : [];
+    const now = new Date().toISOString();
+    const name = await this.actorDisplayName(tenantId, actorUserId, actorEmail);
+    const note = dto.note?.trim();
+    const managerStep = workflow.find((step: any) => step.step === 'MANAGER_REVIEW');
+    const approved = dto.status === EmployeeRequestStatus.APPROVED;
+
+    if (approved) {
+      if (managerStep) {
+        managerStep.status = 'COMPLETED';
+        managerStep.at = now;
+        managerStep.description = note ? `Approved by ${name}. ${note}` : `Approved by ${name}`;
+      }
+      const hrStep = workflow.find((step: any) => step.step === 'HR_APPROVAL');
+      if (hrStep) {
+        hrStep.status = 'PENDING';
+        hrStep.description = 'Waiting for HR to apply this request';
+      }
+      await row.update({ resolution: { ...currentRes, stage: 'HR_PENDING', workflow } });
+    } else {
+      if (managerStep) {
+        managerStep.status = 'REJECTED';
+        managerStep.at = now;
+        managerStep.title = `Rejected by ${name}`;
+        managerStep.description = note || 'Request was rejected';
+      }
+      await row.update({
+        status: EmployeeRequestStatus.REJECTED,
+        decisionNote: dto.note ?? null,
+        decidedByUserId: actorUserId,
+        decidedAt: new Date(),
+        resolution: { ...currentRes, stage: 'REJECTED', workflow },
+      });
+    }
+
+    await this.notify(tenantId, row.employeeId, {
+      kind: EmployeeNotificationKind.REQUEST,
+      title: requestTitle(row.type),
+      body: approved
+        ? `Your ${requestTitle(row.type).toLowerCase()} request was approved by ${name} and is now with HR.${note ? ` Note: ${note}` : ''}`
+        : `Your ${requestTitle(row.type).toLowerCase()} request was rejected by ${name}.${note ? ` Note: ${note}` : ''}`,
+    });
+    return this.requestRow(row);
+  }
+
   async decideRequest(
     tenantId: string,
     requestId: string,
@@ -1710,9 +2075,9 @@ export class EmployeePortalService {
     if (row.status !== EmployeeRequestStatus.PENDING) {
       this.conflict(`This request is already ${String(row.status).toLowerCase()}.`);
     }
-    // Nobody decides their own request — it waits for another approver,
-    // such as the organization admin.
-    if ((await this.actorEmployeeId(tenantId, actorUserId, actorEmail)) === row.employeeId) {
+    // Nobody decides their own request — it waits for another approver.
+    const actorEmployeeId = await this.actorEmployeeId(tenantId, actorUserId, actorEmail);
+    if (actorEmployeeId === row.employeeId) {
       throw new TenantException(
         TenantErrorCode.INVALID_TENANT_CONTEXT,
         "You can't approve or reject your own request. Another approver, such as the organization admin, needs to decide it.",
@@ -1720,15 +2085,63 @@ export class EmployeePortalService {
       );
     }
 
+    if (row.approval) return this.decideStagedRequest(tenantId, row, dto, actorUserId, actorEmployeeId);
+
+    const flow = await this.approvalFlow(tenantId);
+    const currentRes = (row.resolution as Record<string, any>) || {};
+    const stage = this.stageOf(row);
+    const scope = this.actorScope();
+    const inManagerChain =
+      flow === 'MANAGER_THEN_HR' && stage === 'MANAGER_PENDING' && actorEmployeeId
+        ? actorEmployeeId === currentRes.managerId ||
+          (await this.inManagerChain(tenantId, row.employeeId, actorEmployeeId))
+        : false;
+    const kind = decisionKind({
+      flow,
+      stage,
+      hasManager: Boolean(currentRes.managerId || currentRes.managerName),
+      inManagerChain,
+      departmentScope: scope.departmentScope,
+      orgWide: scope.orgWide,
+    });
+    if (kind === 'wait') {
+      const who =
+        stage === 'HR_PENDING' || !(currentRes.managerId || currentRes.managerName)
+          ? 'HR'
+          : currentRes.managerName || 'their reporting manager';
+      throw new TenantException(
+        TenantErrorCode.INVALID_TENANT_CONTEXT,
+        `This request is waiting for ${who}.`,
+        HttpStatus.FORBIDDEN,
+      );
+    }
+    if (kind === 'manager') {
+      return this.recordManagerStep(tenantId, row, dto, actorUserId, actorEmail);
+    }
+
+    const approver =
+      kind === 'override' || !scope.orgWide
+        ? await this.actorDisplayName(tenantId, actorUserId, actorEmail)
+        : 'HR';
+
     // Approving applies the change first; the request is only marked approved
     // once that has worked, so a failure leaves it pending to try again.
+    // A manager's own approval does not reach here: it only advances the stage.
     const applied =
       dto.status === EmployeeRequestStatus.APPROVED
         ? await this.applyApproval(tenantId, row, dto, actorUserId)
         : { patch: {}, resolution: null, summary: '' };
 
-    const currentRes = (row.resolution as Record<string, any>) || {};
-    const workflow = Array.isArray(currentRes.workflow) ? [...currentRes.workflow] : [];
+    const workflow = Array.isArray(currentRes.workflow) ? currentRes.workflow.map((step: any) => ({ ...step })) : [];
+    if (kind === 'override') {
+      const managerStep = workflow.find((step: any) => step.step === 'MANAGER_REVIEW');
+      if (managerStep && (managerStep.status === 'PENDING' || managerStep.status === 'WAITING')) {
+        managerStep.status = 'SKIPPED';
+        managerStep.at = new Date().toISOString();
+        managerStep.description = `Manager step skipped by ${approver}`;
+      }
+    }
+    const byHr = scope.orgWide;
     if (dto.status === EmployeeRequestStatus.APPROVED) {
       workflow.forEach((step: any) => {
         if (step.status === 'PENDING' || step.status === 'WAITING') {
@@ -1737,7 +2150,7 @@ export class EmployeePortalService {
       });
       workflow.push({
         step: 'RESOLVED',
-        title: 'Approved by HR',
+        title: byHr ? 'Approved by HR' : `Approved by ${approver}`,
         description: dto.note?.trim() || 'Request approved and applied',
         at: new Date().toISOString(),
         status: 'COMPLETED',
@@ -1745,7 +2158,7 @@ export class EmployeePortalService {
     } else {
       workflow.push({
         step: 'REJECTED',
-        title: 'Rejected by HR',
+        title: byHr ? 'Rejected by HR' : `Rejected by ${approver}`,
         description: dto.note?.trim() || 'Request was rejected',
         at: new Date().toISOString(),
         status: 'REJECTED',
@@ -2014,42 +2427,51 @@ export class EmployeePortalService {
       for (const day of days as any[]) attendanceByDay.set(dayKey(day.employeeId, day.date), day);
     }
 
+    const flow = await this.approvalFlow(tenantId);
+    const scope = this.actorScope();
+
     return {
-      data: (rows as any[]).map((row) => {
-        const employee = row.employee;
-        const day =
-          row.type === EmployeeRequestType.ATTENDANCE_CORRECTION
-            ? attendanceByDay.get(dayKey(row.employeeId, row.requestDate))
-            : undefined;
-        return {
-          ...this.requestRow(row),
-          // The viewer's own request — they can see it but not decide it.
-          isOwnRequest: ownEmployeeId !== null && row.employeeId === ownEmployeeId,
-          currentAttendance:
+      data: await Promise.all(
+        (rows as any[]).map(async (row) => {
+          const employee = row.employee;
+          const day =
             row.type === EmployeeRequestType.ATTENDANCE_CORRECTION
-              ? day
-                ? {
-                    id: day.id,
-                    status: day.status,
-                    statusLabel: STATUS_LABELS[day.status] ?? day.status,
-                    checkInAt: day.checkInAt ?? null,
-                    checkOutAt: day.checkOutAt ?? null,
-                  }
-                : null
-              : undefined,
-          employee: employee
-            ? {
-                id: employee.id,
-                employeeCode: employee.employeeCode,
-                name: [employee.firstName, employee.lastName].filter(Boolean).join(' '),
-                avatarUrl: employee.avatarUrl ?? null,
-                department: employee.department
-                  ? { id: employee.department.id, name: employee.department.name }
-                  : null,
-              }
-            : null,
-        };
-      }),
+              ? attendanceByDay.get(dayKey(row.employeeId, row.requestDate))
+              : undefined;
+          const decision = await this.decisionFor(tenantId, row, ownEmployeeId, flow, scope);
+          return {
+            ...this.requestRow(row),
+            // The viewer's own request — they can see it but not decide it.
+            isOwnRequest: ownEmployeeId !== null && row.employeeId === ownEmployeeId,
+            /** `manager` only sends it to HR; `final` applies it. Null when it is not their turn. */
+            decision,
+            canDecide: decision !== null,
+            currentAttendance:
+              row.type === EmployeeRequestType.ATTENDANCE_CORRECTION
+                ? day
+                  ? {
+                      id: day.id,
+                      status: day.status,
+                      statusLabel: STATUS_LABELS[day.status] ?? day.status,
+                      checkInAt: day.checkInAt ?? null,
+                      checkOutAt: day.checkOutAt ?? null,
+                    }
+                  : null
+                : undefined,
+            employee: employee
+              ? {
+                  id: employee.id,
+                  employeeCode: employee.employeeCode,
+                  name: [employee.firstName, employee.lastName].filter(Boolean).join(' '),
+                  avatarUrl: employee.avatarUrl ?? null,
+                  department: employee.department
+                    ? { id: employee.department.id, name: employee.department.name }
+                    : null,
+                }
+              : null,
+          };
+        }),
+      ),
       total: count,
       page,
       limit,
@@ -2213,6 +2635,7 @@ export class EmployeePortalService {
       stage,
       managerName,
       workflow: res.workflow ?? null,
+      approval: row.approval ?? null,
       decisionNote: row.decisionNote ?? null,
       canCancel: row.status === EmployeeRequestStatus.PENDING,
       canEdit: row.status === EmployeeRequestStatus.PENDING,

@@ -75,4 +75,20 @@ export class CompanyDocument extends Model {
 
   @Column({ type: DataType.UUID, allowNull: true })
   declare createdByUserId: string | null;
+
+  /** Ask each person in the audience to acknowledge it. */
+  @Column({ type: DataType.BOOLEAN, allowNull: false, defaultValue: false })
+  declare requiresAcknowledgement: boolean;
+
+  /** Who it is for: { departmentIds, employeeIds }. Null means everyone. */
+  @Column({ type: DataType.JSONB, allowNull: true })
+  declare audience: { departmentIds: string[]; employeeIds: string[] } | null;
+
+  /** The day by which people should have acknowledged it. */
+  @Column({ type: DataType.DATEONLY, allowNull: true })
+  declare acknowledgeBy: string | null;
+
+  /** Goes up when the file is replaced or the document is sent again: everyone is asked afresh. */
+  @Column({ type: DataType.INTEGER, allowNull: false, defaultValue: 1 })
+  declare acknowledgementVersion: number;
 }

@@ -38,6 +38,7 @@ import {
   parseDurationMs,
   parseUserAgent,
   isAdminTierCredentialRole,
+  ORG_ADMIN_ROLE_NAME,
   EffectiveAuthorization,
   MESSAGE_PATTERNS,
   SERVICES,
@@ -1078,10 +1079,12 @@ export class AuthService implements OnModuleInit {
     // through so organization admins can work — everyone else waits.
     if (this.maintenanceSettings) {
       const maintenance = await this.maintenanceSettings.getMaintenanceState();
+      // The Organization Admin role, or a legacy admin-tier credential —
+      // never a custom role that merely contains "admin".
       const isAdmin =
         effectiveAuth.isFullAccess === true ||
-        [effectiveRole, ...(effectiveAuth.roles ?? [])].some((role) =>
-          /admin/i.test(String(role ?? '')),
+        [effectiveRole, ...(effectiveAuth.roles ?? [])].some(
+          (role) => role === ORG_ADMIN_ROLE_NAME || isAdminTierCredentialRole(String(role ?? '')),
         );
       if (maintenance.enabled && !isAdmin) {
         // Say who is let in, so a blocked employee knows it isn't their

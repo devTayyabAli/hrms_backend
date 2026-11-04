@@ -83,6 +83,14 @@ export class Asset extends Model {
   @Column({ type: DataType.DATE, allowNull: true })
   declare assignedAt: Date | null;
 
+  /** When the holder signed to say they received it in working order. Cleared whenever it changes hands. */
+  @Column({ type: DataType.DATE, allowNull: true })
+  declare acceptedAt: Date | null;
+
+  /** The name they typed as their e-signature. */
+  @Column({ type: DataType.STRING(150), allowNull: true })
+  declare acceptedSignature: string | null;
+
   @Column({ type: DataType.DATEONLY, allowNull: true })
   declare purchaseDate: string | null;
 

@@ -1,5 +1,5 @@
-import { Body, Controller, Delete, Get, Headers, Inject, Param, ParseUUIDPipe, Patch, Post, Query, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiHeader, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Body, Controller, Delete, Get, Headers, Inject, Param, ParseUUIDPipe, Patch, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { ApiBearerAuth, ApiHeader, ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
 import { ClientProxy } from '@nestjs/microservices';
 import {
   SERVICES,
@@ -8,6 +8,8 @@ import {
   ModuleAction,
   CreateCompanyDocumentDto,
   GetCompanyDocumentsQueryDto,
+  GetPolicyAcknowledgementsQueryDto,
+  SetPolicyDistributionDto,
   UpdateCompanyDocumentDto,
 } from '@app/common';
 import {
@@ -43,6 +45,74 @@ export class CompanyDocumentsController {
   @ApiOperation({ summary: 'The company library, filterable by category, status and search, with KPI counts' })
   getDocuments(@Headers('x-tenant-id') tenantId: string, @Query() query: GetCompanyDocumentsQueryDto) {
     return this.tenantClient.send(MESSAGE_PATTERNS.COMPANY_DOCUMENT.GET_ALL, { tenantId, query });
+  }
+
+  @Get('acknowledgements/overview')
+  @RequireModule(HRMSModuleKey.DOCUMENTS, ModuleAction.VIEW)
+  @RequirePermissions('documents.view', 'documents.manage')
+  @ApiOperation({ summary: 'Published documents that ask for acknowledgement, with how many have acknowledged, are pending and overdue' })
+  getAcknowledgementOverview(
+    @Headers('x-tenant-id') tenantId: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('email') email: string,
+  ) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.POLICY_ACK.OVERVIEW, { tenantId, userId, email });
+  }
+
+  @Get(':documentId/acknowledgements')
+  @RequireModule(HRMSModuleKey.DOCUMENTS, ModuleAction.VIEW)
+  @RequirePermissions('documents.view', 'documents.manage')
+  @ApiParam({ name: 'documentId' })
+  @ApiOperation({ summary: 'Who the document was sent to and who has acknowledged the current version' })
+  getAcknowledgements(
+    @Headers('x-tenant-id') tenantId: string,
+    @Param('documentId', ParseUUIDPipe) documentId: string,
+    @Query() query: GetPolicyAcknowledgementsQueryDto,
+  ) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.POLICY_ACK.GET_ACKS, { tenantId, documentId, query });
+  }
+
+  @Put(':documentId/distribution')
+  @RequireModule(HRMSModuleKey.DOCUMENTS, ModuleAction.EDIT)
+  @RequirePermissions('documents.edit', 'documents.manage')
+  @ApiParam({ name: 'documentId' })
+  @ApiOperation({ summary: 'Choose who the document is for, whether it asks for acknowledgement, and by when. The people newly reached are told' })
+  setDistribution(
+    @Headers('x-tenant-id') tenantId: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('email') email: string,
+    @Param('documentId', ParseUUIDPipe) documentId: string,
+    @Body() dto: SetPolicyDistributionDto,
+  ) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.POLICY_ACK.SET_DISTRIBUTION, { tenantId, userId, email, documentId, dto });
+  }
+
+  @Post(':documentId/reacknowledge')
+  @RequireModule(HRMSModuleKey.DOCUMENTS, ModuleAction.EDIT)
+  @RequirePermissions('documents.edit', 'documents.manage')
+  @ApiParam({ name: 'documentId' })
+  @ApiOperation({ summary: 'Ask everyone to acknowledge the document again (a new version). Earlier acknowledgements stay as the record' })
+  requestReacknowledgement(
+    @Headers('x-tenant-id') tenantId: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('email') email: string,
+    @Param('documentId', ParseUUIDPipe) documentId: string,
+  ) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.POLICY_ACK.REQUEST_REACK, { tenantId, userId, email, documentId });
+  }
+
+  @Post(':documentId/remind')
+  @RequireModule(HRMSModuleKey.DOCUMENTS, ModuleAction.EDIT)
+  @RequirePermissions('documents.edit', 'documents.manage')
+  @ApiParam({ name: 'documentId' })
+  @ApiOperation({ summary: 'Remind everyone who has not acknowledged yet, now' })
+  remind(
+    @Headers('x-tenant-id') tenantId: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('email') email: string,
+    @Param('documentId', ParseUUIDPipe) documentId: string,
+  ) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.POLICY_ACK.REMIND, { tenantId, userId, email, documentId });
   }
 
   @Post()

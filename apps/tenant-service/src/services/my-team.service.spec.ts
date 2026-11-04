@@ -49,6 +49,60 @@ const build = (departments = DEPARTMENTS) => {
 
 const ids = (result: { nodes: { id: string }[] }) => result.nodes.map((node) => node.id).sort();
 
+describe('MyTeamService: employment history', () => {
+  const changes = [
+    { changeType: 'DEPARTMENT', previousId: 'sales', previousLabel: 'Sales', nextId: 'eng', nextLabel: 'Engineering', effectiveFrom: '2025-06-01', createdAt: new Date('2025-05-20'), note: 'Internal note', changedByEmail: 'hr@x.com' },
+    { changeType: 'REPORTING_MANAGER', previousId: null, previousLabel: null, nextId: 'lead', nextLabel: 'Tayyaba Sabir', effectiveFrom: '2024-02-01', createdAt: new Date('2024-02-01') },
+    { changeType: 'DEPARTMENT_HEAD', previousId: null, previousLabel: null, nextId: 'x', nextLabel: 'Someone', effectiveFrom: '2024-03-01', createdAt: new Date('2024-03-01') },
+  ];
+
+  const service = (overrides: Record<string, any> = {}) => {
+    const dev = { ...EMPLOYEES.find((e) => e.id === 'dev')!, joiningDate: '2024-01-15', exitDate: null, designation: { id: 'd', title: 'Developer' }, department: { id: 'eng', name: 'Engineering' }, reportingManager: { id: 'lead', firstName: 'Tayyaba', lastName: 'Sabir' }, ...overrides };
+    const Employee = { findOne: jest.fn(async ({ where }: any) => (where.userId === 'u-dev' || where.id === 'dev' ? dev : null)) };
+    const Change = { findAll: jest.fn(async (_query?: any) => changes) };
+    const provider: any = {
+      getEmployeeModel: async () => Employee,
+      getDepartmentModel: async () => ({}),
+      getDesignationModel: async () => ({}),
+      getHierarchyChangeModel: async () => Change,
+    };
+    return { service: new MyTeamService(provider), Change };
+  };
+
+  it('shows when I joined and each change of my manager or department, newest first', async () => {
+    const { service: s, Change } = service();
+
+    const result = await s.getMyEmploymentHistory(TENANT, 'u-dev');
+
+    expect(Change.findAll.mock.calls[0][0].where).toEqual({ tenantId: TENANT, subjectType: 'EMPLOYEE', subjectId: 'dev' });
+    expect(result.data.map((e) => [e.type, e.title, e.from, e.to, e.date])).toEqual([
+      ['DEPARTMENT', 'Department changed', 'Sales', 'Engineering', '2025-06-01'],
+      ['REPORTING_MANAGER', 'Reporting manager set', null, 'Tayyaba Sabir', '2024-02-01'],
+      ['JOINED', 'Joined the organization', null, null, '2024-01-15'],
+    ]);
+    expect(result.current).toMatchObject({ status: 'ACTIVE', joiningDate: '2024-01-15', designation: 'Developer', department: { name: 'Engineering' }, reportingManager: { id: 'lead', name: 'Tayyaba Sabir' } });
+  });
+
+  it('leaves out who recorded a change and the note HR wrote, and changes that are not about me', async () => {
+    const { service: s } = service();
+    const result = await s.getMyEmploymentHistory(TENANT, 'u-dev');
+    expect(JSON.stringify(result)).not.toContain('Internal note');
+    expect(JSON.stringify(result)).not.toContain('hr@x.com');
+    expect(result.data.some((e) => e.type === 'DEPARTMENT_HEAD')).toBe(false);
+  });
+
+  it('shows when I left', async () => {
+    const { service: s } = service({ status: 'RESIGNED', exitDate: '2026-12-15' });
+    const result = await s.getMyEmploymentHistory(TENANT, 'u-dev');
+    expect(result.data[0]).toMatchObject({ type: 'LEFT', title: 'Left the organization', date: '2026-12-15' });
+  });
+
+  it('says so when the login has no employee profile', async () => {
+    const { service: s } = service();
+    await expect(s.getMyEmploymentHistory(TENANT, 'u-nobody')).rejects.toMatchObject({ status: 404 });
+  });
+});
+
 describe('MyTeamService', () => {
   describe('getLeadership', () => {
     it('counts direct reports for a Team Lead signed in as an Employee', async () => {

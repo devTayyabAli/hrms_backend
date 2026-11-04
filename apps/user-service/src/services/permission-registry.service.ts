@@ -67,6 +67,8 @@ export const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
   // and payroll.edit keep what they already allowed (see the gateway).
   { resource: 'payroll.compensation', action: ModuleAction.VIEW, description: 'View salary structures, employee compensation and salary history', moduleKey: HRMSModuleKey.PAYROLL },
   { resource: 'payroll.compensation', action: ModuleAction.MANAGE, description: 'Assign structures, revise compensation, recurring items and import', moduleKey: HRMSModuleKey.PAYROLL },
+  // Separate from manage so whoever proposes a pay change cannot also approve it.
+  { resource: 'payroll.compensation', action: 'approve', description: 'Approve proposed salary changes, when the organization asks for approval', moduleKey: HRMSModuleKey.PAYROLL },
   { resource: 'payroll.components', action: ModuleAction.VIEW, description: 'View the payroll component catalog', moduleKey: HRMSModuleKey.PAYROLL },
   { resource: 'payroll.components', action: ModuleAction.MANAGE, description: 'Create and edit payroll components', moduleKey: HRMSModuleKey.PAYROLL },
   { resource: 'payroll.loans', action: ModuleAction.VIEW, description: 'View employee loans and advances', moduleKey: HRMSModuleKey.PAYROLL },
@@ -83,6 +85,10 @@ export const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
   { resource: 'settings', action: ModuleAction.VIEW, description: 'View organization settings', moduleKey: HRMSModuleKey.SETTINGS },
   { resource: 'settings', action: ModuleAction.EDIT, description: 'Update organization profile and policies', moduleKey: HRMSModuleKey.SETTINGS },
   { resource: 'settings', action: ModuleAction.MANAGE, description: 'Manage all organization-level configurations', moduleKey: HRMSModuleKey.SETTINGS },
+  { resource: 'offboarding', action: ModuleAction.VIEW, description: 'View offboarding cases and their clearances', moduleKey: HRMSModuleKey.EMPLOYEE },
+  { resource: 'offboarding', action: ModuleAction.MANAGE, description: 'Start offboarding, clear HR\'s and the manager\'s part, and choose how leaving is cleared', moduleKey: HRMSModuleKey.EMPLOYEE },
+  { resource: 'workflows', action: ModuleAction.VIEW, description: 'View how requests are approved', moduleKey: HRMSModuleKey.SETTINGS },
+  { resource: 'workflows', action: ModuleAction.MANAGE, description: 'Choose who approves each kind of request, and in what order', moduleKey: HRMSModuleKey.SETTINGS },
 
   // BILLING
   { resource: 'billing', action: ModuleAction.VIEW, description: 'View subscription, invoices, and payment history', moduleKey: HRMSModuleKey.SETTINGS },
@@ -118,7 +124,9 @@ export const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
   // WORKSPACE — Tasks and Projects share the PROJECTS module ("Projects & Tasks").
   { resource: 'projects', action: ModuleAction.VIEW, description: 'View organization projects', moduleKey: HRMSModuleKey.PROJECTS },
   { resource: 'projects', action: ModuleAction.CREATE, description: 'Create projects', moduleKey: HRMSModuleKey.PROJECTS },
-  { resource: 'projects', action: ModuleAction.EDIT, description: 'Edit projects, their lead and status', moduleKey: HRMSModuleKey.PROJECTS },
+  { resource: 'projects', action: ModuleAction.EDIT, description: 'Edit projects, their lead and status. Reopening a completed project is a separate grant.', moduleKey: HRMSModuleKey.PROJECTS },
+  { resource: 'projects', action: 'reopen', description: 'Reopen a completed project', moduleKey: HRMSModuleKey.PROJECTS },
+  { resource: 'projects', action: 'confidential', description: 'See confidential projects you are not assigned to', moduleKey: HRMSModuleKey.PROJECTS },
   { resource: 'projects', action: ModuleAction.DELETE, description: 'Delete projects', moduleKey: HRMSModuleKey.PROJECTS },
   { resource: 'projects', action: ModuleAction.EXPORT, description: 'Export projects to CSV', moduleKey: HRMSModuleKey.PROJECTS },
   { resource: 'projects', action: ModuleAction.MANAGE, description: 'Manage projects and assignments', moduleKey: HRMSModuleKey.PROJECTS },
@@ -154,6 +162,13 @@ export const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
   { resource: 'expenses', action: ModuleAction.VIEW, description: 'View expense claims', moduleKey: HRMSModuleKey.EXPENSES },
   { resource: 'expenses', action: ModuleAction.MANAGE, description: 'Approve and process expense claims', moduleKey: HRMSModuleKey.EXPENSES },
 
+  { resource: 'learning', action: ModuleAction.VIEW, description: 'View training courses', moduleKey: HRMSModuleKey.LEARNING },
+  { resource: 'learning', action: ModuleAction.CREATE, description: 'Create and duplicate training courses', moduleKey: HRMSModuleKey.LEARNING },
+  { resource: 'learning', action: ModuleAction.EDIT, description: 'Edit courses and their materials; publish and archive them', moduleKey: HRMSModuleKey.LEARNING },
+  { resource: 'learning', action: ModuleAction.DELETE, description: 'Delete draft courses', moduleKey: HRMSModuleKey.LEARNING },
+  { resource: 'learning', action: 'assign', description: 'Assign training to employees, departments and designations', moduleKey: HRMSModuleKey.LEARNING },
+  { resource: 'learning', action: ModuleAction.EXPORT, description: 'Export training records', moduleKey: HRMSModuleKey.LEARNING },
+  { resource: 'learning', action: ModuleAction.MANAGE, description: 'Full management of training', moduleKey: HRMSModuleKey.LEARNING },
   { resource: 'assets', action: ModuleAction.VIEW, description: 'View company assets', moduleKey: HRMSModuleKey.ASSETS },
   { resource: 'assets', action: ModuleAction.CREATE, description: 'Add assets and asset categories', moduleKey: HRMSModuleKey.ASSETS },
   { resource: 'assets', action: ModuleAction.EDIT, description: 'Edit assets; assign, return, send for maintenance or dispose of them', moduleKey: HRMSModuleKey.ASSETS },

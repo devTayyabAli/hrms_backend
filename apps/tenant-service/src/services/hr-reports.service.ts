@@ -1,4 +1,4 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { HttpStatus, Injectable, Optional } from '@nestjs/common';
 import { Op } from 'sequelize';
 import {
   EXPORT_MAX_ROWS,
@@ -11,6 +11,7 @@ import {
   TenantException,
 } from '@app/common';
 import { TenantModelProviderService } from './tenant-model-provider.service';
+import { DataScopeService } from './data-scope.service';
 
 interface ReportWindow {
   from: string;
@@ -105,7 +106,15 @@ function tenureLabel(joiningDate: string | null): string {
  */
 @Injectable()
 export class HrReportsService {
-  constructor(private readonly modelProvider: TenantModelProviderService) {}
+  constructor(
+    private readonly modelProvider: TenantModelProviderService,
+    @Optional() private readonly dataScope?: DataScopeService,
+  ) {}
+
+  /** `{}` for organization-wide callers. `field` is `id` on employees and `employeeId` on their rows. */
+  private scopeWhere(tenantId: string, field: 'id' | 'employeeId'): Promise<Record<string, unknown>> {
+    return this.dataScope ? this.dataScope.employeeWhere(tenantId, field) : Promise.resolve({});
+  }
 
   private badRequest(message: string): never {
     throw new TenantException(
@@ -322,7 +331,7 @@ export class HrReportsService {
   ) {
     const Employee = await this.modelProvider.getEmployeeModel(tenantId);
     const rows = await Employee.findAll({
-      where: { tenantId },
+      where: { tenantId, ...(await this.scopeWhere(tenantId, 'id')) },
       include: await this.employeeInclude(tenantId, dto.departmentId),
       order: [['employeeCode', 'ASC']],
       limit: EXPORT_MAX_ROWS,
@@ -389,7 +398,7 @@ export class HrReportsService {
     };
 
     const rows = await Attendance.findAll({
-      where: { tenantId, date: { [Op.between]: [window.from, window.to] } },
+      where: { tenantId, date: { [Op.between]: [window.from, window.to] }, ...(await this.scopeWhere(tenantId, 'employeeId')) },
       include: [employeeInclude],
       order: [['date', 'ASC']],
       limit: EXPORT_MAX_ROWS,
@@ -465,6 +474,7 @@ export class HrReportsService {
         tenantId,
         fromDate: { [Op.lte]: window.to },
         toDate: { [Op.gte]: window.from },
+        ...(await this.scopeWhere(tenantId, 'employeeId')),
       },
       include: [
         employeeInclude,
@@ -529,6 +539,7 @@ export class HrReportsService {
     const where: any = {
       tenantId,
       joiningDate: { [Op.between]: [window.from, window.to] },
+      ...(await this.scopeWhere(tenantId, 'employeeId')),
     };
     if (dto.departmentId) where.departmentId = dto.departmentId;
 
@@ -616,7 +627,7 @@ export class HrReportsService {
     const [departments, employees] = await Promise.all([
       Department.findAll({ where: departmentWhere, order: [['name', 'ASC']] }),
       Employee.findAll({
-        where: { tenantId },
+        where: { tenantId, ...(await this.scopeWhere(tenantId, 'id')) },
         attributes: ['id', 'departmentId', 'status'],
         raw: true,
       }),

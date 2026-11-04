@@ -1,8 +1,11 @@
 import { HttpStatus, Injectable, Logger, Optional } from '@nestjs/common';
-import { Op, fn, col, literal } from 'sequelize';
+import { InjectModel } from '@nestjs/sequelize';
+import { Op, fn, col, literal, where as sqlWhere } from 'sequelize';
+import { DirectoryRoleCategory, DirectorySourceType, PlatformDirectoryPerson } from '@app/database';
 import {
   TenantException,
   TenantErrorCode,
+  DataScope,
   LeaveRequestStatus,
   LeaveRequestStatusFilter,
   LeaveRequestSortableField,
@@ -13,8 +16,27 @@ import {
   EXPORT_MAX_ROWS,
   ExportResult,
 } from '@app/common';
+import { currentRpcActor } from '@app/tenant-context';
 import { TenantModelProviderService } from './tenant-model-provider.service';
 import { DataScopeService } from './data-scope.service';
+import {
+  Actor,
+  Approval,
+  ApprovalStep,
+  DEFAULT_LEAVE_POLICY,
+  PolicyStage,
+  RouteLookup,
+  advanceApproval,
+  buildApproval,
+  canActOnStage,
+  completeApproval,
+  handOnApproval,
+  rejectApproval,
+  rerouteApproval,
+  resolveStages,
+  stagesOf,
+} from './approval-engine';
+import { createRouteLookup, loadPolicyStages } from './approval-route-lookup';
 
 /** Flattened row for the Leave Requests table. */
 export interface LeaveRequestRow {
@@ -40,7 +62,22 @@ export interface LeaveRequestRow {
   decidedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
+  /** Where a pending request is, and the sentences the employee is shown. Null on older requests. */
+  approval: LeaveApproval | null;
+  /** Whether the signed-in person is the one this request is waiting on. */
+  canDecide: boolean;
 }
+
+/** One line of the trail shown on the request. */
+export type LeaveApprovalStep = ApprovalStep;
+
+/**
+ * Where a pending leave request is on its route: the stages the organization
+ * configured (by default the reporting manager, then their manager or HR),
+ * which one is current, and the sentences the employee is shown.
+ * `currentApproverId` null means it is with HR or with anyone holding a permission.
+ */
+export type LeaveApproval = Approval;
 
 export interface GetLeaveRequestsQuery {
   page?: number;
@@ -116,6 +153,9 @@ export class LeaveRequestService {
   constructor(
     private readonly modelProvider: TenantModelProviderService,
     @Optional() private readonly dataScope?: DataScopeService,
+    @Optional()
+    @InjectModel(PlatformDirectoryPerson)
+    private readonly directory?: typeof PlatformDirectoryPerson,
   ) {}
 
   /** Narrows to the caller's team or department when their role is scoped; `{}` otherwise. */
@@ -221,6 +261,8 @@ export class LeaveRequestService {
       decidedAt: record.decidedAt ?? null,
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
+      approval: (record.approval as unknown as LeaveApproval | null) ?? null,
+      canDecide: false,
     };
   }
 
@@ -463,7 +505,7 @@ export class LeaveRequestService {
       await this.modelProvider.getLeaveRequestModel(tenantId);
 
     const { rows, count } = await LeaveRequestModel.findAndCountAll({
-      where: { ...this.buildWhere(tenantId, query), ...(await this.scopeWhere(tenantId)) },
+      where: { ...this.buildWhere(tenantId, query), ...(await this.visibleWhere(tenantId)) },
       include: await this.buildInclude(tenantId, query.departmentId),
       order: this.buildOrder(query.sortBy, query.sortOrder),
       offset: (page - 1) * limit,
@@ -473,7 +515,7 @@ export class LeaveRequestService {
     });
 
     return {
-      data: (rows as any[]).map((row) => this.toRow(row)),
+      data: await Promise.all((rows as any[]).map((row) => this.present(tenantId, row))),
       total: count,
       page,
       limit,
@@ -516,11 +558,11 @@ export class LeaveRequestService {
     const LeaveRequestModel =
       await this.modelProvider.getLeaveRequestModel(tenantId);
     const record = await LeaveRequestModel.findOne({
-      where: { id: leaveRequestId, tenantId, ...(await this.scopeWhere(tenantId)) },
+      where: { id: leaveRequestId, tenantId, ...(await this.visibleWhere(tenantId)) },
       include: await this.buildInclude(tenantId),
     });
     if (!record) this.notFound(leaveRequestId);
-    return this.toRow(record);
+    return this.present(tenantId, record);
   }
 
   /** KPI cards: Total Requests / Approved / Pending / Rejected. */
@@ -638,6 +680,210 @@ export class LeaveRequestService {
   }
 
   // ==========================================
+  // Two-step approval: reporting manager, then their manager or HR
+  // ==========================================
+
+  private personName(row?: { firstName?: string | null; lastName?: string | null } | null): string {
+    return row ? [row.firstName, row.lastName].filter(Boolean).join(' ') : '';
+  }
+
+  /** The organization's route for leave: what it saved, else the reporting manager, then their manager, else HR. */
+  private async leavePolicy(tenantId: string): Promise<PolicyStage[]> {
+    return (await loadPolicyStages(this.modelProvider, tenantId, 'LEAVE')) ?? DEFAULT_LEAVE_POLICY;
+  }
+
+  /** People, titles and department heads for working out a route, each looked up once. */
+  private routeLookup(tenantId: string): Promise<RouteLookup> {
+    return createRouteLookup(this.modelProvider, tenantId);
+  }
+
+  /** The route for a new request, from the organization's policy. */
+  private async routeFor(tenantId: string, employeeId: string): Promise<LeaveApproval> {
+    const lookup = await this.routeLookup(tenantId);
+    const stages = await resolveStages(await this.leavePolicy(tenantId), employeeId, lookup);
+    const requester = await lookup.person(employeeId);
+    return buildApproval(stages, this.personName(requester) || 'the employee');
+  }
+
+  /** Who is deciding: their employee record, whether their scope is organization-wide, and what they hold. */
+  private async actorFor(tenantId: string): Promise<Actor> {
+    const rpc = currentRpcActor();
+    return {
+      employeeId: this.dataScope ? await this.dataScope.actorEmployeeId(tenantId) : null,
+      orgWide: !this.dataScope || this.dataScope.scope() === DataScope.ORGANIZATION,
+      permissions: rpc?.permissions ?? [],
+      isFullAccess: rpc?.isFullAccess === true,
+    };
+  }
+
+  /** Tells the employee and whoever it is now waiting on. Best effort. */
+  private async announceMove(tenantId: string, record: any, approval: LeaveApproval): Promise<void> {
+    try {
+      const saved = await this.getOne(tenantId, record.id);
+      const typeName = saved.leaveType?.name ?? 'leave';
+      const when = `${saved.fromDate} to ${saved.toDate}`;
+      await this.notifyPerson(tenantId, record.employeeId, 'Leave update', `Your ${typeName} request for ${when} changed hands. ${approval.statusText}`);
+      if (approval.currentApproverId) {
+        await this.notifyPerson(tenantId, approval.currentApproverId, 'Leave request waiting', `A ${typeName} request for ${when} is waiting for your approval.`);
+      } else {
+        await this.notifyHr(tenantId, [record.employeeId], 'Leave request waiting', `A ${typeName} request for ${when} is waiting for HR approval.`);
+      }
+    } catch (error: any) {
+      this.logger.warn(`Leave request ${record.id} was moved but nobody was told: ${error?.message ?? error}`);
+    }
+  }
+
+  /**
+   * Someone's reporting line changed. Their pending leave, and their direct
+   * reports' (whose later approvers are above this person), follow the new
+   * route. Where nobody has approved yet the request is rebuilt from the
+   * current policy. Where some stages are done it only moves when its approver
+   * is no longer on the route, and then to the next stage or HR. Returns how
+   * many requests moved.
+   */
+  async rerouteAfterReportingChange(tenantId: string, employeeId: string): Promise<number> {
+    const Employee = await this.modelProvider.getEmployeeModel(tenantId);
+    const reports = (await Employee.findAll({ where: { tenantId, reportingManagerId: employeeId }, attributes: ['id'], raw: true })) as unknown as { id: string }[];
+    const Leave = await this.modelProvider.getLeaveRequestModel(tenantId);
+    const pending: any[] = (await Leave.findAll({
+      where: { tenantId, status: LeaveRequestStatus.PENDING, employeeId: { [Op.in]: [employeeId, ...reports.map((row) => row.id)] } },
+    })) as any[];
+    if (!pending.length) return 0;
+
+    const lookup = await this.routeLookup(tenantId);
+    const policy = await this.leavePolicy(tenantId);
+    let moved = 0;
+    for (const record of pending) {
+      const approval = record.approval as LeaveApproval | null;
+      if (!approval) continue;
+      const next = rerouteApproval(approval, await resolveStages(policy, record.employeeId, lookup));
+      if (!next) continue;
+      await record.update({ approval: next });
+      await this.announceMove(tenantId, record, next);
+      moved++;
+    }
+    return moved;
+  }
+
+  /** Someone left: whatever was waiting on them goes to the next stage, or HR. */
+  async releaseWaitingOn(tenantId: string, approverId: string): Promise<number> {
+    const Leave = await this.modelProvider.getLeaveRequestModel(tenantId);
+    const waiting: any[] = (await Leave.findAll({
+      where: {
+        tenantId,
+        status: LeaveRequestStatus.PENDING,
+        [Op.and]: [sqlWhere(literal(`"LeaveRequest"."approval"->>'currentApproverId'`), approverId)],
+      },
+    })) as any[];
+
+    let moved = 0;
+    for (const record of waiting) {
+      const approval = record.approval as LeaveApproval | null;
+      if (!approval || approval.currentApproverId !== approverId) continue;
+      const next = handOnApproval(approval, `${approval.currentApproverName ?? 'The approver'} is no longer with the organization.`);
+      await record.update({ approval: next });
+      await this.announceMove(tenantId, record, next);
+      moved++;
+    }
+    return moved;
+  }
+
+  /** Requests in the caller's team, plus any request currently waiting on them. */
+  private async visibleWhere(tenantId: string): Promise<Record<string, unknown>> {
+    const scope = await this.scopeWhere(tenantId);
+    if (Object.keys(scope).length === 0) return scope;
+    const actorId = this.dataScope ? await this.dataScope.actorEmployeeId(tenantId) : null;
+    const permissions = [...(currentRpcActor()?.permissions ?? [])].filter((permission) => permission !== '*');
+    const alsoWaitingOnMe: any[] = [];
+    if (actorId) alsoWaitingOnMe.push(sqlWhere(literal(`"LeaveRequest"."approval"->>'currentApproverId'`), actorId));
+    // A stage that any holder of a permission decides is visible to every holder.
+    if (permissions.length) alsoWaitingOnMe.push(sqlWhere(literal(`"LeaveRequest"."approval"->>'currentPermission'`), { [Op.in]: permissions } as any));
+    return alsoWaitingOnMe.length ? { [Op.or]: [scope, ...alsoWaitingOnMe] } : scope;
+  }
+
+  private async canDecide(tenantId: string, record: any): Promise<boolean> {
+    if (record.status !== LeaveRequestStatus.PENDING) return false;
+    const actor = await this.actorFor(tenantId);
+    if (actor.employeeId && actor.employeeId === record.employeeId) return false;
+    const approval = record.approval as unknown as LeaveApproval | null;
+    if (!approval) return true;
+    const { stages, index } = stagesOf(approval);
+    return canActOnStage(stages[index], actor);
+  }
+
+  private async present(tenantId: string, record: any): Promise<LeaveRequestRow> {
+    const row = this.toRow(record);
+    row.canDecide = await this.canDecide(tenantId, record);
+    return row;
+  }
+
+  private async notifyPerson(
+    tenantId: string,
+    employeeId: string | null | undefined,
+    title: string,
+    body: string,
+  ): Promise<void> {
+    if (!employeeId) return;
+    try {
+      const Notification = await this.modelProvider.getEmployeeNotificationModel(tenantId);
+      await Notification.create({
+        tenantId,
+        employeeId,
+        kind: EmployeeNotificationKind.LEAVE,
+        title,
+        body,
+        readAt: null,
+      });
+    } catch (error: any) {
+      this.logger.warn(`Leave saved but the notification was not: ${error?.message ?? error}`);
+    }
+  }
+
+  /**
+   * HR has no single employee id on the request, so each active HR login that
+   * also has an employee record gets their own inbox row. The directory is
+   * the link between the HR role (user-service) and the employee inbox.
+   * Failure here must not fail the leave itself.
+   */
+  private async notifyHr(tenantId: string, exceptIds: string[], title: string, body: string): Promise<void> {
+    if (!this.directory) return;
+    try {
+      const people = (await this.directory.findAll({
+        where: {
+          tenantId,
+          roleCategory: DirectoryRoleCategory.HR,
+          isActive: true,
+          sourceType: DirectorySourceType.USER,
+        },
+        attributes: ['sourceId', 'email'],
+        raw: true,
+      })) as { sourceId: string; email: string }[];
+      const userIds = people.map((person) => person.sourceId).filter(Boolean);
+      const emails = people.map((person) => person.email).filter(Boolean);
+      if (!userIds.length && !emails.length) return;
+
+      const Employee = await this.modelProvider.getEmployeeModel(tenantId);
+      const rows = (await Employee.findAll({
+        where: {
+          tenantId,
+          [Op.or]: [
+            ...(userIds.length ? [{ userId: { [Op.in]: userIds } }] : []),
+            ...emails.map((email) => ({ email: { [Op.iLike]: email } })),
+          ],
+        },
+        attributes: ['id'],
+        raw: true,
+      })) as { id: string }[];
+      const skip = new Set(exceptIds);
+      for (const id of [...new Set(rows.map((row) => row.id))].filter((id) => !skip.has(id))) {
+        await this.notifyPerson(tenantId, id, title, body);
+      }
+    } catch (error: any) {
+      this.logger.warn(`Leave saved but HR was not notified: ${error?.message ?? error}`);
+    }
+  }
+
+  // ==========================================
   // Writes
   // ==========================================
 
@@ -677,6 +923,7 @@ export class LeaveRequestService {
       totalDays,
       reason: dto.reason ?? null,
       status,
+      approval: decided ? null : await this.routeFor(tenantId, dto.employeeId),
       // Filing something already decided still records who decided it, so the
       // row is not left looking like it approved itself.
       decidedByUserId: decided ? (appliedByUserId ?? null) : null,
@@ -684,7 +931,33 @@ export class LeaveRequestService {
       appliedByUserId: appliedByUserId ?? null,
     } as any);
 
-    return this.getOne(tenantId, created.id);
+    const saved = await this.getOne(tenantId, created.id);
+    if (!decided && saved.approval) {
+      const typeName = saved.leaveType?.name ?? 'leave';
+      const when = `${saved.fromDate} to ${saved.toDate}`;
+      await this.notifyPerson(
+        tenantId,
+        dto.employeeId,
+        'Leave Request',
+        `Your ${typeName} request for ${when} ${saved.approval.statusText.charAt(0).toLowerCase()}${saved.approval.statusText.slice(1)}`,
+      );
+      if (saved.approval.currentApproverId) {
+        await this.notifyPerson(
+          tenantId,
+          saved.approval.currentApproverId,
+          'Leave request waiting',
+          `A ${typeName} request for ${when} is waiting for your approval.`,
+        );
+      } else if (saved.approval.stage === 'WITH_HR') {
+        await this.notifyHr(
+          tenantId,
+          [dto.employeeId],
+          'Leave request waiting',
+          `A ${typeName} request for ${when} is waiting for HR approval.`,
+        );
+      }
+    }
+    return saved;
   }
 
   /**
@@ -759,12 +1032,17 @@ export class LeaveRequestService {
     const LeaveRequestModel =
       await this.modelProvider.getLeaveRequestModel(tenantId);
     const record = await LeaveRequestModel.findOne({
-      where: { id: leaveRequestId, tenantId, ...(await this.scopeWhere(tenantId)) },
+      where: { id: leaveRequestId, tenantId, ...(await this.visibleWhere(tenantId)) },
     });
     if (!record) this.notFound(leaveRequestId);
 
     if (record.status !== LeaveRequestStatus.PENDING) {
       this.conflict(`This request is already ${record.status.toLowerCase()}.`);
+    }
+
+    const approval = record.approval as unknown as LeaveApproval | null;
+    if (approval) {
+      return this.decideStaged(tenantId, record, approval, dto, decidedByUserId);
     }
 
     // Nobody decides their own leave — a Team Lead's goes to HR or the
@@ -827,6 +1105,101 @@ export class LeaveRequestService {
     });
     if (!deleted) this.notFound(leaveRequestId);
     return { deleted: true, id: leaveRequestId };
+  }
+
+  /**
+   * The staged decision. Approving a stage that is not the last does not grant
+   * the leave: it moves the request to the next stage, or to HR, and tells
+   * both sides. Only approving the last stage sets the request to APPROVED.
+   * Rejecting at any stage ends it.
+   */
+  private async decideStaged(
+    tenantId: string,
+    record: any,
+    approval: LeaveApproval,
+    dto: DecideLeaveRequestDto,
+    decidedByUserId?: string,
+  ): Promise<LeaveRequestRow> {
+    const actor = await this.actorFor(tenantId);
+    if (actor.employeeId && actor.employeeId === record.employeeId) {
+      throw new TenantException(
+        TenantErrorCode.INVALID_TENANT_CONTEXT,
+        "You can't approve or reject your own leave. Another approver or the organization admin will decide it.",
+        HttpStatus.FORBIDDEN,
+      );
+    }
+    const { stages, index } = stagesOf(approval);
+    if (!canActOnStage(stages[index], actor)) {
+      throw new TenantException(
+        TenantErrorCode.INVALID_TENANT_CONTEXT,
+        `This leave request is ${approval.statusText.charAt(0).toLowerCase()}${approval.statusText.slice(1)}`,
+        HttpStatus.FORBIDDEN,
+      );
+    }
+
+    const actorLabel = approval.currentApproverName
+      ? `${approval.currentApproverName}${approval.currentApproverTitle ? ` (${approval.currentApproverTitle})` : ''}`
+      : (stages[index].title ?? 'HR');
+
+    if (dto.status === LeaveRequestStatus.REJECTED) {
+      await record.update({
+        status: LeaveRequestStatus.REJECTED,
+        decisionNote: dto.decisionNote ?? null,
+        decidedByUserId: decidedByUserId ?? null,
+        decidedAt: new Date(),
+        approval: rejectApproval(approval, actorLabel),
+      });
+      const decided = await this.getOne(tenantId, record.id);
+      await this.notifyPerson(
+        tenantId,
+        record.employeeId,
+        'Leave Rejected',
+        `${actorLabel} rejected your ${decided.leaveType?.name ?? 'leave'} request for ${decided.fromDate} to ${decided.toDate}.`,
+      );
+      return decided;
+    }
+
+    // Not the last stage: the request only moves on.
+    if (index < stages.length - 1) {
+      const nextApproval = advanceApproval(approval, actorLabel);
+      await record.update({ approval: nextApproval });
+      const moved = await this.getOne(tenantId, record.id);
+      const typeName = moved.leaveType?.name ?? 'leave';
+      const when = `${moved.fromDate} to ${moved.toDate}`;
+      await this.notifyPerson(tenantId, record.employeeId, 'Leave update', `Your ${typeName} request for ${when}: ${nextApproval.statusText}`);
+      if (nextApproval.currentApproverId) {
+        await this.notifyPerson(
+          tenantId,
+          nextApproval.currentApproverId,
+          'Leave request waiting',
+          `${actorLabel} approved a ${typeName} request for ${when}. It is now waiting for your approval.`,
+        );
+      } else if (nextApproval.stage === 'WITH_HR' && !nextApproval.currentPermission) {
+        await this.notifyHr(
+          tenantId,
+          [record.employeeId, actor.employeeId].filter((id): id is string => Boolean(id)),
+          'Leave request waiting',
+          `${actorLabel} approved a ${typeName} request for ${when}. It is now waiting for HR approval.`,
+        );
+      }
+      return moved;
+    }
+
+    await record.update({
+      status: LeaveRequestStatus.APPROVED,
+      decisionNote: dto.decisionNote ?? null,
+      decidedByUserId: decidedByUserId ?? null,
+      decidedAt: new Date(),
+      approval: completeApproval(approval, actorLabel),
+    });
+    const decided = await this.getOne(tenantId, record.id);
+    await this.notifyPerson(
+      tenantId,
+      record.employeeId,
+      'Leave Approved',
+      `${actorLabel} approved your ${decided.leaveType?.name ?? 'leave'} request for ${decided.fromDate} to ${decided.toDate}.`,
+    );
+    return decided;
   }
 
   /** Inbox row for the employee portal Notifications tab. Failure must not undo the decision. */

@@ -694,3 +694,32 @@ export class MyReimbursementMessageDto extends EmployeeActorDto {
   @IsDefined()
   dto: ReimbursementDto;
 }
+
+/** Proposed salary changes, filtered. */
+export class SalaryRevisionRequestQueryDto {
+  @IsOptional()
+  @IsIn(['PENDING', 'APPROVED', 'REJECTED', 'CANCELLED'])
+  status?: string;
+
+  @IsOptional()
+  @IsUUID()
+  employeeId?: string;
+}
+
+export class SalaryRevisionRequestQueryMessageDto extends TenantCompensationDto {
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => SalaryRevisionRequestQueryDto)
+  query?: SalaryRevisionRequestQueryDto;
+}
+
+/** Claims waiting on the signed-in person, and their decision on one. */
+export class MyReimbursementApprovalDecisionMessageDto extends EmployeeActorDto {
+  @IsUUID()
+  id: string;
+
+  @ValidateNested()
+  @Type(() => DecideReimbursementDto)
+  @IsDefined()
+  dto: DecideReimbursementDto;
+}

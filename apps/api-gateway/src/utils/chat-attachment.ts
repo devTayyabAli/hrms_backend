@@ -22,5 +22,6 @@ export async function resolveOwnFile(authClient: ClientProxy, tenantId: string, 
     fileName: file.originalName as string,
     mimeType: (file.mimeType ?? undefined) as string | undefined,
     sizeBytes: Number(file.size ?? 0),
+    category: (file.category ?? undefined) as string | undefined,
   };
 }

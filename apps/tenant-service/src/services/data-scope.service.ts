@@ -22,6 +22,8 @@ const MAX_TEAM_DEPTH = 12;
  *
  * - ORGANIZATION: everyone. Also full-access callers, unsigned/system calls
  *   and older tokens without a scope — i.e. exactly how things worked before.
+ * - BRANCH: the branches they head; if they head none, the branch they work
+ *   in. Everyone working there, plus their own reports.
  * - DEPARTMENT: the departments they manage (and those departments'
  *   sub-departments); if they manage none, their own department.
  * - TEAM: everyone who reports to them, directly or further down.
@@ -102,10 +104,10 @@ export class DataScopeService {
     const Employee = await this.modelProvider.getEmployeeModel(tenantId);
     const email = actor.email?.trim();
     const byEmail = email
-      ? await Employee.findOne({ where: { tenantId, email: { [Op.iLike]: email } }, attributes: ['id', 'departmentId'] })
+      ? await Employee.findOne({ where: { tenantId, email: { [Op.iLike]: email } }, attributes: ['id', 'departmentId', 'branchId'] })
       : null;
     if (byEmail || !actor.userId) return byEmail;
-    return Employee.findOne({ where: { tenantId, userId: actor.userId }, attributes: ['id', 'departmentId'] });
+    return Employee.findOne({ where: { tenantId, userId: actor.userId }, attributes: ['id', 'departmentId', 'branchId'] });
   }
 
   private async resolve(tenantId: string, actor: MicroserviceAuthContext, scope: DataScope): Promise<string[]> {
@@ -115,7 +117,22 @@ export class DataScopeService {
     if (!me) return [];
 
     if (scope === DataScope.SELF) return [me.id];
-    if (scope === DataScope.TEAM) return [me.id, ...(await this.reportsOf(tenantId, me.id))];
+    if (scope === DataScope.TEAM) {
+      const team = await this.reportsOf(tenantId, me.id);
+      return [...new Set([me.id, ...team, ...(await this.assignedTo(tenantId, me.id, []))])];
+    }
+
+    // BRANCH: what they head, else where they work, and their own reports.
+    if (scope === DataScope.BRANCH) {
+      const Branch = await this.modelProvider.getBranchModel(tenantId);
+      const headed = (await Branch.findAll({ where: { tenantId, headEmployeeId: me.id, isActive: true }, attributes: ['id'], raw: true })) as { id: string }[];
+      const branchIds = headed.length ? headed.map((row) => row.id) : me.branchId ? [me.branchId] : [];
+      const inBranches = branchIds.length
+        ? ((await Employee.findAll({ where: { tenantId, branchId: { [Op.in]: branchIds } }, attributes: ['id'], raw: true })) as { id: string }[]).map((row) => row.id)
+        : [];
+      const viaDepartments = await this.inBranchDepartments(tenantId, branchIds);
+      return [...new Set([me.id, ...inBranches, ...viaDepartments, ...(await this.reportsOf(tenantId, me.id)), ...(await this.assignedTo(tenantId, me.id, []))])];
+    }
 
     // DEPARTMENT: what they manage (and its sub-departments), else their own.
     const Department = await this.modelProvider.getDepartmentModel(tenantId);
@@ -140,7 +157,55 @@ export class DataScopeService {
       : [];
     // Their own reports count too, even ones seated in another department.
     const team = await this.reportsOf(tenantId, me.id);
-    return [...new Set([me.id, ...inDepartments, ...team])];
+    const alsoAssigned = await this.assignedTo(tenantId, me.id, departmentIds);
+    return [...new Set([me.id, ...inDepartments, ...team, ...alsoAssigned])];
+  }
+
+  /**
+   * People in departments that work from these branches and are not placed in
+   * a different branch: a department tied to a branch (its `branchIds`) brings
+   * its people with it, unless they are explicitly assigned elsewhere. A table
+   * or column that cannot be read adds no one.
+   */
+  private async inBranchDepartments(tenantId: string, branchIds: string[]): Promise<string[]> {
+    if (!branchIds.length) return [];
+    try {
+      const Department = await this.modelProvider.getDepartmentModel(tenantId);
+      const Employee = await this.modelProvider.getEmployeeModel(tenantId);
+      const departments = (await Department.findAll({
+        where: { tenantId, [Op.or]: branchIds.map((id) => ({ branchIds: { [Op.contains]: [id] } })) } as any,
+        attributes: ['id'],
+        raw: true,
+      })) as { id: string }[];
+      if (!departments.length) return [];
+      const rows = (await Employee.findAll({
+        where: { tenantId, departmentId: { [Op.in]: departments.map((row) => row.id) }, [Op.or]: [{ branchId: null }, { branchId: { [Op.in]: branchIds } }] } as any,
+        attributes: ['id'],
+        raw: true,
+      })) as { id: string }[];
+      return rows.map((row) => row.id);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * People who work for this manager, or in these departments, through an
+   * additional assignment (a dotted-line manager, a second department). They
+   * are visible to that manager and department head, as well as to their own.
+   * A table that cannot be read adds no one.
+   */
+  private async assignedTo(tenantId: string, managerId: string, departmentIds: string[]): Promise<string[]> {
+    try {
+      const Assignment = await this.modelProvider.getEmployeeAssignmentModel(tenantId);
+      const or: any[] = [{ reportingManagerId: managerId }];
+      if (departmentIds.length) or.push({ departmentId: { [Op.in]: departmentIds } });
+      const rows = (await Assignment.findAll({ where: { tenantId, [Op.or]: or } as any, attributes: ['employeeId', 'endDate'], raw: true })) as unknown as { employeeId: string; endDate: string | null }[];
+      const today = new Date().toISOString().slice(0, 10);
+      return [...new Set(rows.filter((row) => !row.endDate || String(row.endDate).slice(0, 10) >= today).map((row) => row.employeeId))];
+    } catch {
+      return [];
+    }
   }
 
   /** Everyone under `managerId` in the reporting line, breadth-first. */

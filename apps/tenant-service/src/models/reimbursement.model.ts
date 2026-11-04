@@ -86,4 +86,11 @@ export class Reimbursement extends Model {
 
   @Column({ type: DataType.STRING(300), allowNull: true })
   declare decisionNote: string | null;
+
+  /**
+   * Where the claim is on its route of approvers, when the organization
+   * saved one for reimbursements. Null means payroll staff decide it alone.
+   */
+  @Column({ type: DataType.JSONB, allowNull: true })
+  declare approval: Record<string, any> | null;
 }

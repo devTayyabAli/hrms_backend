@@ -39,6 +39,7 @@ export enum HRMSModuleKey {
   WORKFLOWS = 'workflows',
   TICKETS = 'tickets',
   AI_ASSISTANT = 'ai_assistant',
+  LEARNING = 'learning',
 }
 
 export enum ModuleAction {

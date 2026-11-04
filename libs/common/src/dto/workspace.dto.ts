@@ -1,4 +1,7 @@
 import {
+  ArrayMaxSize,
+  ArrayUnique,
+  IsArray,
   IsBoolean,
   IsDefined,
   IsEnum,
@@ -29,8 +32,10 @@ import { EmployeeActorDto } from './employee-portal.dto';
  */
 
 export enum WorkspaceTaskStatus {
+  /** Shown as "To Do". The stored value stays PENDING so existing tasks are unchanged. */
   PENDING = 'PENDING',
   IN_PROGRESS = 'IN_PROGRESS',
+  BLOCKED = 'BLOCKED',
   COMPLETED = 'COMPLETED',
 }
 
@@ -42,10 +47,20 @@ export enum WorkspaceTaskPriority {
 }
 
 export enum WorkspaceProjectStatus {
+  PLANNED = 'PLANNED',
   ACTIVE = 'ACTIVE',
   ON_HOLD = 'ON_HOLD',
   AT_RISK = 'AT_RISK',
   COMPLETED = 'COMPLETED',
+  CANCELLED = 'CANCELLED',
+}
+
+/** How urgent the project is. Separate from a task's priority. */
+export enum WorkspaceProjectPriority {
+  LOW = 'LOW',
+  MEDIUM = 'MEDIUM',
+  HIGH = 'HIGH',
+  CRITICAL = 'CRITICAL',
 }
 
 /** Kinds an admin can create. Birthdays and work anniversaries come from employee records. */
@@ -172,6 +187,25 @@ export class CreateWorkspaceTaskDto {
   @IsUUID()
   assigneeEmployeeId: string;
 
+  @ApiPropertyOptional({
+    type: [String],
+    description: 'Everyone responsible. The first id is the primary assignee. Omit to assign only assigneeEmployeeId.',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(50)
+  @ArrayUnique()
+  @IsUUID('4', { each: true })
+  assigneeEmployeeIds?: string[];
+
+  @ApiPropertyOptional({
+    description: 'When task review is on for the organization, completing this task waits for a reviewer. Ignored while review is off.',
+  })
+  @IsOptional()
+  @Transform(toBoolean)
+  @IsBoolean()
+  requiresReview?: boolean;
+
   @ApiProperty({ example: '2026-10-20' })
   @Matches(DATE_ONLY, { message: `dueDate ${DATE_MESSAGE}` })
   dueDate: string;
@@ -185,6 +219,14 @@ export class CreateWorkspaceTaskDto {
   @IsOptional()
   @IsEnum(WorkspaceTaskStatus)
   status?: WorkspaceTaskStatus;
+
+  @ApiPropertyOptional({
+    description: 'Keep a due date that falls outside the project start and expected end. Ignored when there is no project or the date is inside the range.',
+  })
+  @IsOptional()
+  @Transform(toBoolean)
+  @IsBoolean()
+  dueDateException?: boolean;
 }
 
 export class UpdateWorkspaceTaskDto {
@@ -213,6 +255,23 @@ export class UpdateWorkspaceTaskDto {
   @IsUUID()
   assigneeEmployeeId?: string;
 
+  @ApiPropertyOptional({
+    type: [String],
+    description: 'Replaces everyone responsible when sent. The first id becomes the primary assignee.',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(50)
+  @ArrayUnique()
+  @IsUUID('4', { each: true })
+  assigneeEmployeeIds?: string[];
+
+  @ApiPropertyOptional({ description: 'Whether this task waits for review before it can be completed. Ignored while review is off.' })
+  @IsOptional()
+  @Transform(toBoolean)
+  @IsBoolean()
+  requiresReview?: boolean;
+
   @ApiPropertyOptional()
   @IsOptional()
   @Matches(DATE_ONLY, { message: `dueDate ${DATE_MESSAGE}` })
@@ -227,12 +286,100 @@ export class UpdateWorkspaceTaskDto {
   @IsOptional()
   @IsEnum(WorkspaceTaskStatus)
   status?: WorkspaceTaskStatus;
+
+  @ApiPropertyOptional({
+    description: 'Keep a due date that falls outside the project start and expected end.',
+  })
+  @IsOptional()
+  @Transform(toBoolean)
+  @IsBoolean()
+  dueDateException?: boolean;
+}
+
+export class UpdateWorkspaceSettingsDto {
+  @ApiPropertyOptional({ description: 'Off completes tasks directly. On sends tasks marked for review to a reviewer first.' })
+  @IsOptional()
+  @IsBoolean()
+  taskReviewEnabled?: boolean;
+
+  @ApiPropertyOptional({ description: 'Tell assignees the day before a task is due. On when omitted.' })
+  @IsOptional()
+  @Transform(toBoolean)
+  @IsBoolean()
+  deadlineRemindersEnabled?: boolean;
+
+  @ApiPropertyOptional({ description: 'Tell assignees and the project owner once a task is overdue. On when omitted.' })
+  @IsOptional()
+  @Transform(toBoolean)
+  @IsBoolean()
+  overdueRemindersEnabled?: boolean;
+
+  @ApiPropertyOptional({ description: 'Remind the project owner the next day if a task is still waiting for review. On when omitted.' })
+  @IsOptional()
+  @Transform(toBoolean)
+  @IsBoolean()
+  reviewRemindersEnabled?: boolean;
+
+  @ApiPropertyOptional({ description: 'Tell the owner and members when a project status changes. On when omitted. Closing still notifies even when this is off.' })
+  @IsOptional()
+  @Transform(toBoolean)
+  @IsBoolean()
+  projectStatusNotificationsEnabled?: boolean;
+
+  @ApiPropertyOptional({ description: 'Tell people when they are added to a project or given a task, and when a task\'s due date or priority changes. On when omitted.' })
+  @IsOptional()
+  @Transform(toBoolean)
+  @IsBoolean()
+  assignmentNotificationsEnabled?: boolean;
+}
+
+export class DecideWorkspaceTaskReviewDto {
+  @ApiProperty({ enum: ['APPROVE', 'RETURN'] })
+  @IsIn(['APPROVE', 'RETURN'])
+  decision: 'APPROVE' | 'RETURN';
 }
 
 export class UpdateTaskStatusDto {
   @ApiProperty({ enum: WorkspaceTaskStatus })
   @IsEnum(WorkspaceTaskStatus)
   status: WorkspaceTaskStatus;
+}
+
+export class CreateWorkspaceTaskCommentDto {
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(2000)
+  body: string;
+}
+
+export class CreateWorkspaceChecklistItemDto {
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(200)
+  label: string;
+}
+
+export class UpdateWorkspaceChecklistItemDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(200)
+  label?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Transform(toBoolean)
+  @IsBoolean()
+  done?: boolean;
+}
+
+export class CreateWorkspaceTaskAttachmentDto {
+  @ApiProperty({ description: 'File id from POST /files/upload with category "task"' })
+  @IsUUID()
+  fileId: string;
 }
 
 export class GetMyTasksQueryDto {
@@ -278,12 +425,20 @@ export class CreateWorkspaceProjectDto {
   @MaxLength(5000)
   description?: string | null;
 
-  @ApiPropertyOptional()
-  @IsOptional()
-  @Transform(emptyToNull)
-  @ValidateIf((_, v) => v !== null)
+  @ApiProperty({ description: 'The responsible owner. Required, and not changed on the employee record.' })
   @IsUUID()
-  leadEmployeeId?: string | null;
+  leadEmployeeId: string;
+
+  @ApiPropertyOptional({
+    type: [String],
+    description: 'Team members besides the owner. The owner is not stored again in this list.',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(100)
+  @ArrayUnique()
+  @IsUUID('4', { each: true })
+  memberEmployeeIds?: string[];
 
   @ApiPropertyOptional({ description: "Defaults to the lead's department" })
   @IsOptional()
@@ -297,18 +452,52 @@ export class CreateWorkspaceProjectDto {
   @IsEnum(WorkspaceProjectStatus)
   status?: WorkspaceProjectStatus;
 
-  @ApiPropertyOptional({ example: '2026-12-31' })
+  @ApiPropertyOptional({ enum: WorkspaceProjectPriority, default: WorkspaceProjectPriority.MEDIUM })
+  @IsOptional()
+  @IsEnum(WorkspaceProjectPriority)
+  priority?: WorkspaceProjectPriority;
+
+  @ApiPropertyOptional({ example: '2026-10-01', description: 'Optional. Must be on or before the expected end.' })
+  @IsOptional()
+  @Transform(emptyToNull)
+  @ValidateIf((_, v) => v !== null)
+  @Matches(DATE_ONLY, { message: `startDate ${DATE_MESSAGE}` })
+  startDate?: string | null;
+
+  @ApiPropertyOptional({ example: '2026-12-31', description: 'Expected end. Task due dates should fall on or before this day.' })
   @IsOptional()
   @Transform(emptyToNull)
   @ValidateIf((_, v) => v !== null)
   @Matches(DATE_ONLY, { message: `dueDate ${DATE_MESSAGE}` })
   dueDate?: string | null;
 
+  @ApiPropertyOptional({ description: 'Free-text place. Not an office or branch record.' })
+  @IsOptional()
+  @Transform(emptyToNull)
+  @ValidateIf((_, v) => v !== null)
+  @IsString()
+  @MaxLength(150)
+  location?: string | null;
+
+  @ApiPropertyOptional({ type: [String], description: 'Up to 20 short labels. Duplicates are dropped.' })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @IsString({ each: true })
+  @MaxLength(40, { each: true })
+  tags?: string[];
+
   @ApiPropertyOptional({ description: 'Next milestone, e.g. "UAT sign-off"' })
   @IsOptional()
   @IsString()
   @MaxLength(150)
   milestone?: string | null;
+
+  @ApiPropertyOptional({ description: 'Hidden from people who are not on the project, unless they can view confidential projects.' })
+  @IsOptional()
+  @Transform(toBoolean)
+  @IsBoolean()
+  confidential?: boolean;
 }
 
 export class UpdateWorkspaceProjectDto {
@@ -331,12 +520,21 @@ export class UpdateWorkspaceProjectDto {
   @MaxLength(5000)
   description?: string | null;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ description: 'A new owner. Omit to keep the current one. Null is refused.' })
   @IsOptional()
-  @Transform(emptyToNull)
-  @ValidateIf((_, v) => v !== null)
   @IsUUID()
-  leadEmployeeId?: string | null;
+  leadEmployeeId?: string;
+
+  @ApiPropertyOptional({
+    type: [String],
+    description: 'Replaces the team when sent. Omit to leave the team unchanged. The owner is dropped from this list.',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(100)
+  @ArrayUnique()
+  @IsUUID('4', { each: true })
+  memberEmployeeIds?: string[];
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -350,18 +548,60 @@ export class UpdateWorkspaceProjectDto {
   @IsEnum(WorkspaceProjectStatus)
   status?: WorkspaceProjectStatus;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ enum: WorkspaceProjectPriority })
+  @IsOptional()
+  @IsEnum(WorkspaceProjectPriority)
+  priority?: WorkspaceProjectPriority;
+
+  @ApiPropertyOptional({ description: 'Null clears the start date.' })
+  @IsOptional()
+  @Transform(emptyToNull)
+  @ValidateIf((_, v) => v !== null)
+  @Matches(DATE_ONLY, { message: `startDate ${DATE_MESSAGE}` })
+  startDate?: string | null;
+
+  @ApiPropertyOptional({ description: 'Expected end. Null clears it.' })
   @IsOptional()
   @Transform(emptyToNull)
   @ValidateIf((_, v) => v !== null)
   @Matches(DATE_ONLY, { message: `dueDate ${DATE_MESSAGE}` })
   dueDate?: string | null;
 
+  @ApiPropertyOptional({ description: 'Free-text place. Null clears it. Not an office or branch record.' })
+  @IsOptional()
+  @Transform(emptyToNull)
+  @ValidateIf((_, v) => v !== null)
+  @IsString()
+  @MaxLength(150)
+  location?: string | null;
+
+  @ApiPropertyOptional({ type: [String], description: 'Replaces the tags when sent. Omit to leave them unchanged.' })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @IsString({ each: true })
+  @MaxLength(40, { each: true })
+  tags?: string[];
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
   @MaxLength(150)
   milestone?: string | null;
+
+  @ApiPropertyOptional({ description: 'Hidden from people who are not on the project, unless they can view confidential projects. Changing this needs that permission.' })
+  @IsOptional()
+  @Transform(toBoolean)
+  @IsBoolean()
+  confidential?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Required to close a project that still has incomplete or blocked tasks. Those tasks stay open.',
+  })
+  @IsOptional()
+  @Transform(toBoolean)
+  @IsBoolean()
+  acknowledgeOpenTasks?: boolean;
 }
 
 // ==========================================
@@ -560,6 +800,147 @@ export class UpdateMyTaskStatusMessageDto extends EmployeeActorDto {
   status: WorkspaceTaskStatus;
 }
 
+export class UpdateWorkspaceSettingsMessageDto extends TenantMessageDto {
+  @ValidateNested()
+  @Type(() => UpdateWorkspaceSettingsDto)
+  @IsDefined()
+  dto: UpdateWorkspaceSettingsDto;
+}
+
+export class DecideWorkspaceTaskReviewMessageDto extends WorkspaceTaskIdMessageDto {
+  @IsIn(['APPROVE', 'RETURN'])
+  decision: 'APPROVE' | 'RETURN';
+
+  /** True for organization-wide task or project managers. They still cannot review a task assigned to themselves. */
+  @IsBoolean()
+  canManage: boolean;
+}
+
+export class AddTaskCommentMessageDto extends WorkspaceTaskIdMessageDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(2000)
+  body: string;
+
+  @IsUUID()
+  userId: string;
+
+  @IsOptional()
+  @IsString()
+  email?: string;
+
+  @IsIn(['mine', 'manage'])
+  scope: 'mine' | 'manage';
+}
+
+export class DeleteTaskCommentMessageDto extends WorkspaceTaskIdMessageDto {
+  @IsUUID()
+  commentId: string;
+
+  @IsUUID()
+  userId: string;
+
+  @IsBoolean()
+  canModerate: boolean;
+
+  @IsIn(['mine', 'manage'])
+  scope: 'mine' | 'manage';
+}
+
+export class AddChecklistItemMessageDto extends WorkspaceTaskIdMessageDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(200)
+  label: string;
+}
+
+export class UpdateChecklistItemMessageDto extends WorkspaceTaskIdMessageDto {
+  @IsUUID()
+  itemId: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  label?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  done?: boolean;
+
+  @IsOptional()
+  @IsUUID()
+  userId?: string;
+
+  @IsOptional()
+  @IsString()
+  email?: string;
+
+  @IsIn(['mine', 'manage'])
+  scope: 'mine' | 'manage';
+}
+
+export class DeleteChecklistItemMessageDto extends WorkspaceTaskIdMessageDto {
+  @IsUUID()
+  itemId: string;
+}
+
+export class AddTaskAttachmentMessageDto extends WorkspaceTaskIdMessageDto {
+  @IsUUID()
+  fileId: string;
+
+  @IsString()
+  @MaxLength(255)
+  fileName: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(127)
+  mimeType?: string;
+
+  @IsOptional()
+  @IsInt()
+  sizeBytes?: number;
+
+  @IsUUID()
+  userId: string;
+
+  @IsOptional()
+  @IsString()
+  email?: string;
+
+  @IsIn(['mine', 'manage'])
+  scope: 'mine' | 'manage';
+}
+
+export class DeleteTaskAttachmentMessageDto extends WorkspaceTaskIdMessageDto {
+  @IsUUID()
+  attachmentId: string;
+
+  @IsUUID()
+  userId: string;
+
+  @IsBoolean()
+  canModerate: boolean;
+
+  @IsIn(['mine', 'manage'])
+  scope: 'mine' | 'manage';
+}
+
+export class GetTaskAttachmentMessageDto extends WorkspaceTaskIdMessageDto {
+  @IsUUID()
+  attachmentId: string;
+
+  @IsUUID()
+  userId: string;
+
+  @IsOptional()
+  @IsString()
+  email?: string;
+
+  @IsIn(['mine', 'manage'])
+  scope: 'mine' | 'manage';
+}
+
 export class GetWorkspaceProjectsMessageDto extends TenantMessageDto {
   @ValidateNested()
   @Type(() => GetWorkspaceProjectsQueryDto)
@@ -584,6 +965,11 @@ export class UpdateWorkspaceProjectMessageDto extends WorkspaceProjectIdMessageD
   @Type(() => UpdateWorkspaceProjectDto)
   @IsDefined()
   dto: UpdateWorkspaceProjectDto;
+
+  /** True when the caller has projects.reopen, projects.manage, or full access. */
+  @IsOptional()
+  @IsBoolean()
+  canReopen?: boolean;
 }
 
 export class GetCalendarMessageDto extends TenantMessageDto {

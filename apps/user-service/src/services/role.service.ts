@@ -7,10 +7,13 @@ import { literal } from 'sequelize';
 import { TenantModelProviderService } from './tenant-model-provider.service';
 import { PermissionRegistryService } from './permission-registry.service';
 import {
+  ADMIN_REQUIRED_PERMISSIONS,
+  ADMINISTRATION_ROLE_NAME,
   buildPaginatedResult,
   DataScope,
   EffectiveAuthorization,
   FULL_ACCESS_PERMISSION,
+  grantsPermission,
   isAdminTierCredentialRole,
   isReservedRoleName,
   ListBoundsInput,
@@ -115,6 +118,34 @@ export class RoleService {
    * Get all roles in the given tenant's database
    */
   /**
+   * The active users who could decide something that needs `permission`: those
+   * with a role that grants it (`<resource>.manage` stands in for the actions
+   * on that resource, and `payroll.manage` for any payroll permission), and the
+   * Organization Admins, who hold everything.
+   */
+  async findPermissionHolders(tenantId: string, permission: string): Promise<{ id: string; email: string }[]> {
+    const RoleModel = await this.modelProvider.getRoleModel(tenantId);
+    const PermissionModel = await this.modelProvider.getPermissionModel(tenantId);
+    const UserModel = await this.modelProvider.getUserModel(tenantId);
+    const roles = await RoleModel.findAll({
+      include: [
+        { model: PermissionModel, through: { attributes: [] } },
+        { model: UserModel, through: { attributes: [] }, attributes: ['id', 'email', 'isActive'] },
+      ],
+    });
+    const holders = new Map<string, { id: string; email: string }>();
+    for (const role of roles) {
+      const granted = (role.permissions ?? []).map((perm) => `${perm.resource}.${perm.action}`);
+      const holds = role.name === ORG_ADMIN_ROLE_NAME || grantsPermission(granted, permission) || (permission.startsWith('payroll.') && granted.includes('payroll.manage'));
+      if (!holds) continue;
+      for (const user of role.users ?? []) {
+        if (user.isActive !== false) holders.set(user.id, { id: user.id, email: user.email });
+      }
+    }
+    return [...holders.values()];
+  }
+
+  /**
    * Get roles for a tenant, one bounded page at a time.
    *
    * Roles are few, but each one eager-loads its whole permission set, so the
@@ -178,8 +209,17 @@ export class RoleService {
    */
   async updateRole(tenantId: string, id: string, data: UpdateRoleData): Promise<Role> {
     const role = await this.getRoleById(tenantId, id);
-    if (role.isSystemRole || PROTECTED_SYSTEM_ROLES.includes(role.name.toUpperCase())) {
-      throw new BadRequestException(`System role '${role.name}' cannot be modified`);
+    const system =
+      role.isSystemRole || PROTECTED_SYSTEM_ROLES.includes(role.name.toUpperCase());
+    if (system) {
+      // Starter roles keep a fixed name so every organization shares them,
+      // but their data scope is part of what an organization is meant to tune.
+      const scopeOnly =
+        data.dataScope !== undefined && data.name === undefined && data.description === undefined;
+      const starter = SYSTEM_TENANT_ROLES.find((def) => def.name === role.name);
+      if (!scopeOnly || !starter?.scopeEditable) {
+        throw new BadRequestException(`System role '${role.name}' cannot be modified`);
+      }
     }
     if (data.name && isReservedRoleName(data.name)) {
       throw new BadRequestException(`'${data.name}' is a reserved role name`);
@@ -250,6 +290,17 @@ export class RoleService {
     if (role.name === ORG_ADMIN_ROLE_NAME) {
       throw new BadRequestException('The Organization Admin role always has full access and cannot be edited');
     }
+    if (role.name === ADMINISTRATION_ROLE_NAME) {
+      // Lock-out guard: everything else can be granted or taken away, including
+      // payroll. These two stay, so Roles & Permissions and Settings stay reachable.
+      const keys = new Set(permissionInputs.map((input) => input.replace(':', '.')));
+      const missing = ADMIN_REQUIRED_PERMISSIONS.filter((key) => !keys.has(key));
+      if (missing.length) {
+        throw new BadRequestException(
+          `The Administration role must keep ${missing.join(' and ')}; without them nobody in that role could manage roles or settings.`,
+        );
+      }
+    }
     const resolvedPermissionIds = await this.permissionRegistryService.resolvePermissionIds(tenantId, permissionInputs);
 
     const sequelize = await this.modelProvider.getConnection(tenantId);
@@ -258,8 +309,10 @@ export class RoleService {
     try {
       const RolePermissionModel = await this.modelProvider.getRolePermissionModel(tenantId);
 
-      // Clear current permissions
-      await RolePermissionModel.destroy({ where: { roleId }, transaction });
+      // Clear current permissions. Per-row hooks so each removed grant lands
+      // in entity_audit_logs like each added one does — the trail shows what
+      // an admin took away as well as what they gave (themselves included).
+      await RolePermissionModel.destroy({ where: { roleId }, transaction, individualHooks: true });
 
       // Bulk create new permissions
       for (const pId of resolvedPermissionIds) {
@@ -281,6 +334,11 @@ export class RoleService {
    * Makes sure every system role exists, and gives each one its default
    * permissions the first time it is set up. Idempotent and cheap once done:
    * one query when nothing is missing.
+   *
+   * The Organization Admin is the exception: it is marked configured with no
+   * permission rows, because full access does not come from the matrix.
+   * Administration is seeded with its narrower list the first time it appears,
+   * including in organizations that already existed.
    */
   async ensureSystemRoles(tenantId: string): Promise<void> {
     const RoleModel = await this.modelProvider.getRoleModel(tenantId);
@@ -299,12 +357,17 @@ export class RoleService {
             name: def.name,
             description: def.description,
             isSystemRole: true,
+            dataScope: def.dataScope ?? null,
           });
         } catch {
           // A concurrent caller created it first (unique name).
           role = await RoleModel.findOne({ where: { name: def.name } });
           if (!role || role.permissionsConfigured) continue;
         }
+      }
+
+      if (!role.dataScope && def.dataScope) {
+        await role.update({ dataScope: def.dataScope });
       }
 
       if (def.locked) {
@@ -317,12 +380,13 @@ export class RoleService {
 
   /**
    * The permission keys (`resource.action`) a signed-in credential carries in
-   * its access token. Admin-tier credentials get none: an empty claim is what
-   * gives them unrestricted access in PermissionsGuard. An unknown role
-   * resolves to none too — the safe default.
+   * its access token. An Organization Admin credential gets `*`. Every other
+   * role, Administration included, is read from the role it maps to. An
+   * unknown role resolves to none — the safe default.
    */
   async resolveCredentialPermissions(tenantId: string, credentialRole: string): Promise<string[]> {
-    if (!credentialRole || isAdminTierCredentialRole(credentialRole)) return [FULL_ACCESS_PERMISSION];
+    if (!credentialRole) return [];
+    if (isAdminTierCredentialRole(credentialRole)) return [FULL_ACCESS_PERMISSION];
 
     await this.ensureSystemRoles(tenantId);
 
@@ -343,8 +407,9 @@ export class RoleService {
    *
    * Single source of truth for all authorization decisions.
    * If a user has multiple roles, their effective permissions are the union.
-   * Organization Admin gets explicit full access (isFullAccess: true, permissions: ['*']).
-   * An empty permissions list means no permissions.
+   * The Organization Admin gets explicit full access (`isFullAccess: true`,
+   * permissions: ['*']). Administration does not: it contributes only the
+   * grants on its role. An empty permissions list means no permissions.
    */
   async resolveEffectiveAuthorization(
     tenantId: string,
@@ -466,7 +531,7 @@ export class RoleService {
       permissions: Array.from(permissionSet),
       isFullAccess,
       primaryRole,
-      // Full access is never narrowed; otherwise the widest scope any of the
+      // Full access is never narrowed. Otherwise the widest scope any of the
       // user's roles grants, so adding a role can only widen what they see.
       dataScope: isFullAccess
         ? DataScope.ORGANIZATION

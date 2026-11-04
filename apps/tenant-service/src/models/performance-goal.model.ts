@@ -44,4 +44,12 @@ export class PerformanceGoal extends Model {
 
   @Column({ type: DataType.DATEONLY, allowNull: true })
   declare dueDate: string | null;
+
+  /** The review cycle this goal was set for. Null for a goal set by hand outside a cycle: it shows to the employee at once. */
+  @Column({ type: DataType.UUID, allowNull: true })
+  declare cycleId: string | null;
+
+  /** When the goal was shown to the employee, as part of its plan. A cycle goal with none is still a draft. */
+  @Column({ type: DataType.DATE, allowNull: true })
+  declare publishedAt: Date | null;
 }

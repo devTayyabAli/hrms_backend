@@ -6,6 +6,7 @@ export * from './pipes';
 export * from './providers/resilient-client-proxy';
 export * from './utils';
 export * from './role-permissions';
+export * from './workspace-grants';
 export * from './dto/auth.dto';
 export * from './dto/organization.dto';
 export * from './dto/organization-module.dto';
@@ -21,9 +22,16 @@ export * from './dto/leave.dto';
 export * from './dto/shift.dto';
 export * from './dto/chat.dto';
 export * from './dto/asset.dto';
+export * from './dto/asset-lifecycle.dto';
+export * from './dto/learning.dto';
+export * from './dto/learning-assignment.dto';
+export * from './dto/learning-recommendation.dto';
+export * from './dto/learning-report.dto';
+export * from './dto/performance-self.dto';
 export * from './dto/recruitment.dto';
 export * from './dto/onboarding.dto';
 export * from './dto/organization-departments.dto';
+export * from './dto/organization-hierarchy.dto';
 export * from './dto/policy.dto';
 export * from './dto/platform-clients.dto';
 export * from './dto/platform-organizations.dto';
@@ -40,6 +48,17 @@ export * from './dto/help-support.dto';
 export * from './dto/ai-assistant.dto';
 export * from './dto/workspace.dto';
 export * from './dto/company-document.dto';
+export * from './dto/policy-acknowledgement.dto';
+export * from './dto/approval-policy.dto';
+export * from './dto/branch.dto';
+export * from './dto/helpdesk.dto';
+export * from './dto/employee-assignment.dto';
+export * from './dto/department-checklist.dto';
+export * from './dto/performance-cycle.dto';
+export * from './dto/performance-plan.dto';
+export * from './dto/offboarding.dto';
+export * from './dto/final-settlement.dto';
+export * from './dto/role-dashboard.dto';
 export * from './dto/performance-payroll.dto';
 export * from './dto/payroll-compliance.dto';
 export * from './dto/payroll-compensation.dto';
@@ -137,6 +156,7 @@ export const MESSAGE_PATTERNS = {
     SET_PERMISSIONS: 'role.set_permissions',
     RESOLVE_CREDENTIAL_PERMISSIONS: 'role.resolve_credential_permissions',
     RESOLVE_EFFECTIVE_AUTHORIZATION: 'role.resolve_effective_authorization',
+    PERMISSION_HOLDERS: 'role.permission_holders',
   },
   PERMISSION: {
     GET_AVAILABLE: 'permission.get_available',
@@ -178,6 +198,8 @@ export const MESSAGE_PATTERNS = {
     DELETE_LEAVE_POLICY: 'org_setup.delete_leave_policy',
     GET_ATTENDANCE_POLICY: 'org_setup.get_attendance_policy',
     UPDATE_ATTENDANCE_POLICY: 'org_setup.update_attendance_policy',
+    GET_APPROVAL_FLOW: 'org_setup.get_approval_flow',
+    UPDATE_APPROVAL_FLOW: 'org_setup.update_approval_flow',
     COMPLETE_SETUP: 'org_setup.complete_setup',
     GET_INDUSTRY_TEMPLATE: 'org_setup.get_industry_template',
     APPLY_INDUSTRY_TEMPLATE: 'org_setup.apply_industry_template',
@@ -212,6 +234,19 @@ export const MESSAGE_PATTERNS = {
     GET_ONE: 'org_department.get_one',
     ASSIGN_MANAGER: 'org_department.assign_manager',
     EXPORT: 'org_department.export',
+  },
+  /**
+   * Department Hierarchy: the department tree, the reporting tree, employee
+   * reporting assignments and the history of structure changes.
+   */
+  ORGANIZATION_HIERARCHY: {
+    GET_DEPARTMENT_TREE: 'org_hierarchy.get_department_tree',
+    GET_DEPARTMENT_HISTORY: 'org_hierarchy.get_department_history',
+    GET_REPORTING_TREE: 'org_hierarchy.get_reporting_tree',
+    GET_EMPLOYEE_REPORTING: 'org_hierarchy.get_employee_reporting',
+    GET_EMPLOYEE_REPORTING_HISTORY: 'org_hierarchy.get_employee_reporting_history',
+    UPDATE_EMPLOYEE_REPORTING: 'org_hierarchy.update_employee_reporting',
+    REASSIGN_REPORTS: 'org_hierarchy.reassign_reports',
   },
   /** Admin-side Leave Management screen: KPI cards, requests table, decisions. */
   LEAVE_REQUEST: {
@@ -274,10 +309,75 @@ export const MESSAGE_PATTERNS = {
     DISPOSE: 'asset.dispose',
     MARK_DAMAGED: 'asset.mark_damaged',
     MARK_LOST: 'asset.mark_lost',
+    // Employee self-service
+    GET_MY_ASSETS: 'asset.get_my_assets',
+    ACCEPT_MY_ASSET: 'asset.accept_my_asset',
+    CREATE_MY_REQUEST: 'asset.create_my_request',
+    GET_MY_REQUESTS: 'asset.get_my_requests',
+    // IT / Admin: requests
+    GET_REQUESTS: 'asset.get_requests',
+    GET_ALERTS: 'asset.get_alerts',
+    UPDATE_REQUEST: 'asset.update_request',
+    // Lost / damaged: salary deductions
+    GET_DEDUCTIONS: 'asset.get_deductions',
+    APPROVE_DEDUCTION: 'asset.approve_deduction',
+    WAIVE_DEDUCTION: 'asset.waive_deduction',
+    // Offboarding
+    GET_CLEARANCE: 'asset.get_clearance',
+    CONFIRM_CLEARANCE: 'asset.confirm_clearance',
     GET_CATEGORIES: 'asset.get_categories',
     CREATE_CATEGORY: 'asset.create_category',
     UPDATE_CATEGORY: 'asset.update_category',
     DELETE_CATEGORY: 'asset.delete_category',
+  },
+  /** Learning: the courses an organization offers and the materials in them. */
+  LEARNING_COURSE: {
+    GET_ALL: 'learning_course.get_all',
+    GET_CATEGORIES: 'learning_course.get_categories',
+    GET_ONE: 'learning_course.get_one',
+    CREATE: 'learning_course.create',
+    UPDATE: 'learning_course.update',
+    DELETE: 'learning_course.delete',
+    PUBLISH: 'learning_course.publish',
+    ARCHIVE: 'learning_course.archive',
+    UNARCHIVE: 'learning_course.unarchive',
+    DUPLICATE: 'learning_course.duplicate',
+    ADD_MATERIAL: 'learning_course.add_material',
+    UPDATE_MATERIAL: 'learning_course.update_material',
+    DELETE_MATERIAL: 'learning_course.delete_material',
+    SET_MATERIAL_ORDER: 'learning_course.set_material_order',
+    GET_MATERIAL_FILE: 'learning_course.get_material_file',
+  },
+  /** Learning: giving courses to people. */
+  LEARNING_ASSIGNMENT: {
+    ASSIGN: 'learning_assignment.assign',
+    GET_ALL: 'learning_assignment.get_all',
+    GET_ONE: 'learning_assignment.get_one',
+    UPDATE: 'learning_assignment.update',
+    CANCEL: 'learning_assignment.cancel',
+    GET_ALERTS: 'learning_assignment.get_alerts',
+    GET_FOR_EMPLOYEE: 'learning_assignment.get_for_employee',
+    EXPORT: 'learning_assignment.export',
+    GET_DASHBOARD: 'learning_assignment.get_dashboard',
+    GET_REPORT: 'learning_assignment.get_report',
+    GET_SETTINGS: 'learning_assignment.get_settings',
+    UPDATE_SETTINGS: 'learning_assignment.update_settings',
+  },
+  /** Learning: what the signed-in employee does with the courses they have. */
+  LEARNING_RECOMMENDATION: {
+    CREATE: 'learning_recommendation.create',
+    GET_ALL: 'learning_recommendation.get_all',
+    APPROVE: 'learning_recommendation.approve',
+    DISMISS: 'learning_recommendation.dismiss',
+  },
+  LEARNING_SELF: {
+    GET_MINE: 'learning_self.get_mine',
+    GET_MINE_ONE: 'learning_self.get_mine_one',
+    START: 'learning_self.start',
+    OPEN_MATERIAL: 'learning_self.open_material',
+    COMPLETE: 'learning_self.complete',
+    GET_HISTORY: 'learning_self.get_history',
+    GET_MATERIAL_FILE: 'learning_self.get_material_file',
   },
   /** Recruitment screen: Job Openings table and requisition lifecycle. */
   JOB_OPENING: {
@@ -339,6 +439,7 @@ export const MESSAGE_PATTERNS = {
     CREATE: 'onboarding_task.create',
     UPDATE: 'onboarding_task.update',
     SET_STATUS: 'onboarding_task.set_status',
+    SET_IT_STATUS: 'onboarding_task.set_it_status',
     DELETE: 'onboarding_task.delete',
   },
   PERFORMANCE: {
@@ -349,14 +450,28 @@ export const MESSAGE_PATTERNS = {
     GET_TOP_PERFORMERS: 'performance.get_top_performers',
     GET_REVIEWS: 'performance.get_reviews',
     GET_REVIEW: 'performance.get_review',
+    GET_REVIEW_EVIDENCE: 'performance.get_review_evidence',
     CREATE_REVIEW: 'performance.create_review',
     UPDATE_REVIEW: 'performance.update_review',
     DELETE_REVIEW: 'performance.delete_review',
+    PUBLISH_REVIEW: 'performance.publish_review',
+    SET_REVIEW_ACCESS: 'performance.set_review_access',
+    UNPUBLISH_REVIEW: 'performance.unpublish_review',
     GET_GOALS: 'performance.get_goals',
     GET_GOAL: 'performance.get_goal',
     CREATE_GOAL: 'performance.create_goal',
     UPDATE_GOAL: 'performance.update_goal',
     DELETE_GOAL: 'performance.delete_goal',
+  },
+  PERFORMANCE_SELF: {
+    GET_REVIEWS: 'performance_self.get_reviews',
+    GET_REVIEW: 'performance_self.get_review',
+    SUBMIT_SELF_ASSESSMENT: 'performance_self.submit_self_assessment',
+    GET_REVIEWING: 'performance_self.get_reviewing',
+    GET_REVIEWING_ONE: 'performance_self.get_reviewing_one',
+    SUBMIT_EVALUATION: 'performance_self.submit_evaluation',
+    GET_GOALS: 'performance_self.get_goals',
+    UPDATE_GOAL_PROGRESS: 'performance_self.update_goal_progress',
   },
   PAYROLL: {
     GET_OVERVIEW: 'payroll.get_overview',
@@ -448,6 +563,11 @@ export const MESSAGE_PATTERNS = {
     LIST_REIMBURSEMENTS: 'payroll_compensation.list_reimbursements',
     CREATE_REIMBURSEMENT: 'payroll_compensation.create_reimbursement',
     DECIDE_REIMBURSEMENT: 'payroll_compensation.decide_reimbursement',
+    LIST_SALARY_REQUESTS: 'payroll_compensation.list_salary_requests',
+    DECIDE_SALARY_REQUEST: 'payroll_compensation.decide_salary_request',
+    CANCEL_SALARY_REQUEST: 'payroll_compensation.cancel_salary_request',
+    MY_APPROVALS_LIST: 'payroll_compensation.my_approvals_list',
+    MY_APPROVALS_DECIDE: 'payroll_compensation.my_approvals_decide',
     LIST_ADJUSTMENTS: 'payroll_compensation.list_adjustments',
     CREATE_ADJUSTMENT: 'payroll_compensation.create_adjustment',
     REMOVE_ADJUSTMENT: 'payroll_compensation.remove_adjustment',
@@ -486,6 +606,8 @@ export const MESSAGE_PATTERNS = {
     DELETE_REQUEST: 'employee_portal.delete_request',
     CANCEL_REQUEST: 'employee_portal.cancel_request',
     DECIDE_REQUEST: 'employee_portal.decide_request',
+    MY_REQUEST_APPROVALS: 'employee_portal.my_request_approvals',
+    DECIDE_MY_REQUEST_APPROVAL: 'employee_portal.decide_my_request_approval',
     /** HR: every employee's requests, and the counts above them. */
     LIST_ALL_REQUESTS: 'employee_portal.list_all_requests',
     GET_REQUEST_STATS: 'employee_portal.get_request_stats',
@@ -496,6 +618,8 @@ export const MESSAGE_PATTERNS = {
     MARK_ALL_NOTIFICATIONS_READ: 'employee_portal.mark_all_notifications_read',
     /** Reporting line: my manager, peers, reports and headed departments. */
     GET_MY_TEAM: 'employee_portal.get_my_team',
+    GET_MY_DEPARTMENTS: 'employee_portal.get_my_departments',
+    GET_MY_EMPLOYMENT_HISTORY: 'employee_portal.get_my_employment_history',
     /** The organization chart. */
     GET_HIERARCHY: 'employee_portal.get_hierarchy',
     /** Whether this person leads anyone — drives the Team section of the sidebar. */
@@ -782,6 +906,19 @@ export const MESSAGE_PATTERNS = {
     GET_PEOPLE: 'workspace_task.get_people',
     GET_MINE: 'workspace_task.get_mine',
     UPDATE_MY_STATUS: 'workspace_task.update_my_status',
+    GET_SETTINGS: 'workspace_task.get_settings',
+    GET_DASHBOARD: 'workspace_task.get_dashboard',
+    GET_MY_DASHBOARD: 'workspace_task.get_my_dashboard',
+    UPDATE_SETTINGS: 'workspace_task.update_settings',
+    DECIDE_REVIEW: 'workspace_task.decide_review',
+    ADD_COMMENT: 'workspace_task.add_comment',
+    DELETE_COMMENT: 'workspace_task.delete_comment',
+    ADD_CHECKLIST: 'workspace_task.add_checklist',
+    UPDATE_CHECKLIST: 'workspace_task.update_checklist',
+    DELETE_CHECKLIST: 'workspace_task.delete_checklist',
+    ADD_ATTACHMENT: 'workspace_task.add_attachment',
+    DELETE_ATTACHMENT: 'workspace_task.delete_attachment',
+    GET_ATTACHMENT: 'workspace_task.get_attachment',
   },
   WORKSPACE_PROJECT: {
     GET_ALL: 'workspace_project.get_all',
@@ -790,6 +927,7 @@ export const MESSAGE_PATTERNS = {
     CREATE: 'workspace_project.create',
     UPDATE: 'workspace_project.update',
     DELETE: 'workspace_project.delete',
+    GET_OPEN_TASKS: 'workspace_project.get_open_tasks',
   },
   CALENDAR: {
     GET_MONTH: 'calendar.get_month',
@@ -801,6 +939,122 @@ export const MESSAGE_PATTERNS = {
     CREATE_HOLIDAY: 'calendar.create_holiday',
     UPDATE_HOLIDAY: 'calendar.update_holiday',
     DELETE_HOLIDAY: 'calendar.delete_holiday',
+  },
+  ROLE_DASHBOARD: {
+    FINANCE: 'role_dashboard.finance',
+    IT: 'role_dashboard.it',
+    MANAGER: 'role_dashboard.manager',
+  },
+  FINAL_SETTLEMENT: {
+    GET_PDF: 'final_settlement.get_pdf',
+    GET_FOR_CASE: 'final_settlement.get_for_case',
+    PREPARE: 'final_settlement.prepare',
+    GET_ALL: 'final_settlement.get_all',
+    GET_ONE: 'final_settlement.get_one',
+    UPDATE: 'final_settlement.update',
+    ADD_LINE: 'final_settlement.add_line',
+    UPDATE_LINE: 'final_settlement.update_line',
+    REMOVE_LINE: 'final_settlement.remove_line',
+    SUBMIT: 'final_settlement.submit',
+    DECIDE: 'final_settlement.decide',
+    CANCEL: 'final_settlement.cancel',
+    MARK_PAID: 'final_settlement.mark_paid',
+  },
+  OFFBOARDING: {
+    GET_SETTINGS: 'offboarding.get_settings',
+    UPDATE_SETTINGS: 'offboarding.update_settings',
+    GET_CASES: 'offboarding.get_cases',
+    GET_CASE: 'offboarding.get_case',
+    INITIATE: 'offboarding.initiate',
+    UPDATE: 'offboarding.update',
+    CANCEL: 'offboarding.cancel',
+    CLEAR_STAGE: 'offboarding.clear_stage',
+    REOPEN_STAGE: 'offboarding.reopen_stage',
+    GET_WAITING_ON_ME: 'offboarding.get_waiting_on_me',
+    CLEAR_AS_MANAGER: 'offboarding.clear_as_manager',
+  },
+  PERFORMANCE_SYNC: {
+    PENDING: 'performance_sync.pending',
+    DECIDE: 'performance_sync.decide',
+    REOPEN: 'performance_sync.reopen',
+  },
+  PERFORMANCE_PLAN: {
+    TEMPLATE_LIST: 'performance_plan.template_list',
+    TEMPLATE_GET: 'performance_plan.template_get',
+    TEMPLATE_CREATE: 'performance_plan.template_create',
+    TEMPLATE_UPDATE: 'performance_plan.template_update',
+    TEMPLATE_DELETE: 'performance_plan.template_delete',
+    TEMPLATE_MATCH: 'performance_plan.template_match',
+    REVIEWER_GET: 'performance_plan.reviewer_get',
+    REVIEWER_SAVE: 'performance_plan.reviewer_save',
+    REVIEWER_PUBLISH: 'performance_plan.reviewer_publish',
+    ADMIN_GET: 'performance_plan.admin_get',
+    ADMIN_SAVE: 'performance_plan.admin_save',
+    ADMIN_PUBLISH: 'performance_plan.admin_publish',
+    ADMIN_UNPUBLISH: 'performance_plan.admin_unpublish',
+    HISTORY: 'performance_plan.history',
+    MINE: 'performance_plan.mine',
+  },
+  PERFORMANCE_CYCLE: {
+    LIST: 'performance_cycle.list',
+    GET: 'performance_cycle.get',
+    CREATE: 'performance_cycle.create',
+    UPDATE: 'performance_cycle.update',
+    DELETE: 'performance_cycle.delete',
+    PREVIEW: 'performance_cycle.preview',
+    LAUNCH: 'performance_cycle.launch',
+    CLOSE: 'performance_cycle.close',
+    QUEUE: 'performance_cycle.queue',
+    ENROL: 'performance_cycle.enrol',
+  },
+  DEPARTMENT_CHECKLIST: {
+    LIST: 'department_checklist.list',
+    CREATE: 'department_checklist.create',
+    UPDATE: 'department_checklist.update',
+    DELETE: 'department_checklist.delete',
+  },
+  EMPLOYEE_ASSIGNMENT: {
+    LIST: 'employee_assignment.list',
+    ADD: 'employee_assignment.add',
+    UPDATE: 'employee_assignment.update',
+    END: 'employee_assignment.end',
+    MINE: 'employee_assignment.mine',
+  },
+  HELPDESK: {
+    MY_LIST: 'helpdesk.my_list',
+    MY_GET: 'helpdesk.my_get',
+    MY_CREATE: 'helpdesk.my_create',
+    MY_COMMENT: 'helpdesk.my_comment',
+    MY_REOPEN: 'helpdesk.my_reopen',
+    MY_CLOSE: 'helpdesk.my_close',
+    LIST: 'helpdesk.list',
+    GET: 'helpdesk.get',
+    UPDATE: 'helpdesk.update',
+    COMMENT: 'helpdesk.comment',
+  },
+  BRANCH: {
+    GET_ALL: 'branch.get_all',
+    GET_ONE: 'branch.get_one',
+    CREATE: 'branch.create',
+    UPDATE: 'branch.update',
+    DELETE: 'branch.delete',
+    ASSIGN_EMPLOYEES: 'branch.assign_employees',
+    REMOVE_EMPLOYEES: 'branch.remove_employees',
+    FROM_LOCATIONS: 'branch.from_locations',
+  },
+  APPROVAL_POLICY: {
+    GET_ALL: 'approval_policy.get_all',
+    UPDATE: 'approval_policy.update',
+    RESET: 'approval_policy.reset',
+  },
+  POLICY_ACK: {
+    SET_DISTRIBUTION: 'policy_ack.set_distribution',
+    REQUEST_REACK: 'policy_ack.request_reack',
+    GET_ACKS: 'policy_ack.get_acks',
+    OVERVIEW: 'policy_ack.overview',
+    REMIND: 'policy_ack.remind',
+    GET_MINE: 'policy_ack.get_mine',
+    ACKNOWLEDGE: 'policy_ack.acknowledge',
   },
   COMPANY_DOCUMENT: {
     GET_ALL: 'company_document.get_all',
