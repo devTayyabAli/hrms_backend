@@ -21,7 +21,7 @@ const EMPLOYED = [EmployeeStatus.ACTIVE, EmployeeStatus.ON_LEAVE];
 const nameOf = (row?: { firstName?: string | null; lastName?: string | null } | null) => (row ? [row.firstName, row.lastName].filter(Boolean).join(' ') : '');
 
 export interface PendingReviewChange {
-  type: 'TRANSFER' | 'ELIGIBILITY';
+  type: 'TRANSFER' | 'ELIGIBILITY' | 'MANAGER';
   detectedAt: string;
   /** What the review was set up for. */
   from: { departmentId: string | null; departmentName: string | null; designationId: string | null; designationTitle: string | null } | null;
@@ -29,6 +29,8 @@ export interface PendingReviewChange {
   to: { departmentId: string | null; departmentName: string | null; designationId: string | null; designationTitle: string | null } | null;
   /** Why the cycle's rules no longer include them, when they do not. */
   eligibilityReason?: string | null;
+  /** Their reporting manager changed: who is reviewing now, and who their manager is now. */
+  manager?: { from: { id: string | null; name: string | null } | null; to: { id: string | null; name: string | null } | null } | null;
   options: ReviewChangeDecision[];
 }
 
@@ -36,7 +38,8 @@ export interface PendingReviewChange {
  * Employee Management changed someone while a review of theirs was open. The
  * review does not silently change its criteria or reviewer: it is flagged, and
  * HR decides to keep it as it is, give it to the new manager, restart it on the
- * new department's KPIs, or take the person out of the cycle. Reviews already
+ * new department's KPIs, or take the person out of the cycle. That holds for a
+ * new department or designation and for a new reporting manager alike. Reviews already
  * completed keep what they recorded, and someone who leaves has their open
  * reviews closed, never deleted.
  */
@@ -122,6 +125,7 @@ export class PerformanceSyncService {
         from,
         to,
         eligibilityReason: existing?.eligibilityReason ?? null,
+        manager: existing?.manager ?? null,
         options: [ReviewChangeDecision.KEEP, ReviewChangeDecision.REASSIGN, ReviewChangeDecision.RESTART, ReviewChangeDecision.REMOVE],
       };
       await review.update({ pendingChange: pending });
@@ -135,6 +139,75 @@ export class PerformanceSyncService {
       flagged++;
     }
     return flagged;
+  }
+
+  /**
+   * Someone's reporting manager changed. Their open reviews that HR did not pin
+   * to a particular reviewer are not handed to the new manager by themselves:
+   * each is flagged, and HR and the current reviewer are told. HR keeps the
+   * reviewer or gives the review to the new manager. A review with several
+   * evaluators, one HR chose a reviewer for, a finished one and a closed one
+   * are left as they are. Returns how many were flagged.
+   */
+  async onManagerChange(tenantId: string, employeeId: string): Promise<number> {
+    const Review = await this.modelProvider.getPerformanceReviewModel(tenantId);
+    const rows = (await Review.findAll({ where: { tenantId, employeeId, status: { [Op.ne]: PerformanceReviewStatus.COMPLETED }, reviewerPinned: false } as any })) as any[];
+    const open = rows.filter((row) => !row.publishedAt && !row.closedAt && !row.multiReviewer);
+    if (!open.length) return 0;
+
+    const Employee = await this.modelProvider.getEmployeeModel(tenantId);
+    const employee: any = await Employee.findOne({ where: { id: employeeId, tenantId } });
+    if (!employee) return 0;
+    const nextId = await this.dashboard.managerOf(tenantId, employee);
+    const ids = [...new Set([nextId, ...open.map((row) => row.reviewerId)].filter(Boolean))] as string[];
+    const people = ids.length ? ((await Employee.findAll({ where: { tenantId, id: { [Op.in]: ids } }, attributes: ['id', 'firstName', 'lastName'], raw: true })) as any[]) : [];
+    const label = (id: string | null) => (id ? { id, name: nameOf(people.find((row) => row.id === id)) || null } : null);
+    const who = nameOf(employee) || 'an employee';
+
+    let flagged = 0;
+    for (const review of open) {
+      const existing = review.pendingChange as PendingReviewChange | null;
+      if ((review.reviewerId ?? null) === nextId) {
+        // The reviewer is the right person again: a flag that only said otherwise is dropped.
+        if (existing?.type === 'MANAGER') {
+          await review.update({ pendingChange: null });
+          await writeAudit(this.modelProvider, this.logger, tenantId, 'performance_reviews', review.id, 'UPDATE', { event: { from: null, to: 'MANAGER_CHANGE_RESOLVED' } });
+        } else if (existing?.manager) {
+          await review.update({ pendingChange: { ...existing, manager: null } });
+        }
+        continue;
+      }
+      const manager = { from: label(review.reviewerId ?? null), to: label(nextId) };
+      const pending: PendingReviewChange = existing
+        ? { ...existing, manager, options: [...new Set([...existing.options, ReviewChangeDecision.KEEP, ReviewChangeDecision.REASSIGN])] }
+        : { type: 'MANAGER', detectedAt: new Date().toISOString(), from: null, to: null, eligibilityReason: null, manager, options: [ReviewChangeDecision.KEEP, ReviewChangeDecision.REASSIGN] };
+      await review.update({ pendingChange: pending });
+      await writeAudit(this.modelProvider, this.logger, tenantId, 'performance_reviews', review.id, 'UPDATE', {
+        event: { from: null, to: 'MANAGER_CHANGE_DETECTED' },
+        reviewerId: { from: review.reviewerId ?? null, to: nextId },
+      });
+      await this.notify(tenantId, review.reviewerId, `Decision needed on ${who}'s review`, `${who}'s reporting manager changed, and their ${review.cycle} review is still open. HR will decide whether you keep it or it goes to the new manager.`);
+      await this.holders?.tellPermission(tenantId, 'performance.manage', [employeeId], `Manager change: ${who}`, `${who} has a new reporting manager and their ${review.cycle} review is open with ${manager.from?.name ?? 'no reviewer'}. Keep that reviewer, or give the review to ${manager.to?.name ?? 'HR'}.`);
+      flagged++;
+    }
+    return flagged;
+  }
+
+  /**
+   * Employment details that decide who is reviewed and how (status, employment
+   * type, probation, contract) changed in Employee Management. Each open review
+   * of theirs records it in its audit history, so the reason for a later
+   * eligibility flag or a changed assignment can be traced. Nothing is changed
+   * on the review itself. Returns how many reviews recorded it.
+   */
+  async recordEmploymentChange(tenantId: string, employeeId: string, changes: Record<string, { from: unknown; to: unknown }>): Promise<number> {
+    const moved = Object.fromEntries(Object.entries(changes).filter(([, change]) => (change.from ?? null) !== (change.to ?? null)));
+    if (!Object.keys(moved).length) return 0;
+    const open = await this.openReviews(tenantId, employeeId);
+    for (const review of open) {
+      await writeAudit(this.modelProvider, this.logger, tenantId, 'performance_reviews', review.id, 'UPDATE', { event: { from: null, to: 'EMPLOYEE_INFO_CHANGED' }, ...moved });
+    }
+    return open.length;
   }
 
   /**
@@ -166,7 +239,7 @@ export class PerformanceSyncService {
     const Employee = await this.modelProvider.getEmployeeModel(tenantId);
     const employee: any = await Employee.findOne({ where: { id: review.employeeId, tenantId } });
     const pending: PendingReviewChange = existing
-      ? { ...existing, eligibilityReason: reason }
+      ? { ...existing, eligibilityReason: reason, options: [...new Set([...existing.options, ReviewChangeDecision.REMOVE])] }
       : { type: 'ELIGIBILITY', detectedAt: new Date().toISOString(), from: null, to: employee ? await this.labels(tenantId, employee.departmentId, employee.designationId) : null, eligibilityReason: reason, options: [ReviewChangeDecision.KEEP, ReviewChangeDecision.REMOVE] };
     await review.update({ pendingChange: pending });
     await writeAudit(this.modelProvider, this.logger, tenantId, 'performance_reviews', review.id, 'UPDATE', { event: { from: null, to: 'ELIGIBILITY_CHANGED' }, reason: { from: null, to: reason } });
@@ -199,6 +272,7 @@ export class PerformanceSyncService {
       from: pending.from,
       to: pending.to,
       eligibilityReason: pending.eligibilityReason ?? null,
+      manager: pending.manager ?? null,
       options: pending.options,
     };
   }

@@ -374,6 +374,7 @@ import {
   CompleteMyLearningMessageDto,
   GetMyLearningHistoryMessageDto,
   GetMyLearningMessageDto,
+  GetWorkSummaryQueryDto,
   GetTrainingAssignmentsMessageDto,
   MyTrainingMaterialMessageDto,
   TrainingAssignmentIdMessageDto,
@@ -452,6 +453,8 @@ import { PerformancePlanService } from './services/performance-plan.service';
 import { PerformanceSyncService } from './services/performance-sync.service';
 import { PerformanceEvaluatorService } from './services/performance-evaluator.service';
 import { PerformancePipService } from './services/performance-pip.service';
+import { PerformanceProfileService } from './services/performance-profile.service';
+import { PerformanceWorkService } from './services/performance-work.service';
 import { PerformanceDevelopmentService } from './services/performance-development.service';
 import { PerformanceAcknowledgementService } from './services/performance-acknowledgement.service';
 import { OffboardingService } from './services/offboarding.service';
@@ -534,6 +537,8 @@ export class TenantServiceController {
     private performancePipService: PerformancePipService,
     private performanceDevelopmentService: PerformanceDevelopmentService,
     private performanceAcknowledgementService: PerformanceAcknowledgementService,
+    private performanceProfileService: PerformanceProfileService,
+    private performanceWorkService: PerformanceWorkService,
     private offboardingService: OffboardingService,
     private finalSettlementService: FinalSettlementService,
     private roleDashboardService: RoleDashboardService,
@@ -4338,7 +4343,7 @@ export class TenantServiceController {
 
   @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_TASK.DECIDE_REVIEW)
   handleDecideWorkspaceTaskReview(@Payload() payload: DecideWorkspaceTaskReviewMessageDto) {
-    return this.workspaceTaskService.decideReview(payload.tenantId, payload.taskId, payload.decision, payload.canManage);
+    return this.workspaceTaskService.decideReview(payload.tenantId, payload.taskId, payload.decision, payload.canManage, payload.feedback);
   }
 
   @MessagePattern(MESSAGE_PATTERNS.WORKSPACE_TASK.ADD_COMMENT)
@@ -4835,6 +4840,31 @@ export class TenantServiceController {
   @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_DEVELOPMENT.CREATE_FOR_TEAM_MEMBER)
   handleCreateTeamDevelopment(@Payload() payload: { tenantId: string; userId: string; email?: string; employeeId: string; dto: any }) {
     return this.performanceDevelopmentService.createForTeamMember(payload.tenantId, payload.userId, payload.email, payload.employeeId, payload.dto);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_PROFILE.GET)
+  handleGetPerformanceProfile(@Payload() payload: { tenantId: string; employeeId: string }) {
+    return this.performanceProfileService.forEmployee(payload.tenantId, payload.employeeId);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_PROFILE.MINE)
+  handleMyPerformanceProfile(@Payload() payload: { tenantId: string; userId: string; email?: string }) {
+    return this.performanceProfileService.mine(payload.tenantId, payload.userId, payload.email);
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_PROFILE.WORK)
+  handlePerformanceWork(@Payload() payload: { tenantId: string; employeeId: string; query?: GetWorkSummaryQueryDto }) {
+    return this.performanceWorkService.forEmployee(payload.tenantId, payload.employeeId, payload.query ?? {});
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_PROFILE.MY_WORK)
+  handleMyPerformanceWork(@Payload() payload: { tenantId: string; userId: string; email?: string; query?: GetWorkSummaryQueryDto }) {
+    return this.performanceWorkService.mine(payload.tenantId, payload.userId, payload.email, payload.query ?? {});
+  }
+
+  @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_PROFILE.ATTENTION)
+  handlePerformanceAttention(@Payload() payload: { tenantId: string }) {
+    return this.performanceProfileService.attention(payload.tenantId);
   }
 
   @MessagePattern(MESSAGE_PATTERNS.PERFORMANCE_ACK.LIST)

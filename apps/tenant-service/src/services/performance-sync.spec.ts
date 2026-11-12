@@ -250,10 +250,10 @@ describe('Performance reviews and changes in Employee Management', () => {
       expect(reviewing.data.find((r: any) => r.id === review.id)).toMatchObject({ canEvaluate: false, closed: { reason: 'EMPLOYEE_EXITED' } });
     });
 
-    it('does not follow a manager change or a reviewer leaving once closed', async () => {
+    it('does not flag a manager change or move a reviewer leaving once closed', async () => {
       await sync.closeForExit(TENANT, ayesha.id);
       ayesha.reportingManagerId = nadia.id;
-      expect(await dashboard.followManagerChange(TENANT, ayesha.id)).toBe(0);
+      expect(await sync.onManagerChange(TENANT, ayesha.id)).toBe(0);
       expect(await dashboard.releaseReviewer(TENANT, sara.id)).toBe(1);
       expect(reviewOf(ayesha).reviewerId).toBe(sara.id);
     });
@@ -276,11 +276,14 @@ describe('Performance reviews and changes in Employee Management', () => {
       const invitations: any = { setLinkedAccountActive: jest.fn(), deactivateLinkedAccount: jest.fn() };
       const assets: any = { assertCanLeave: jest.fn() };
       const closeForExit = jest.fn().mockResolvedValue(1);
-      const service = new EmployeeService(empProvider, {} as any, invitations, assets, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, { closeForExit } as any);
+      const recordEmploymentChange = jest.fn().mockResolvedValue(0);
+      const service = new EmployeeService(empProvider, {} as any, invitations, assets, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, { closeForExit, recordEmploymentChange } as any);
       jest.spyOn(service, 'getOne').mockResolvedValue({} as any);
 
       await service.updateStatus(TENANT, ayesha.id, EmployeeStatus.RESIGNED, '2026-12-31');
       expect(closeForExit).toHaveBeenCalledWith(TENANT, ayesha.id);
+      // The status change is also written into the audit history of their open reviews.
+      expect(recordEmploymentChange).toHaveBeenCalledWith(TENANT, ayesha.id, { status: { from: EmployeeStatus.ACTIVE, to: EmployeeStatus.RESIGNED } });
 
       found.status = EmployeeStatus.ACTIVE;
       closeForExit.mockRejectedValue(new Error('down'));
@@ -344,6 +347,95 @@ describe('Performance reviews and changes in Employee Management', () => {
       nadia.employmentType = 'PERMANENT';
       expect(await cycles.onEmployeeChange(TENANT, nadia.id)).toBe(1);
       expect(events()).toContain('REVIEW_ENROLLED_IN_CYCLE');
+    });
+  });
+
+  describe('the daily sweep of a running cycle', () => {
+    it('flags an open review the rules no longer include, once, and drops the flag when they fit again', async () => {
+      await startCycle({ eligibility: { minTenureDays: 0, employmentTypes: ['PERMANENT'] } });
+      expect(reviewOf(ayesha).pendingChange ?? null).toBeNull();
+
+      // Changed without Employee Management telling anyone (a bulk import, say).
+      ayesha.employmentType = 'CONTRACT';
+      expect(await cycles.sweep(TENANT)).toMatchObject({ flagged: 1, cleared: 0 });
+      expect(reviewOf(ayesha).pendingChange).toMatchObject({ type: 'ELIGIBILITY', options: ['KEEP', 'REMOVE'] });
+      expect(reviewOf(ayesha).pendingChange.eligibilityReason).toContain('CONTRACT');
+      expect(holders.tellPermission).toHaveBeenCalledTimes(1);
+
+      // A second run says nothing more.
+      expect(await cycles.sweep(TENANT)).toMatchObject({ flagged: 0, cleared: 0 });
+      expect(holders.tellPermission).toHaveBeenCalledTimes(1);
+
+      ayesha.employmentType = 'PERMANENT';
+      expect(await cycles.sweep(TENANT)).toMatchObject({ flagged: 0, cleared: 1 });
+      expect(reviewOf(ayesha).pendingChange ?? null).toBeNull();
+      expect(events()).toEqual(expect.arrayContaining(['ELIGIBILITY_CHANGED', 'ELIGIBILITY_RESTORED']));
+    });
+
+    it('leaves a finished review, and someone who has left, alone', async () => {
+      await startCycle({ eligibility: { minTenureDays: 0, employmentTypes: ['PERMANENT'] } });
+      ayesha.employmentType = 'CONTRACT';
+      reviewOf(ayesha).status = 'COMPLETED';
+      sara.employmentType = 'CONTRACT';
+      sara.status = 'RESIGNED';
+
+      expect(await cycles.sweep(TENANT)).toMatchObject({ flagged: 0, cleared: 0 });
+      expect(reviewOf(ayesha).pendingChange ?? null).toBeNull();
+      expect(reviewOf(sara).pendingChange ?? null).toBeNull();
+    });
+  });
+
+  describe('employment details that decide who is reviewed', () => {
+    it('are written into the audit history of the open review when they change', async () => {
+      await startCycle();
+      models.Audit.rows.length = 0;
+
+      const recorded = await sync.recordEmploymentChange(TENANT, ayesha.id, {
+        employmentType: { from: 'PERMANENT', to: 'CONTRACT' },
+        probationEndDate: { from: null, to: '2026-09-01' },
+        status: { from: 'ACTIVE', to: 'ACTIVE' },
+      });
+
+      expect(recorded).toBe(1);
+      expect(models.Audit.rows).toHaveLength(1);
+      expect(models.Audit.rows[0]).toMatchObject({ recordId: reviewOf(ayesha).id, tableName: 'performance_reviews' });
+      expect(models.Audit.rows[0].changes).toMatchObject({
+        event: { to: 'EMPLOYEE_INFO_CHANGED' },
+        employmentType: { from: 'PERMANENT', to: 'CONTRACT' },
+        probationEndDate: { from: null, to: '2026-09-01' },
+      });
+      // Nothing that did not change is recorded, and the review itself is untouched.
+      expect(models.Audit.rows[0].changes.status).toBeUndefined();
+      expect(reviewOf(ayesha).pendingChange ?? null).toBeNull();
+    });
+
+    it('write nothing when nothing changed, or when the review is already finished', async () => {
+      await startCycle();
+      models.Audit.rows.length = 0;
+      expect(await sync.recordEmploymentChange(TENANT, ayesha.id, { employmentType: { from: 'PERMANENT', to: 'PERMANENT' } })).toBe(0);
+
+      reviewOf(ayesha).status = 'COMPLETED';
+      expect(await sync.recordEmploymentChange(TENANT, ayesha.id, { employmentType: { from: 'PERMANENT', to: 'CONTRACT' } })).toBe(0);
+      expect(models.Audit.rows).toHaveLength(0);
+    });
+  });
+
+  describe('two requests enrolling the same person at once', () => {
+    it('leave one review: the one that loses the race to the database gets nothing back, not an error', async () => {
+      const cycle = await startCycle();
+      models.Review.rows.splice(models.Review.rows.findIndex((r: any) => r.employeeId === ayesha.id), 1);
+      jest.spyOn(models.Review, 'create').mockRejectedValueOnce(Object.assign(new Error('duplicate key value violates unique constraint'), { name: 'SequelizeUniqueConstraintError' }));
+
+      await expect(dashboard.enrolInCycle(TENANT, ayesha, { id: cycle.id, name: cycle.name })).resolves.toBeNull();
+      expect(models.Review.rows.filter((r: any) => r.employeeId === ayesha.id)).toHaveLength(0);
+    });
+
+    it('still reports any other failure', async () => {
+      const cycle = await startCycle();
+      models.Review.rows.splice(models.Review.rows.findIndex((r: any) => r.employeeId === ayesha.id), 1);
+      jest.spyOn(models.Review, 'create').mockRejectedValueOnce(new Error('connection lost'));
+
+      await expect(dashboard.enrolInCycle(TENANT, ayesha, { id: cycle.id, name: cycle.name })).rejects.toThrow('connection lost');
     });
   });
 });

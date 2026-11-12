@@ -1009,6 +1009,13 @@ export const MESSAGE_PATTERNS = {
     FOR_TEAM_MEMBER: 'performance_development.for_team_member',
     CREATE_FOR_TEAM_MEMBER: 'performance_development.create_for_team_member',
   },
+  PERFORMANCE_PROFILE: {
+    GET: 'performance_profile.get',
+    MINE: 'performance_profile.mine',
+    ATTENTION: 'performance_profile.attention',
+    WORK: 'performance_profile.work',
+    MY_WORK: 'performance_profile.my_work',
+  },
   PERFORMANCE_ACK: {
     LIST: 'performance_ack.list',
     ACKNOWLEDGE_REVIEW: 'performance_ack.acknowledge_review',

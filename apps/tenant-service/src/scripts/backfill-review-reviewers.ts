@@ -8,7 +8,8 @@
  * "Reviewing". Only reviews that are not completed and not published are
  * touched, only where the employee has a manager who still works here, and
  * nothing HR already chose is overwritten (a reviewer that is set is left
- * alone). They are left unpinned, so a later change of manager still moves them.
+ * alone). They are left unpinned, so a later change of manager flags them for HR's
+ * decision (they are not moved by themselves).
  *
  * It also gives every review that has no snapshot yet one, rebuilt from the
  * employee as they are now (marked `approximate`), because the best that can

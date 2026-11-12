@@ -142,11 +142,12 @@ export class OrganizationHierarchyService {
         this.logger.warn(`Pending reimbursements for ${employeeId} were not re-routed after the reporting change: ${error?.message ?? error}`);
       }
     }
-    if (this.performance) {
+    // Open reviews are not handed to the new manager by themselves: HR decides.
+    if (this.performanceSync) {
       try {
-        await this.performance.followManagerChange(tenantId, employeeId);
+        await this.performanceSync.onManagerChange(tenantId, employeeId);
       } catch (error: any) {
-        this.logger.warn(`Open performance reviews for ${employeeId} did not follow the reporting change: ${error?.message ?? error}`);
+        this.logger.warn(`Open performance reviews for ${employeeId} were not flagged after the reporting change: ${error?.message ?? error}`);
       }
     }
     if (this.portal) {

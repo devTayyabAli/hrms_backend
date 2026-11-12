@@ -371,4 +371,114 @@ describe('WorkspaceProjectService data scope', () => {
       expect.arrayContaining([{ id: { [Op.in]: [PROJECT] } }]),
     );
   });
+
+  describe('branch', () => {
+    const BRANCH = '66666666-6666-4666-8666-666666666666';
+    const OTHER_BRANCH = '77777777-7777-4777-8777-777777777777';
+    let branchModel: { findAll: jest.Mock };
+
+    const branchRow = (id: string, name: string, isActive = true) => ({ id, name, isActive });
+
+    beforeEach(() => {
+      branchModel = { findAll: jest.fn().mockResolvedValue([branchRow(BRANCH, 'Lahore', true)]) };
+      modelProvider.getBranchModel = jest.fn().mockResolvedValue(branchModel);
+    });
+
+    // The real model's plain copy carries the branch, which is what the update compares against.
+    const withBranch = (status: string, branchId: string | null) => ({
+      ...savedProject(status),
+      branchId,
+      get: () => ({ name: 'Portal', status, leadEmployeeId: LEAD, tags: [], branchId }),
+    });
+
+    it('refuses a branch that does not exist', async () => {
+      branchModel.findAll.mockResolvedValue([]);
+
+      await expect(scoped().create(TENANT, { name: 'Portal', leadEmployeeId: LEAD, branchId: BRANCH } as any)).rejects.toMatchObject({
+        status: HttpStatus.BAD_REQUEST,
+      });
+      expect(projectModel.create).not.toHaveBeenCalled();
+    });
+
+    it('refuses an inactive branch on create', async () => {
+      branchModel.findAll.mockResolvedValue([branchRow(BRANCH, 'Lahore', false)]);
+
+      await expect(scoped().create(TENANT, { name: 'Portal', leadEmployeeId: LEAD, branchId: BRANCH } as any)).rejects.toMatchObject({
+        status: HttpStatus.BAD_REQUEST,
+        response: expect.objectContaining({ message: expect.stringContaining('inactive') }),
+      });
+      expect(projectModel.create).not.toHaveBeenCalled();
+    });
+
+    it('stores the branch on create, audits it, and returns its name', async () => {
+      const audits = { create: jest.fn() };
+      modelProvider.getEntityAuditLogModel.mockResolvedValue(audits);
+      projectModel.create.mockResolvedValue({ id: PROJECT, name: 'Portal' });
+      projectModel.findOne.mockResolvedValueOnce(null).mockResolvedValue(withBranch('ACTIVE', BRANCH));
+
+      const row = await scoped().create(TENANT, { name: 'Portal', leadEmployeeId: LEAD, branchId: BRANCH } as any);
+
+      expect(projectModel.create).toHaveBeenCalledWith(expect.objectContaining({ branchId: BRANCH }));
+      expect(audits.create).toHaveBeenCalledWith(
+        expect.objectContaining({ changes: expect.objectContaining({ branchId: { from: null, to: BRANCH } }) }),
+      );
+      expect(row.branch).toEqual({ id: BRANCH, name: 'Lahore', isActive: true });
+    });
+
+    it('leaves the branch empty when none is sent, without looking any up', async () => {
+      projectModel.create.mockResolvedValue({ id: PROJECT, name: 'Portal' });
+      projectModel.findOne.mockResolvedValueOnce(null).mockResolvedValue(withBranch('ACTIVE', null));
+
+      const row = await scoped().create(TENANT, { name: 'Portal', leadEmployeeId: LEAD } as any);
+
+      expect(projectModel.create).toHaveBeenCalledWith(expect.objectContaining({ branchId: null }));
+      expect(branchModel.findAll).not.toHaveBeenCalled();
+      expect(row.branch).toBeNull();
+    });
+
+    it('checks a branch only when it changes, and lets a project keep one that has gone inactive', async () => {
+      const project = withBranch('ACTIVE', BRANCH);
+      projectModel.findOne.mockResolvedValue(project);
+      branchModel.findAll.mockResolvedValue([branchRow(BRANCH, 'Lahore', false), branchRow(OTHER_BRANCH, 'Karachi', true)]);
+
+      await scoped().update(TENANT, PROJECT, { branchId: BRANCH } as any);
+      await scoped().update(TENANT, PROJECT, { branchId: OTHER_BRANCH } as any);
+      expect(project.update).toHaveBeenLastCalledWith(expect.objectContaining({ branchId: OTHER_BRANCH }));
+
+      branchModel.findAll.mockResolvedValue([branchRow(OTHER_BRANCH, 'Karachi', false)]);
+      await expect(scoped().update(TENANT, PROJECT, { branchId: OTHER_BRANCH } as any)).rejects.toMatchObject({
+        status: HttpStatus.BAD_REQUEST,
+      });
+    });
+
+    it('clears the branch when null is sent', async () => {
+      const project = withBranch('ACTIVE', BRANCH);
+      projectModel.findOne.mockResolvedValue(project);
+
+      await scoped().update(TENANT, PROJECT, { branchId: null } as any);
+
+      expect(project.update).toHaveBeenCalledWith(expect.objectContaining({ branchId: null }));
+    });
+
+    it('filters the list by branch and names each project’s branch', async () => {
+      projectModel.findAll.mockResolvedValue([
+        { ...withBranch('ACTIVE', BRANCH), id: 'p1' },
+        { ...withBranch('ACTIVE', null), id: 'p2' },
+      ]);
+
+      const result = await scoped().getAll(TENANT, { branchId: BRANCH } as any);
+
+      expect(whereOf(projectModel.findAll)[Op.and][0][Op.and]).toEqual(expect.arrayContaining([{ branchId: BRANCH }]));
+      expect(result.data.map((row) => row.branch?.name ?? null)).toEqual(['Lahore', null]);
+    });
+
+    it('shows no branch when the one a project pointed at has been removed', async () => {
+      branchModel.findAll.mockResolvedValue([]);
+      projectModel.findAll.mockResolvedValue([{ ...withBranch('ACTIVE', BRANCH), id: 'p1' }]);
+
+      const result = await scoped().getAll(TENANT, {} as any);
+
+      expect(result.data[0].branch).toBeNull();
+    });
+  });
 });

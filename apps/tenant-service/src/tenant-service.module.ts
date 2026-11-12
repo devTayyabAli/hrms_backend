@@ -107,12 +107,15 @@ import { PerformanceSyncService } from './services/performance-sync.service';
 import { ReviewRolesService } from './services/review-roles.service';
 import { PerformanceEvaluatorService } from './services/performance-evaluator.service';
 import { PerformancePipService } from './services/performance-pip.service';
+import { PerformanceProfileService } from './services/performance-profile.service';
+import { PerformanceWorkService } from './services/performance-work.service';
 import { PerformanceDevelopmentService } from './services/performance-development.service';
 import { PerformanceAcknowledgementService } from './services/performance-acknowledgement.service';
 import { OffboardingService } from './services/offboarding.service';
 import { FinalSettlementService } from './services/final-settlement.service';
 import { RoleDashboardService } from './services/role-dashboard.service';
 import { PolicyAckReminderScheduler } from './services/policy-ack-reminder.scheduler';
+import { PerformanceCycleScheduler } from './services/performance-cycle.scheduler';
 import { PayrollDashboardService } from './services/payroll-dashboard.service';
 import { EmployeePortalService } from './services/employee-portal.service';
 import { MyTeamService } from './services/my-team.service';
@@ -315,12 +318,15 @@ import { PaymentProviderFactory } from './billing/providers/payment-provider.fac
     ReviewRolesService,
     PerformanceEvaluatorService,
     PerformancePipService,
+    PerformanceProfileService,
+    PerformanceWorkService,
     PerformanceDevelopmentService,
     PerformanceAcknowledgementService,
     OffboardingService,
     FinalSettlementService,
     RoleDashboardService,
     PolicyAckReminderScheduler,
+    PerformanceCycleScheduler,
     PayrollDashboardService,
     EmployeePortalService,
     MyTeamService,

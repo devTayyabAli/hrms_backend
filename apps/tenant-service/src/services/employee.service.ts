@@ -859,6 +859,11 @@ export class EmployeeService {
       departmentId: employee.departmentId ?? null,
       designationId: employee.designationId ?? null,
     };
+    const previousEmployment = {
+      employmentType: employee.employmentType ?? null,
+      probationEndDate: employee.probationEndDate ?? null,
+      contractEndDate: employee.contractEndDate ?? null,
+    };
     await employee.update(patch);
     if (patch.status && patch.status !== previousStatus) {
       await this.syncPortalAccess(employee, previousStatus, patch.status);
@@ -872,7 +877,27 @@ export class EmployeeService {
       designationId: patch.designationId,
     });
     await this.checkReviewCycles(tenantId, employeeId);
+    await this.recordReviewEmploymentChange(tenantId, employeeId, {
+      status: { from: previousStatus, to: patch.status ?? previousStatus },
+      employmentType: { from: previousEmployment.employmentType, to: patch.employmentType !== undefined ? patch.employmentType : previousEmployment.employmentType },
+      probationEndDate: { from: previousEmployment.probationEndDate, to: patch.probationEndDate !== undefined ? patch.probationEndDate : previousEmployment.probationEndDate },
+      contractEndDate: { from: previousEmployment.contractEndDate, to: patch.contractEndDate !== undefined ? patch.contractEndDate : previousEmployment.contractEndDate },
+    });
     return this.getOne(tenantId, employeeId);
+  }
+
+  /**
+   * Status, employment type, probation and contract decide who a review cycle
+   * includes, so a change to them is written into the audit history of the
+   * person's open reviews. Never fails the change itself.
+   */
+  private async recordReviewEmploymentChange(tenantId: string, employeeId: string, changes: Record<string, { from: unknown; to: unknown }>): Promise<void> {
+    if (!this.performanceSync) return;
+    try {
+      await this.performanceSync.recordEmploymentChange(tenantId, employeeId, changes);
+    } catch (error: any) {
+      this.logger.warn(`The change to ${employeeId} was not recorded on their open reviews: ${error?.message ?? error}`);
+    }
   }
 
   /**
@@ -937,6 +962,7 @@ export class EmployeeService {
     await this.syncPortalAccess(employee, previousStatus, status);
     await this.flagExitTasks(tenantId, employeeId, previousStatus, status);
     await this.checkReviewCycles(tenantId, employeeId);
+    await this.recordReviewEmploymentChange(tenantId, employeeId, { status: { from: previousStatus, to: status } });
     return this.getOne(tenantId, employeeId);
   }
 

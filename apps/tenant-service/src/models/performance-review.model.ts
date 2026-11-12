@@ -1,4 +1,5 @@
 import { Table, Column, Model, DataType, PrimaryKey, IsUUID, Default, ForeignKey, BelongsTo } from 'sequelize-typescript';
+import { Op } from 'sequelize';
 import { PerformanceReviewStatus } from '@app/common';
 import { Employee } from './employee.model';
 
@@ -16,6 +17,9 @@ export { PerformanceReviewStatus };
     { fields: ['employeeId'], name: 'performance_review_employee_idx' },
     { fields: ['status'], name: 'performance_review_status_idx' },
     { fields: ['reviewDate'], name: 'performance_review_date_idx' },
+    // One review of a person for each cycle, held by the database as well as by the code, so two
+    // requests at once cannot both make it. Reviews written by hand (no cycle) are not covered.
+    { fields: ['employeeId', 'cycleId'], unique: true, name: 'performance_review_employee_cycle_unique_idx', where: { cycleId: { [Op.ne]: null } } },
   ],
 })
 export class PerformanceReview extends Model {
