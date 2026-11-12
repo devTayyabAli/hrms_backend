@@ -80,7 +80,16 @@ export class WorkspaceProject extends Model {
   @Column({ type: DataType.ENUM(...Object.values(WorkspaceProjectPriority)), allowNull: true })
   declare priority: WorkspaceProjectPriority | null;
 
-  /** Free-text place. Not an office or branch. */
+  /**
+   * The branch the project runs from, when it is tied to one. A plain id, as on
+   * the branch's own head: the service checks it, and a branch that is later
+   * removed simply stops resolving. Nullable so an existing database gains the
+   * column without a backfill.
+   */
+  @Column({ type: DataType.UUID, allowNull: true })
+  declare branchId: string | null;
+
+  /** Free-text place, for when no branch fits. Kept alongside the branch. */
   @Column({ type: DataType.STRING(150), allowNull: true })
   declare location: string | null;
 

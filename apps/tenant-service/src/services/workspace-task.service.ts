@@ -51,6 +51,10 @@ export interface WorkspaceTaskRow {
   assignees: NonNullable<ReturnType<typeof employeeSummary>>[];
   requiresReview: boolean;
   reviewStatus: 'PENDING' | 'APPROVED' | 'RETURNED' | null;
+  /** The reviewer's note on the last decision. Always there after a return. */
+  reviewFeedback: string | null;
+  reviewedAt: Date | null;
+  reviewedBy: { id: string | null; name: string } | null;
   overdue: boolean;
   completedAt: Date | null;
   createdAt: Date;
@@ -61,6 +65,9 @@ export interface WorkspaceTaskRow {
   checklist: { id: string; label: string; done: boolean }[];
   attachments: { id: string; fileId: string; fileName: string; mimeType: string | null; sizeBytes: number | null; uploadedByUserId: string | null }[];
 }
+
+/** Longest note a reviewer can leave on a decision. */
+const REVIEW_FEEDBACK_MAX = 1000;
 
 /** Urgent first when sorting by priority. */
 const PRIORITY_RANK = `CASE "WorkspaceTask"."priority" WHEN 'URGENT' THEN 0 WHEN 'HIGH' THEN 1 WHEN 'NORMAL' THEN 2 ELSE 3 END`;
@@ -171,6 +178,9 @@ export class WorkspaceTaskService {
       dueDateException: task.dueDateException === true,
       requiresReview: task.requiresReview === true,
       reviewStatus: task.reviewStatus ?? null,
+      reviewFeedback: task.reviewFeedback ?? null,
+      reviewedAt: task.reviewedAt ?? null,
+      reviewedBy: task.reviewedByName ? { id: task.reviewedByEmployeeId ?? null, name: task.reviewedByName } : null,
       priority: task.priority,
       status: task.status,
       overdue: task.status !== WorkspaceTaskStatus.COMPLETED && task.dueDate < today,
@@ -1067,7 +1077,14 @@ export class WorkspaceTaskService {
   }
 
   /** The project owner accepts or sends back a task that is waiting for review. */
-  async decideReview(tenantId: string, taskId: string, decision: 'APPROVE' | 'RETURN', canManage: boolean) {
+  async decideReview(tenantId: string, taskId: string, decision: 'APPROVE' | 'RETURN', canManage: boolean, feedback?: string | null) {
+    const note = feedback?.trim() || null;
+    if (note && note.length > REVIEW_FEEDBACK_MAX) {
+      workspaceError(`Feedback can be at most ${REVIEW_FEEDBACK_MAX} characters.`, HttpStatus.BAD_REQUEST);
+    }
+    if (decision === 'RETURN' && !note) {
+      workspaceError('Say what needs to change before returning a task.', HttpStatus.BAD_REQUEST);
+    }
     const task: any = await this.findScoped(tenantId, taskId);
     if (task.reviewStatus !== 'PENDING') workspaceError('This task is not waiting for review.', HttpStatus.BAD_REQUEST);
     const actor = await this.actorRecord(tenantId);
@@ -1085,14 +1102,21 @@ export class WorkspaceTaskService {
     if (!canManage && !isLead) workspaceError('Only the project owner can review this task.', HttpStatus.FORBIDDEN);
 
     const approved = decision === 'APPROVE';
+    const decidedAt = new Date();
+    // Each decision replaces the last note, so an approval never carries an older "needs changes".
     await task.update({
       status: approved ? WorkspaceTaskStatus.COMPLETED : WorkspaceTaskStatus.IN_PROGRESS,
-      completedAt: approved ? new Date() : null,
+      completedAt: approved ? decidedAt : null,
       reviewStatus: approved ? 'APPROVED' : 'RETURNED',
+      reviewFeedback: note,
+      reviewedAt: decidedAt,
+      reviewedByEmployeeId: actor.id ?? null,
+      reviewedByName: actor.id ? fullName(actor) : 'Management',
     });
     await writeAudit(this.modelProvider, this.logger, tenantId, 'workspace_tasks', taskId, 'UPDATE', {
       reviewStatus: { from: 'PENDING', to: approved ? 'APPROVED' : 'RETURNED' },
       status: { from: task.status, to: approved ? WorkspaceTaskStatus.COMPLETED : WorkspaceTaskStatus.IN_PROGRESS },
+      ...(note ? { reviewFeedback: { from: null, to: 'added' } } : {}),
     });
     const Assignee = await this.modelProvider.getWorkspaceTaskAssigneeModel(tenantId);
     const rows = (await Assignee.findAll({ where: { tenantId, taskId }, attributes: ['employeeId'], raw: true })) as unknown as { employeeId: string }[];
@@ -1101,7 +1125,7 @@ export class WorkspaceTaskService {
       tenantId,
       recipients,
       approved ? `Task approved: ${task.title}` : `Task returned: ${task.title}`,
-      approved ? 'A reviewer accepted this task.' : 'A reviewer sent this task back.',
+      `${approved ? 'A reviewer accepted this task.' : 'A reviewer sent this task back.'}${note ? ` "${note.length > 200 ? `${note.slice(0, 197)}…` : note}"` : ''}`,
     );
     if (approved) await this.notifyLeadOfCompletion(tenantId, task, actor);
     return this.getOne(tenantId, taskId);

@@ -226,7 +226,7 @@ export class PerformanceDashboardService {
   }
 
   /** Who should complete a review of this employee when nobody was picked: their reporting manager, if still employed. */
-  private async managerOf(tenantId: string, employee: any): Promise<string | null> {
+  async managerOf(tenantId: string, employee: any): Promise<string | null> {
     if (!employee?.reportingManagerId) return null;
     const Employee = await this.modelProvider.getEmployeeModel(tenantId);
     const manager: any = await Employee.findOne({ where: { id: employee.reportingManagerId, tenantId }, attributes: ['id', 'status'] });
@@ -860,18 +860,25 @@ export class PerformanceDashboardService {
       const fallback: any = await Employee.findOne({ where: { id: cycle.fallbackReviewerId, tenantId }, attributes: ['id', 'status'] });
       if (fallback && [EmployeeStatus.ACTIVE, EmployeeStatus.ON_LEAVE].includes(fallback.status)) reviewerId = fallback.id;
     }
-    const created: any = await Review.create({
-      tenantId,
-      employeeId: employee.id,
-      cycle: cycle.name.trim(),
-      cycleId: cycle.id,
-      status: PerformanceReviewStatus.PENDING,
-      reviewerId,
-      reviewerPinned: false,
-      employeeSnapshot: await buildReviewSnapshot(this.modelProvider, tenantId, employee, reviewerId),
-      accessGrantedTo: [],
-      rating: null,
-    } as any);
+    let created: any;
+    try {
+      created = await Review.create({
+        tenantId,
+        employeeId: employee.id,
+        cycle: cycle.name.trim(),
+        cycleId: cycle.id,
+        status: PerformanceReviewStatus.PENDING,
+        reviewerId,
+        reviewerPinned: false,
+        employeeSnapshot: await buildReviewSnapshot(this.modelProvider, tenantId, employee, reviewerId),
+        accessGrantedTo: [],
+        rating: null,
+      } as any);
+    } catch (error: any) {
+      // Another request enrolled them a moment ago: the database holds one review for each person and cycle.
+      if (error?.name === 'SequelizeUniqueConstraintError') return null;
+      throw error;
+    }
     await writeAudit(this.modelProvider, this.logger, tenantId, 'performance_reviews', created.id, 'CREATE', {
       event: { from: null, to: 'REVIEW_ENROLLED_IN_CYCLE' },
       cycle: { from: null, to: cycle.name.trim() },
@@ -990,33 +997,6 @@ export class PerformanceDashboardService {
       await this.tellReviewer(tenantId, newReviewer, await Employee.findOne({ where: { id: review.employeeId, tenantId }, attributes: ['firstName', 'lastName'] }), review.cycle);
     }
     return this.getReview(tenantId, reviewId);
-  }
-
-  /**
-   * Someone's reporting manager changed. Their open reviews that HR did not pin
-   * to a particular reviewer follow to the new manager, who is told. Returns
-   * how many moved.
-   */
-  async followManagerChange(tenantId: string, employeeId: string): Promise<number> {
-    const Review = await this.modelProvider.getPerformanceReviewModel(tenantId);
-    const open = ((await Review.findAll({ where: { tenantId, employeeId, status: { [Op.ne]: PerformanceReviewStatus.COMPLETED }, reviewerPinned: false } as any })) as any[]).filter((row) => !row.publishedAt && !row.closedAt && !row.multiReviewer);
-    if (!open.length) return 0;
-    const Employee = await this.modelProvider.getEmployeeModel(tenantId);
-    const employee: any = await Employee.findOne({ where: { id: employeeId, tenantId } });
-    const next = await this.managerOf(tenantId, employee);
-    let moved = 0;
-    for (const review of open) {
-      if ((review.reviewerId ?? null) === next) continue;
-      const before = review.reviewerId ?? null;
-      await review.update({ reviewerId: next });
-      await writeAudit(this.modelProvider, this.logger, tenantId, 'performance_reviews', review.id, 'UPDATE', {
-        event: { from: null, to: 'REVIEWER_FOLLOWED_MANAGER_CHANGE' },
-        reviewerId: { from: before, to: next },
-      });
-      await this.tellReviewer(tenantId, next, employee, review.cycle);
-      moved++;
-    }
-    return moved;
   }
 
   /**

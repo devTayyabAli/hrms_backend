@@ -303,4 +303,66 @@ describe('PerformanceCycleService', () => {
       expect(cycle.id).toBeDefined();
     });
   });
+
+  describe('the daily sweep', () => {
+    // A cycle that runs long enough for time alone to change who is in it.
+    const long = (over: Record<string, unknown> = {}) => live({ endDate: '2099-12-31', dueDate: daysFromNow(400), ...over });
+
+    it('enrols someone whom time alone has made eligible, once, and writes it down', async () => {
+      await long();
+      expect(models.Review.rows.map((r: any) => r.employeeId)).not.toContain(newbie.id);
+
+      // Twenty days in, the 90 required have not passed; a hundred days on, they have.
+      expect(await service.sweep(TENANT, daysFromNow(10))).toMatchObject({ cycles: 1, enrolled: 0 });
+      const result = await service.sweep(TENANT, daysFromNow(100));
+
+      expect(result).toMatchObject({ cycles: 1, enrolled: 1, flagged: 0, cleared: 0 });
+      expect(models.Review.rows.filter((r: any) => r.employeeId === newbie.id)).toHaveLength(1);
+      expect(models.Review.rows.find((r: any) => r.employeeId === newbie.id).reviewerId).toBe(sara.id);
+      expect(models.Audit.rows.map((row: any) => row.changes?.event?.to)).toContain('CYCLE_SWEEP_ENROLLED');
+      expect(await service.sweep(TENANT, daysFromNow(101))).toMatchObject({ enrolled: 0 });
+    });
+
+    it('lists, but does not enrol, in an HR_QUEUE cycle, and takes no one new after the due date or in a closed cycle', async () => {
+      const queue = await long({ name: 'Queue', enrolmentMode: 'HR_QUEUE' });
+      expect(await service.sweep(TENANT, daysFromNow(100))).toMatchObject({ enrolled: 0 });
+      expect(models.Review.rows.map((r: any) => r.employeeId)).not.toContain(newbie.id);
+      await as(HR, () => service.close(TENANT, queue.id));
+
+      await long({ name: 'Auto', dueDate: daysFromNow(50) });
+      expect(await service.sweep(TENANT, daysFromNow(100))).toMatchObject({ enrolled: 0 });
+      expect(models.Review.rows.map((r: any) => r.employeeId)).not.toContain(newbie.id);
+    });
+
+    it('never enrols someone who has left, or whom HR left out', async () => {
+      await long({ eligibility: { minTenureDays: 0, excludeEmployeeIds: [omar.id] } });
+      const before = models.Review.rows.length;
+
+      expect(await service.sweep(TENANT, daysFromNow(100))).toMatchObject({ enrolled: expect.any(Number) });
+      const enrolled = models.Review.rows.map((r: any) => r.employeeId);
+      expect(enrolled).not.toContain(gone.id);
+      expect(enrolled).not.toContain(omar.id);
+      expect(models.Review.rows.length).toBeGreaterThanOrEqual(before);
+    });
+
+    it('does nothing when there is no running cycle', async () => {
+      await draft({ name: 'Not yet' });
+      expect(await service.sweep(TENANT)).toEqual({ cycles: 0, enrolled: 0, flagged: 0, cleared: 0 });
+    });
+
+    it('goes on with the other cycles when one cannot be read', async () => {
+      await long({ name: 'Broken', eligibility: { minTenureDays: 0 } });
+      const second = await long({ name: 'Fine' });
+      expect(second.id).toBeDefined();
+      const original = models.Employee.findAll;
+      let calls = 0;
+      models.Employee.findAll = jest.fn(async (query: any) => {
+        if (++calls === 1) throw new Error('database hiccup');
+        return original(query);
+      });
+
+      await expect(service.sweep(TENANT, daysFromNow(100))).resolves.toMatchObject({ cycles: 2 });
+      expect(calls).toBeGreaterThan(1);
+    });
+  });
 });

@@ -6,6 +6,7 @@ import { PerformanceCycleService } from './performance-cycle.service';
 import { PerformanceDashboardService } from './performance-dashboard.service';
 import { PerformanceEvaluatorService } from './performance-evaluator.service';
 import { PerformanceSelfService } from './performance-self.service';
+import { PerformanceSyncService } from './performance-sync.service';
 import { ReviewRolesService } from './review-roles.service';
 import { table } from './testing/fake-table';
 
@@ -364,10 +365,12 @@ describe('Roles, reviewers and the consolidated review', () => {
       expect(models.Evaluator.rows.find((e: any) => e.employeeId === omar.id).status).toBe('SUBMITTED');
     });
 
-    it('is not followed by the single-reviewer rules for a review with several', async () => {
+    it('is not flagged by the single-reviewer rules for a review with several', async () => {
       ayesha.reportingManagerId = zoya.id;
-      expect(await dashboard.followManagerChange(TENANT, ayesha.id)).toBe(0);
+      const sync = new PerformanceSyncService(provider, dashboard, undefined as any);
+      expect(await sync.onManagerChange(TENANT, ayesha.id)).toBe(0);
       expect(review.reviewerId).toBe(sara.id);
+      expect(review.pendingChange ?? null).toBeNull();
     });
   });
 });

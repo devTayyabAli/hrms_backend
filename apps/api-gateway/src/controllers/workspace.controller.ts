@@ -203,7 +203,10 @@ export class WorkspaceController {
   @RequireModule(HRMSModuleKey.PROJECTS, ModuleAction.EDIT)
   @RequirePermissions('tasks.edit', 'tasks.manage', 'projects.edit', 'projects.manage')
   @AllowProjectOwner()
-  @ApiOperation({ summary: 'Approve or return a task that is waiting for review. An assignee cannot review their own task.' })
+  @ApiOperation({
+    summary:
+      'Approve or return a task that is waiting for review. Returning needs `feedback`; approving may carry some. An assignee cannot review their own task.',
+  })
   decideTaskReview(
     @Headers('x-tenant-id') tenantId: string,
     @Param('taskId', ParseUUIDPipe) taskId: string,
@@ -219,6 +222,7 @@ export class WorkspaceController {
       tenantId,
       taskId,
       decision: dto.decision,
+      feedback: dto.feedback,
       canManage,
     });
   }
@@ -453,6 +457,7 @@ export class WorkspaceController {
       { header: 'Overdue Tasks', value: (row) => row.overdueTasks },
       { header: 'Start Date', value: (row) => row.startDate },
       { header: 'Expected End', value: (row) => row.dueDate },
+      { header: 'Branch', value: (row) => row.branch?.name },
       { header: 'Location', value: (row) => row.location },
       { header: 'Tags', value: (row) => (row.tags ?? []).join(', ') },
       { header: 'Next Milestone', value: (row) => row.milestone },

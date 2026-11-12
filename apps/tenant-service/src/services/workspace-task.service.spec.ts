@@ -572,3 +572,139 @@ describe('WorkspaceTaskService project dates', () => {
     });
   });
 });
+
+/** A reviewer's note travels with the decision, and a return cannot go back empty-handed. */
+describe('WorkspaceTaskService review feedback', () => {
+  const TENANT = '11111111-1111-4111-8111-111111111111';
+  const ASSIGNEE = '33333333-3333-4333-8333-333333333333';
+  const REVIEWER = '44444444-4444-4444-8444-444444444444';
+  const TASK = '66666666-6666-4666-8666-666666666666';
+  const PROJECT = '55555555-5555-4555-8555-555555555555';
+
+  let update: jest.Mock;
+  let audits: { create: jest.Mock };
+  let notices: { create: jest.Mock };
+  let service: WorkspaceTaskService;
+
+  const waitingTask = (overrides: Record<string, unknown> = {}) => ({
+    id: TASK,
+    title: 'Prep',
+    status: 'IN_PROGRESS',
+    requiresReview: true,
+    reviewStatus: 'PENDING',
+    reviewFeedback: null,
+    assigneeEmployeeId: ASSIGNEE,
+    projectId: PROJECT,
+    dueDate: '2026-11-02',
+    priority: 'NORMAL',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    assignee: null,
+    project: null,
+    update,
+    ...overrides,
+  });
+
+  beforeEach(() => {
+    update = jest.fn().mockResolvedValue(undefined);
+    audits = { create: jest.fn() };
+    notices = { create: jest.fn() };
+    const taskModel = { findOne: jest.fn().mockResolvedValue(waitingTask()), findAll: jest.fn().mockResolvedValue([]) };
+    const modelProvider = {
+      getWorkspaceTaskModel: jest.fn().mockResolvedValue(taskModel),
+      getWorkspaceProjectModel: jest.fn().mockResolvedValue({
+        findOne: jest.fn().mockResolvedValue({ id: PROJECT, name: 'Portal', leadEmployeeId: REVIEWER }),
+        findAll: jest.fn().mockResolvedValue([]),
+      }),
+      getWorkspaceTaskCommentModel: jest.fn().mockResolvedValue({ findAll: jest.fn().mockResolvedValue([]) }),
+      getWorkspaceTaskChecklistItemModel: jest.fn().mockResolvedValue({ findAll: jest.fn().mockResolvedValue([]) }),
+      getWorkspaceTaskAttachmentModel: jest.fn().mockResolvedValue({ findAll: jest.fn().mockResolvedValue([]) }),
+      getWorkspaceTaskAssigneeModel: jest.fn().mockResolvedValue({ findAll: jest.fn().mockResolvedValue([]) }),
+      getWorkspaceSettingModel: jest.fn().mockResolvedValue({ findOne: jest.fn().mockResolvedValue(null) }),
+      getEmployeeModel: jest.fn().mockResolvedValue({
+        findOne: jest.fn().mockResolvedValue({ id: REVIEWER, firstName: 'Sana', lastName: 'Malik' }),
+        findAll: jest.fn().mockResolvedValue([{ id: ASSIGNEE, status: 'ACTIVE', firstName: 'Ali', lastName: 'Khan' }]),
+      }),
+      getDepartmentModel: jest.fn().mockResolvedValue({}),
+      getEntityAuditLogModel: jest.fn().mockResolvedValue(audits),
+      getEmployeeNotificationModel: jest.fn().mockResolvedValue(notices),
+    };
+    const dataScope = { actorEmployeeId: jest.fn().mockResolvedValue(REVIEWER), visibleEmployeeIds: jest.fn().mockResolvedValue(null) };
+    service = new WorkspaceTaskService(modelProvider as any, dataScope as any);
+  });
+
+  it('will not return a task without saying what needs to change', async () => {
+    await expect(service.decideReview(TENANT, TASK, 'RETURN', true)).rejects.toMatchObject({ status: HttpStatus.BAD_REQUEST });
+    await expect(service.decideReview(TENANT, TASK, 'RETURN', true, '   ')).rejects.toMatchObject({ status: HttpStatus.BAD_REQUEST });
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('refuses a note longer than the limit', async () => {
+    await expect(service.decideReview(TENANT, TASK, 'APPROVE', true, 'x'.repeat(1001))).rejects.toMatchObject({
+      status: HttpStatus.BAD_REQUEST,
+    });
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('stores the note, who gave it and when, and puts the note in the assignee’s notice', async () => {
+    await service.decideReview(TENANT, TASK, 'RETURN', true, '  Add the totals  ');
+
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'IN_PROGRESS',
+        reviewStatus: 'RETURNED',
+        reviewFeedback: 'Add the totals',
+        reviewedByEmployeeId: REVIEWER,
+        reviewedByName: 'Sana Malik',
+        reviewedAt: expect.any(Date),
+      }),
+    );
+    expect(notices.create).toHaveBeenCalledWith(
+      expect.objectContaining({ employeeId: ASSIGNEE, title: 'Task returned: Prep', body: expect.stringContaining('Add the totals') }),
+    );
+  });
+
+  it('audits that feedback was given without copying the text into the log', async () => {
+    await service.decideReview(TENANT, TASK, 'RETURN', true, 'Add the totals');
+
+    const changes = audits.create.mock.calls[0][0].changes;
+    expect(changes.reviewFeedback).toEqual({ from: null, to: 'added' });
+    expect(JSON.stringify(changes)).not.toContain('Add the totals');
+  });
+
+  it('lets an approval go through with no note, and clears an older return note', async () => {
+    await service.decideReview(TENANT, TASK, 'APPROVE', true);
+
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'COMPLETED', reviewStatus: 'APPROVED', reviewFeedback: null, reviewedByName: 'Sana Malik' }),
+    );
+    expect(audits.create.mock.calls[0][0].changes.reviewFeedback).toBeUndefined();
+  });
+
+  it('keeps an approval note with the completed task', async () => {
+    await service.decideReview(TENANT, TASK, 'APPROVE', true, 'Clean work');
+
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ status: 'COMPLETED', reviewFeedback: 'Clean work' }));
+  });
+
+  it('returns the note, reviewer and time on the task', async () => {
+    const decidedAt = new Date('2026-11-05T10:00:00Z');
+    const taskModel = await (service as any).modelProvider.getWorkspaceTaskModel();
+    taskModel.findOne.mockResolvedValue(
+      waitingTask({ status: 'COMPLETED', reviewStatus: 'APPROVED', reviewFeedback: 'Clean work', reviewedAt: decidedAt, reviewedByEmployeeId: REVIEWER, reviewedByName: 'Sana Malik' }),
+    );
+
+    const row = await service.getOne(TENANT, TASK);
+
+    expect(row.reviewFeedback).toBe('Clean work');
+    expect(row.reviewedAt).toBe(decidedAt);
+    expect(row.reviewedBy).toEqual({ id: REVIEWER, name: 'Sana Malik' });
+  });
+
+  it('shows no reviewer on a task that has not been decided', async () => {
+    const row = await service.getOne(TENANT, TASK);
+
+    expect(row.reviewFeedback).toBeNull();
+    expect(row.reviewedBy).toBeNull();
+  });
+});

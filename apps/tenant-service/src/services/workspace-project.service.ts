@@ -47,6 +47,8 @@ export interface WorkspaceProjectRow {
   startDate: string | null;
   /** Expected end. */
   dueDate: string | null;
+  /** The branch it runs from; null when none is set, or the branch no longer exists. */
+  branch: { id: string; name: string; isActive: boolean } | null;
   location: string | null;
   tags: string[];
   milestone: string | null;
@@ -60,6 +62,7 @@ export interface WorkspaceProjectRow {
 }
 
 type TaskTally = { total: number; completed: number; overdue: number };
+type BranchRef = { id: string; name: string; isActive: boolean };
 
 /**
  * Workspace › Projects. Progress and task counts are computed from the
@@ -216,10 +219,26 @@ export class WorkspaceProjectService {
     return grouped;
   }
 
+  /** Names for the branches these projects point at. A branch that has since been removed is absent. */
+  private async branchesById(tenantId: string, branchIds: (string | null | undefined)[]): Promise<Map<string, BranchRef>> {
+    const ids = [...new Set(branchIds.filter((id): id is string => Boolean(id)))];
+    const found = new Map<string, BranchRef>();
+    if (!ids.length) return found;
+    const Branch = await this.modelProvider.getBranchModel(tenantId);
+    const rows = (await Branch.findAll({
+      where: { tenantId, id: { [Op.in]: ids } },
+      attributes: ['id', 'name', 'isActive'],
+      raw: true,
+    })) as unknown as { id: string; name: string; isActive: boolean }[];
+    for (const row of rows) found.set(row.id, { id: row.id, name: row.name, isActive: row.isActive !== false });
+    return found;
+  }
+
   private toRow(
     project: any,
     tally: TaskTally | undefined,
     members: NonNullable<ReturnType<typeof employeeSummary>>[] = [],
+    branches: Map<string, BranchRef> = new Map(),
   ): WorkspaceProjectRow {
     const total = tally?.total ?? 0;
     const completed = tally?.completed ?? 0;
@@ -240,6 +259,7 @@ export class WorkspaceProjectService {
       priority: project.priority ?? WorkspaceProjectPriority.MEDIUM,
       startDate: project.startDate ?? null,
       dueDate: project.dueDate ?? null,
+      branch: (project.branchId && branches.get(project.branchId)) || null,
       location: project.location ?? null,
       tags: Array.isArray(project.tags) ? project.tags : [],
       milestone: project.milestone ?? null,
@@ -276,9 +296,13 @@ export class WorkspaceProjectService {
       limit: 100,
     });
     const ids = rows.map((r) => r.id);
-    const [tallies, members] = await Promise.all([this.taskTallies(tenantId, ids), this.membersByProject(tenantId, ids)]);
+    const [tallies, members, branches] = await Promise.all([
+      this.taskTallies(tenantId, ids),
+      this.membersByProject(tenantId, ids),
+      this.branchesById(tenantId, rows.map((r: any) => r.branchId)),
+    ]);
     return rows.map((r) => ({
-      ...this.toRow(r, tallies.get(r.id), members.get(r.id) ?? []),
+      ...this.toRow(r, tallies.get(r.id), members.get(r.id) ?? [], branches),
       isLead: r.leadEmployeeId === employeeId,
       isMember: memberProjectIds.includes(r.id),
     }));
@@ -287,6 +311,7 @@ export class WorkspaceProjectService {
   private where(tenantId: string, query: GetWorkspaceProjectsQueryDto) {
     const and: any[] = [{ tenantId }];
     if (query.status) and.push({ status: query.status });
+    if (query.branchId) and.push({ branchId: query.branchId });
     const search = query.search?.trim();
     if (search) {
       const like = `%${search}%`;
@@ -331,10 +356,14 @@ export class WorkspaceProjectService {
     ]);
 
     const ids = rows.map((r) => r.id);
-    const [tallies, members] = await Promise.all([this.taskTallies(tenantId, ids), this.membersByProject(tenantId, ids)]);
+    const [tallies, members, branches] = await Promise.all([
+      this.taskTallies(tenantId, ids),
+      this.membersByProject(tenantId, ids),
+      this.branchesById(tenantId, rows.map((r: any) => r.branchId)),
+    ]);
     const count = (status: WorkspaceProjectStatus) => Number(byStatus.find((s) => s.status === status)?.count ?? 0);
     return {
-      data: rows.map((r) => this.toRow(r, tallies.get(r.id), members.get(r.id) ?? [])),
+      data: rows.map((r) => this.toRow(r, tallies.get(r.id), members.get(r.id) ?? [], branches)),
       stats: {
         total: byStatus.reduce((sum, s) => sum + Number(s.count), 0),
         active: count(WorkspaceProjectStatus.ACTIVE),
@@ -383,11 +412,12 @@ export class WorkspaceProjectService {
 
   private async getOne(tenantId: string, projectId: string) {
     const project = await this.findOwn(tenantId, projectId);
-    const [tallies, members] = await Promise.all([
+    const [tallies, members, branches] = await Promise.all([
       this.taskTallies(tenantId, [projectId]),
       this.membersByProject(tenantId, [projectId]),
+      this.branchesById(tenantId, [(project as any).branchId]),
     ]);
-    return this.toRow(project, tallies.get(projectId), members.get(projectId) ?? []);
+    return this.toRow(project, tallies.get(projectId), members.get(projectId) ?? [], branches);
   }
 
   // ==========================================
@@ -530,6 +560,14 @@ export class WorkspaceProjectService {
     }
   }
 
+  /** A project can only be tied to an active branch of this organization. */
+  private async assertBranch(tenantId: string, branchId: string | null | undefined) {
+    if (!branchId) return;
+    const found = (await this.branchesById(tenantId, [branchId])).get(branchId);
+    if (!found) workspaceError('The selected branch was not found.', HttpStatus.BAD_REQUEST);
+    if (!found!.isActive) workspaceError(`${found!.name} is inactive, so a project can't be tied to it.`, HttpStatus.BAD_REQUEST);
+  }
+
   private async assertUniqueName(tenantId: string, name: string, exceptId?: string) {
     const Project = await this.modelProvider.getWorkspaceProjectModel(tenantId);
     const clash = await Project.findOne({
@@ -547,6 +585,7 @@ export class WorkspaceProjectService {
     await this.assertMembers(tenantId, members);
     const leadDepartmentId = await this.leadDepartment(tenantId, dto.leadEmployeeId);
     await this.assertDepartment(tenantId, dto.departmentId);
+    await this.assertBranch(tenantId, dto.branchId);
     const startDate = dto.startDate ?? null;
     const dueDate = dto.dueDate ?? null;
     this.assertSchedule(startDate, dueDate);
@@ -567,6 +606,7 @@ export class WorkspaceProjectService {
       priority: dto.priority ?? WorkspaceProjectPriority.MEDIUM,
       startDate,
       dueDate,
+      branchId: dto.branchId ?? null,
       location: dto.location?.trim() || null,
       tags,
       milestone: dto.milestone?.trim() || null,
@@ -577,6 +617,7 @@ export class WorkspaceProjectService {
     await writeAudit(this.modelProvider, this.logger, tenantId, 'workspace_projects', project.id, 'CREATE', {
       name: { from: null, to: project.name },
       leadEmployeeId: { from: null, to: dto.leadEmployeeId },
+      ...(dto.branchId ? { branchId: { from: null, to: dto.branchId } } : {}),
       ...(team.added.length ? { members: { from: null, to: team.added } } : {}),
     });
     await this.notifyAdded(tenantId, project.name, team.added);
@@ -637,6 +678,8 @@ export class WorkspaceProjectService {
       if (departmentId === undefined) departmentId = leadDepartmentId ?? project.departmentId;
     }
     await this.assertDepartment(tenantId, departmentId);
+    // A branch that was already set is left alone even if it has since gone inactive; only a change is checked.
+    if (dto.branchId !== undefined && dto.branchId !== project.branchId) await this.assertBranch(tenantId, dto.branchId);
     const startDate = dto.startDate !== undefined ? dto.startDate : project.startDate;
     const dueDate = dto.dueDate !== undefined ? dto.dueDate : project.dueDate;
     this.assertSchedule(startDate, dueDate);
@@ -658,6 +701,7 @@ export class WorkspaceProjectService {
       priority: dto.priority,
       startDate: dto.startDate,
       dueDate: dto.dueDate,
+      branchId: dto.branchId,
       location: dto.location === undefined ? undefined : dto.location?.trim() || null,
       tags: tagsUnchanged ? undefined : tags,
       milestone: dto.milestone === undefined ? undefined : dto.milestone?.trim() || null,

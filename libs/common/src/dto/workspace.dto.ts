@@ -337,6 +337,12 @@ export class DecideWorkspaceTaskReviewDto {
   @ApiProperty({ enum: ['APPROVE', 'RETURN'] })
   @IsIn(['APPROVE', 'RETURN'])
   decision: 'APPROVE' | 'RETURN';
+
+  @ApiPropertyOptional({ description: 'Feedback on the work. Required when returning a task; optional when approving.', maxLength: 1000 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  feedback?: string;
 }
 
 export class UpdateTaskStatusDto {
@@ -404,6 +410,11 @@ export class GetWorkspaceProjectsQueryDto {
   @IsOptional()
   @IsEnum(WorkspaceProjectStatus)
   status?: WorkspaceProjectStatus;
+
+  @ApiPropertyOptional({ description: 'Only projects tied to this branch' })
+  @IsOptional()
+  @IsUUID()
+  branchId?: string;
 }
 
 export class CreateWorkspaceProjectDto {
@@ -471,7 +482,14 @@ export class CreateWorkspaceProjectDto {
   @Matches(DATE_ONLY, { message: `dueDate ${DATE_MESSAGE}` })
   dueDate?: string | null;
 
-  @ApiPropertyOptional({ description: 'Free-text place. Not an office or branch record.' })
+  @ApiPropertyOptional({ description: 'The branch the project runs from. It must be an active branch of this organization.' })
+  @IsOptional()
+  @Transform(emptyToNull)
+  @ValidateIf((_, v) => v !== null)
+  @IsUUID()
+  branchId?: string | null;
+
+  @ApiPropertyOptional({ description: 'Free-text place, for when no branch fits.' })
   @IsOptional()
   @Transform(emptyToNull)
   @ValidateIf((_, v) => v !== null)
@@ -567,7 +585,14 @@ export class UpdateWorkspaceProjectDto {
   @Matches(DATE_ONLY, { message: `dueDate ${DATE_MESSAGE}` })
   dueDate?: string | null;
 
-  @ApiPropertyOptional({ description: 'Free-text place. Null clears it. Not an office or branch record.' })
+  @ApiPropertyOptional({ description: 'Moves the project to another branch. Null clears it. The branch must be active.' })
+  @IsOptional()
+  @Transform(emptyToNull)
+  @ValidateIf((_, v) => v !== null)
+  @IsUUID()
+  branchId?: string | null;
+
+  @ApiPropertyOptional({ description: 'Free-text place. Null clears it.' })
   @IsOptional()
   @Transform(emptyToNull)
   @ValidateIf((_, v) => v !== null)
@@ -810,6 +835,11 @@ export class UpdateWorkspaceSettingsMessageDto extends TenantMessageDto {
 export class DecideWorkspaceTaskReviewMessageDto extends WorkspaceTaskIdMessageDto {
   @IsIn(['APPROVE', 'RETURN'])
   decision: 'APPROVE' | 'RETURN';
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  feedback?: string;
 
   /** True for organization-wide task or project managers. They still cannot review a task assigned to themselves. */
   @IsBoolean()

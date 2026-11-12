@@ -127,6 +127,12 @@ describe('TenantServiceController: project owner routes', () => {
   it('passes the review decision on with only what the permission said, so the owner path stays in the service', async () => {
     await controller.handleDecideWorkspaceTaskReview({ tenantId: TENANT, taskId: TASK, decision: 'APPROVE', canManage: false });
 
-    expect(tasks.decideReview).toHaveBeenCalledWith(TENANT, TASK, 'APPROVE', false);
+    expect(tasks.decideReview).toHaveBeenCalledWith(TENANT, TASK, 'APPROVE', false, undefined);
+  });
+
+  it('passes the reviewer’s feedback on with the decision', async () => {
+    await controller.handleDecideWorkspaceTaskReview({ tenantId: TENANT, taskId: TASK, decision: 'RETURN', canManage: true, feedback: 'Add the totals' });
+
+    expect(tasks.decideReview).toHaveBeenCalledWith(TENANT, TASK, 'RETURN', true, 'Add the totals');
   });
 });

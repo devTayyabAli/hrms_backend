@@ -101,11 +101,10 @@ export class PerformanceCycleService {
     return new Set(rows.filter((row) => row.cycleId === cycle.id || String(row.cycle).trim().toLowerCase() === name).map((row) => row.employeeId));
   }
 
-  private async decisions(tenantId: string, cycle: any, scoped: boolean, ids?: string[]) {
+  private async decisions(tenantId: string, cycle: any, scoped: boolean, ids?: string[], now: string = today()) {
     const rules = this.rulesOf(cycle);
     const departments = await this.departmentSet(tenantId, rules);
     const people = await this.employees(tenantId, scoped, ids);
-    const now = today();
     return people.map((employee) => ({ employee, decision: evaluateEligibility(employee, { startDate: day(cycle.startDate), endDate: day(cycle.endDate) }, rules, departments, now) }));
   }
 
@@ -414,5 +413,73 @@ export class PerformanceCycleService {
       if (await this.performance.enrolInCycle(tenantId, row.employee, cycle)) made++;
     }
     return made;
+  }
+
+  /**
+   * Time alone changes who a cycle includes: someone reaches the minimum
+   * tenure, a probation period ends. Nothing in Employee Management changes on
+   * that day, so nothing else notices. This is the sweep that does, run every
+   * day for each organization:
+   *  - in a running AUTO_ENROL cycle that is still taking people, the eligible
+   *    people who have no review yet get one (the same enrolment as at launch);
+   *    in an HR_QUEUE cycle they simply appear in the queue for HR;
+   *  - an open review that the rules no longer include is flagged for HR, and a
+   *    flag that is no longer true is dropped. Nothing is removed by itself.
+   * Running it twice in a day does nothing more: a person is enrolled once and
+   * a flag is raised once for each reason. One cycle failing does not stop the
+   * others. `now` is the day it is run for. Returns what it did.
+   */
+  async sweep(tenantId: string, now: string = today()): Promise<{ cycles: number; enrolled: number; flagged: number; cleared: number }> {
+    const Cycle = await this.modelProvider.getPerformanceCycleModel(tenantId);
+    const Review = await this.modelProvider.getPerformanceReviewModel(tenantId);
+    const running = (await Cycle.findAll({ where: { tenantId, status: PerformanceCycleStatus.ACTIVE } as any })) as any[];
+    const done = { cycles: running.length, enrolled: 0, flagged: 0, cleared: 0 };
+
+    for (const cycle of running) {
+      try {
+        const decided = await this.decisions(tenantId, cycle, false, undefined, now);
+
+        // Past its due date a cycle takes no one new.
+        if (cycle.enrolmentMode === CycleEnrolmentMode.AUTO_ENROL && now <= day(cycle.dueDate ?? cycle.endDate)) {
+          const enrolled = await this.enrolledIds(tenantId, cycle);
+          let made = 0;
+          for (const { employee, decision } of decided) {
+            if (!decision.eligible || enrolled.has(employee.id)) continue;
+            if (await this.performance.enrolInCycle(tenantId, employee, cycle)) made++;
+          }
+          if (made > 0) {
+            done.enrolled += made;
+            await writeAudit(this.modelProvider, this.logger, tenantId, 'performance_cycles', cycle.id, 'UPDATE', {
+              event: { from: null, to: 'CYCLE_SWEEP_ENROLLED' },
+              enrolled: { from: null, to: made },
+              asOf: { from: null, to: now },
+            });
+          }
+        }
+
+        if (this.sync) {
+          const byEmployee = new Map(decided.map((row) => [row.employee.id as string, row.decision]));
+          const reviews = (await Review.findAll({ where: { tenantId, cycleId: cycle.id } as any })) as any[];
+          for (const review of reviews) {
+            if (review.closedAt || review.publishedAt || review.status === 'COMPLETED') continue;
+            const decision = byEmployee.get(review.employeeId);
+            if (!decision) continue;
+            const flagged = review.pendingChange?.eligibilityReason ?? null;
+            if (decision.eligible) {
+              if (flagged) {
+                await this.sync.clearEligibility(tenantId, review);
+                done.cleared++;
+              }
+            } else if (decision.code !== 'NOT_EMPLOYED' && decision.reason && flagged !== decision.reason) {
+              await this.sync.flagEligibility(tenantId, review, decision.reason);
+              done.flagged++;
+            }
+          }
+        }
+      } catch (error: any) {
+        this.logger.warn(`The daily sweep of cycle ${cycle.id} was skipped for tenant ${tenantId}: ${error?.message ?? error}`);
+      }
+    }
+    return done;
   }
 }

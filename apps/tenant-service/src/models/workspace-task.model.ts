@@ -98,6 +98,24 @@ export class WorkspaceTask extends Model {
   @Column({ type: DataType.STRING(16), allowNull: true })
   declare reviewStatus: 'PENDING' | 'APPROVED' | 'RETURNED' | null;
 
+  /**
+   * What the reviewer said when they approved or returned the task. Always
+   * present on a return; optional on an approval. Each decision replaces the
+   * last, so an approval never shows an older return note.
+   */
+  @Column({ type: DataType.TEXT, allowNull: true })
+  declare reviewFeedback: string | null;
+
+  @Column({ type: DataType.DATE, allowNull: true })
+  declare reviewedAt: Date | null;
+
+  /** Kept as a name as well as an id, so the record still reads right if the reviewer later leaves. */
+  @Column({ type: DataType.UUID, allowNull: true })
+  declare reviewedByEmployeeId: string | null;
+
+  @Column({ type: DataType.STRING(150), allowNull: true })
+  declare reviewedByName: string | null;
+
   @Column({ type: DataType.DATE, allowNull: true })
   declare completedAt: Date | null;
 

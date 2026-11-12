@@ -11,6 +11,7 @@ import {
   GetAcknowledgementsQueryDto,
   GetDevelopmentQueryDto,
   GetPipsQueryDto,
+  GetWorkSummaryQueryDto,
   HRMSModuleKey,
   MESSAGE_PATTERNS,
   ModuleAction,
@@ -154,6 +155,37 @@ export class PerformanceImprovementController {
     return this.tenantClient.send(MESSAGE_PATTERNS.PERFORMANCE_DEVELOPMENT.REMOVE, { tenantId, id });
   }
 
+  // ── Employee Performance Profile ──
+
+  @Get('employees/:employeeId/profile')
+  @RequireModule(HRMSModuleKey.PERFORMANCE, ModuleAction.VIEW)
+  @RequirePermissions('performance.view', 'performance.manage')
+  @ApiParam({ name: 'employeeId' })
+  @ApiOperation({ summary: 'One person\'s performance profile: reviews, goals, KPIs, plans, development, acknowledgements. What shows depends on the caller\'s scope and role' })
+  profile(@Headers('x-tenant-id') tenantId: string, @Param('employeeId', ParseUUIDPipe) employeeId: string) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.PERFORMANCE_PROFILE.GET, { tenantId, employeeId });
+  }
+
+  @Get('employees/:employeeId/work')
+  @RequireModule(HRMSModuleKey.PERFORMANCE, ModuleAction.VIEW)
+  @RequirePermissions('performance.view', 'performance.manage')
+  @ApiParam({ name: 'employeeId' })
+  @ApiOperation({
+    summary:
+      'Work done by one person on projects and tasks, as supporting evidence for a review: their projects, completed and overdue tasks, and manager feedback. Send `reviewId` or `from` and `to` to limit it to a period. Never a score.',
+  })
+  work(@Headers('x-tenant-id') tenantId: string, @Param('employeeId', ParseUUIDPipe) employeeId: string, @Query() query: GetWorkSummaryQueryDto) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.PERFORMANCE_PROFILE.WORK, { tenantId, employeeId, query });
+  }
+
+  @Get('attention')
+  @RequireModule(HRMSModuleKey.PERFORMANCE, ModuleAction.VIEW)
+  @RequirePermissions('performance.view', 'performance.manage')
+  @ApiOperation({ summary: 'Counts for the dashboard: plans awaiting approval, active and ending soon, reviews awaiting acknowledgement, disagreements' })
+  attention(@Headers('x-tenant-id') tenantId: string) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.PERFORMANCE_PROFILE.ATTENTION, { tenantId });
+  }
+
   // ── Acknowledgements ──
 
   @Get('acknowledgements')
@@ -182,6 +214,18 @@ export class MyPerformanceImprovementController {
 
   private actor(tenantId: string, userId: string, email: string) {
     return { tenantId, userId, email };
+  }
+
+  @Get('profile')
+  @ApiOperation({ summary: 'My performance profile: what has been shared with me (published reviews and goals, approved plans), my development and what I still need to acknowledge' })
+  myProfile(@Headers('x-tenant-id') tenantId: string, @CurrentUser('id') userId: string, @CurrentUser('email') email: string) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.PERFORMANCE_PROFILE.MINE, this.actor(tenantId, userId, email));
+  }
+
+  @Get('work')
+  @ApiOperation({ summary: 'The work I did on projects and tasks: my projects, completed and overdue tasks and the feedback I was given. Send `reviewId` or `from` and `to` to limit it to a period' })
+  myWork(@Headers('x-tenant-id') tenantId: string, @CurrentUser('id') userId: string, @CurrentUser('email') email: string, @Query() query: GetWorkSummaryQueryDto) {
+    return this.tenantClient.send(MESSAGE_PATTERNS.PERFORMANCE_PROFILE.MY_WORK, { ...this.actor(tenantId, userId, email), query });
   }
 
   @Get('pips')

@@ -382,6 +382,27 @@ export class AcknowledgeDto {
   comment?: string | null;
 }
 
+/**
+ * The window a work summary covers. Send a review (its cycle's dates are used)
+ * or a `from` and `to`; send nothing for everything on record.
+ */
+export class GetWorkSummaryQueryDto {
+  @ApiProperty({ required: false, description: 'A review of this employee. The period is its cycle’s start and end.' })
+  @IsOptional()
+  @IsUUID()
+  reviewId?: string;
+
+  @ApiProperty({ required: false, example: '2026-07-01', description: 'First day, YYYY-MM-DD. Needs `to`.' })
+  @IsOptional()
+  @IsDateString({ strict: true })
+  from?: string;
+
+  @ApiProperty({ required: false, example: '2026-12-31', description: 'Last day, YYYY-MM-DD. Needs `from`.' })
+  @IsOptional()
+  @IsDateString({ strict: true })
+  to?: string;
+}
+
 export class GetAcknowledgementsQueryDto {
   @ApiProperty({ enum: ['REVIEW', 'PIP'], required: false })
   @IsOptional()

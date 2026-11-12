@@ -2,12 +2,14 @@ import { HttpStatus } from '@nestjs/common';
 import { PerformanceReviewStatus } from '@app/common';
 import { PerformanceDashboardService } from './performance-dashboard.service';
 import { PerformanceSelfService } from './performance-self.service';
+import { PerformanceSyncService } from './performance-sync.service';
 import { table } from './testing/fake-table';
 
 /**
  * Who completes a performance review: the employee's reporting manager by
- * default, HR's choice when they pick one, following a change of manager while
- * the review is open, and a reviewer's own place to score what they review.
+ * default, HR's choice when they pick one, a change of manager while the review
+ * is open (held for HR, never handed on by itself), and a reviewer's own place to
+ * score what they review.
  */
 
 const TENANT = '11111111-1111-4111-8111-111111111111';
@@ -18,6 +20,8 @@ describe('Performance review reviewers', () => {
   let models: Record<string, any>;
   let dashboard: PerformanceDashboardService;
   let self: PerformanceSelfService;
+  let sync: PerformanceSyncService;
+  let holders: { tellPermission: jest.Mock };
   let ayesha: any;
   let sara: any;
   let omar: any;
@@ -47,6 +51,8 @@ describe('Performance review reviewers', () => {
     };
     dashboard = new PerformanceDashboardService(provider);
     self = new PerformanceSelfService(provider);
+    holders = { tellPermission: jest.fn() };
+    sync = new PerformanceSyncService(provider, dashboard, undefined as any, holders as any);
   });
 
   const create = (over: Record<string, unknown> = {}) => dashboard.createReview(TENANT, { employeeId: ayesha.id, cycle: 'H2 2026', ...over } as any) as Promise<any>;
@@ -96,16 +102,83 @@ describe('Performance review reviewers', () => {
     });
   });
 
-  describe('following the reporting line', () => {
-    it('moves an open review to the new manager, and tells them', async () => {
+  describe('a change of reporting manager', () => {
+    const events = () => models.Audit.rows.map((row: any) => row.changes?.event?.to).filter(Boolean);
+
+    it('is held for HR: the review keeps its reviewer, and HR and that reviewer are told', async () => {
       await create();
       ayesha.reportingManagerId = omar.id;
       models.Notification.rows.length = 0;
 
-      expect(await dashboard.followManagerChange(TENANT, ayesha.id)).toBe(1);
+      expect(await sync.onManagerChange(TENANT, ayesha.id)).toBe(1);
 
-      expect(models.Review.rows[0].reviewerId).toBe(omar.id);
+      const review = models.Review.rows[0];
+      expect(review.reviewerId).toBe(sara.id);
+      expect(review.pendingChange).toMatchObject({
+        type: 'MANAGER',
+        manager: { from: { id: sara.id, name: 'Sara Manager' }, to: { id: omar.id, name: 'Omar Lead' } },
+        options: ['KEEP', 'REASSIGN'],
+      });
+      expect(notes()).toEqual([[sara.id, "Decision needed on Ayesha Khan's review"]]);
+      expect(holders.tellPermission).toHaveBeenCalledWith(TENANT, 'performance.manage', [ayesha.id], 'Manager change: Ayesha Khan', expect.stringContaining('Omar Lead'));
+      expect(events()).toContain('MANAGER_CHANGE_DETECTED');
+      expect(models.Audit.rows.at(-1).changes.reviewerId).toEqual({ from: sara.id, to: omar.id });
+    });
+
+    it('goes to the new manager when HR decides so, who is then told', async () => {
+      const review = await create();
+      ayesha.reportingManagerId = omar.id;
+      await sync.onManagerChange(TENANT, ayesha.id);
+      models.Notification.rows.length = 0;
+
+      await sync.decide(TENANT, review.id, { decision: 'REASSIGN' } as any);
+
+      expect(models.Review.rows[0]).toMatchObject({ reviewerId: omar.id, pendingChange: null, reviewerPinned: false });
       expect(notes()).toEqual([[omar.id, 'Review to complete: Ayesha Khan']]);
+      expect(events()).toContain('CHANGE_DECISION_REASSIGN');
+    });
+
+    it('stays with the current reviewer when HR keeps it', async () => {
+      const review = await create();
+      ayesha.reportingManagerId = omar.id;
+      await sync.onManagerChange(TENANT, ayesha.id);
+
+      await sync.decide(TENANT, review.id, { decision: 'KEEP' } as any);
+
+      expect(models.Review.rows[0]).toMatchObject({ reviewerId: sara.id, pendingChange: null });
+    });
+
+    it('cannot be answered with a choice it does not offer', async () => {
+      const review = await create();
+      ayesha.reportingManagerId = omar.id;
+      await sync.onManagerChange(TENANT, ayesha.id);
+
+      await expect(sync.decide(TENANT, review.id, { decision: 'RESTART' } as any)).rejects.toMatchObject({ status: HttpStatus.BAD_REQUEST });
+      expect(models.Review.rows[0].pendingChange).not.toBeNull();
+    });
+
+    it('drops the flag again if the manager is changed back before HR decides', async () => {
+      await create();
+      ayesha.reportingManagerId = omar.id;
+      await sync.onManagerChange(TENANT, ayesha.id);
+      ayesha.reportingManagerId = sara.id;
+
+      expect(await sync.onManagerChange(TENANT, ayesha.id)).toBe(0);
+
+      expect(models.Review.rows[0].pendingChange).toBeNull();
+      expect(events()).toContain('MANAGER_CHANGE_RESOLVED');
+    });
+
+    it('is not flagged twice, and keeps the reviewer the review started with', async () => {
+      await create();
+      ayesha.reportingManagerId = omar.id;
+      await sync.onManagerChange(TENANT, ayesha.id);
+      ayesha.reportingManagerId = hina.id;
+      ayesha.reportingManagerId = omar.id;
+      await sync.onManagerChange(TENANT, ayesha.id);
+
+      expect(models.Review.rows[0].pendingChange.manager.from.id).toBe(sara.id);
+      expect(events().filter((event: string) => event === 'MANAGER_CHANGE_DETECTED')).toHaveLength(2);
     });
 
     it('leaves a review HR pinned, a completed one, and one that already has the right reviewer', async () => {
@@ -114,8 +187,9 @@ describe('Performance review reviewers', () => {
       await create({ cycle: 'Q3' });
       ayesha.reportingManagerId = sara.id;
 
-      expect(await dashboard.followManagerChange(TENANT, ayesha.id)).toBe(0);
+      expect(await sync.onManagerChange(TENANT, ayesha.id)).toBe(0);
       expect(models.Review.rows.map((r: any) => r.reviewerId)).toEqual([omar.id, sara.id, sara.id]);
+      expect(models.Review.rows.every((r: any) => !r.pendingChange)).toBe(true);
     });
 
     it('hands a leaver\'s open reviews to the employee\'s manager, or HR', async () => {

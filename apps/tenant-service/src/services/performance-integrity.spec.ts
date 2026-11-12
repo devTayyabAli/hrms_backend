@@ -4,6 +4,7 @@ import { DataScope, PerformanceReviewStatus } from '@app/common';
 import { runAsRpcActor } from '@app/tenant-context';
 import { PerformanceDashboardService } from './performance-dashboard.service';
 import { PerformanceSelfService } from './performance-self.service';
+import { PerformanceSyncService } from './performance-sync.service';
 import { EmployeeService } from './employee.service';
 import { table } from './testing/fake-table';
 
@@ -218,10 +219,14 @@ describe('Performance history and integrity', () => {
     it('are in the audit history when the manager changes or the reviewer leaves', async () => {
       await create();
       ayesha.reportingManagerId = omar.id;
-      await dashboard.followManagerChange(TENANT, ayesha.id);
-      expect(events()).toContain('REVIEWER_FOLLOWED_MANAGER_CHANGE');
+      const sync = new PerformanceSyncService(provider, dashboard, undefined as any);
+      await sync.onManagerChange(TENANT, ayesha.id);
+      expect(events()).toContain('MANAGER_CHANGE_DETECTED');
       expect(models.Audit.rows.at(-1).changes.reviewerId).toEqual({ from: sara.id, to: omar.id });
 
+      // HR gives the review to the new manager; when that reviewer later leaves, it moves on and is audited.
+      await sync.decide(TENANT, models.Review.rows[0].id, { decision: 'REASSIGN' } as any);
+      expect(events()).toContain('CHANGE_DECISION_REASSIGN');
       omar.status = 'RESIGNED';
       ayesha.reportingManagerId = sara.id;
       await dashboard.releaseReviewer(TENANT, omar.id);
